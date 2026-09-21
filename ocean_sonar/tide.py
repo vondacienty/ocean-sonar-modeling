@@ -90,10 +90,10 @@ def reduce(times, depths, tide_times, levels, datum=0.0):
         prefix = f"observation[{i}]: "
         if not _is_real_number(t):
             raise TypeError(prefix + "times elements must be non-bool int or float")
-        if not _is_real_number(depth):
-            raise TypeError(prefix + "depths elements must be non-bool int or float")
         if not math.isfinite(t):
             raise ValueError(prefix + "time must be finite")
+        if not _is_real_number(depth):
+            raise TypeError(prefix + "depths elements must be non-bool int or float")
         if not math.isfinite(depth):
             raise ValueError(prefix + "depth must be finite")
         if not depth >= 0:
