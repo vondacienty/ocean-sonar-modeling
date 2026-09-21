@@ -33,7 +33,8 @@ def reduce(times, depths, tide_times, levels, datum=0.0):
     Validation order (first error wins): the four containers, their
     non-emptiness, the equal lengths and the minimum node count, the
     tide elements and their strict increase, then ``datum``, then each
-    observation in order (time, depth, time range). Observation errors
+    observation in order (time type and finiteness, depth type,
+    finiteness and non-negativity, time range). Observation errors
     are prefixed with ``"observation[i]: "``.
 
     Returns a tuple of floats in observation order, each rounded to 6
@@ -90,10 +91,10 @@ def reduce(times, depths, tide_times, levels, datum=0.0):
         prefix = f"observation[{i}]: "
         if not _is_real_number(t):
             raise TypeError(prefix + "times elements must be non-bool int or float")
-        if not _is_real_number(depth):
-            raise TypeError(prefix + "depths elements must be non-bool int or float")
         if not math.isfinite(t):
             raise ValueError(prefix + "time must be finite")
+        if not _is_real_number(depth):
+            raise TypeError(prefix + "depths elements must be non-bool int or float")
         if not math.isfinite(depth):
             raise ValueError(prefix + "depth must be finite")
         if not depth >= 0:
