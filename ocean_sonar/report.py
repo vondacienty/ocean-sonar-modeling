@@ -17,7 +17,15 @@ import math
 from .crosspoint import evaluate
 from .quality import assess
 
-__all__ = ["generate", "summarize", "serialize", "serialize_summary", "write", "load"]
+__all__ = [
+    "generate",
+    "summarize",
+    "serialize",
+    "serialize_summary",
+    "render",
+    "write",
+    "load",
+]
 
 _CROSSPOINT_KEYS = (
     "count",
@@ -461,6 +469,68 @@ def serialize_summary(summary):
         return text.encode("utf-8")
     except (TypeError, ValueError, UnicodeError) as exc:
         raise ValueError(f"summary: could not be serialized to JSON: {exc}") from exc
+
+
+def _format_number(value):
+    if isinstance(value, float):
+        return format(value, ".6f")
+    return str(value)
+
+
+def render(summary):
+    """Render a :func:`summarize` result dict as a plain-text report.
+
+    ``summary`` is first validated with :func:`serialize_summary`, so
+    it must satisfy that function's full contract; every validation
+    exception is propagated unchanged and the input is not modified.
+
+    On success returns a ``str`` of ``"\\n"``-joined lines with no
+    trailing newline: an ``OVERALL=<overall>`` line; a
+    ``CROSSPOINT=`` line with ``count, bias, rmse, max_abs,
+    within_tolerance, quality`` as semicolon-joined ``key=value``
+    fields; one ``TERRAIN[i]=`` line per terrain layer (``i`` from 0)
+    with the fields ``resolution, total, valid, coverage,
+    slope_exceed, roughness_exceed``; and one ``SUBSTRATE[i]=`` line
+    per substrate layer with the fields ``resolution, nx, ny, classes,
+    counts``. ``classes`` is the class names joined by commas with no
+    spaces; ``counts`` lists ``unknown, mud, sand, gravel, rock`` in
+    that order joined by commas. Layers and fields keep input order;
+    floats are formatted with ``format(v, ".6f")`` and ints in
+    decimal.
+    """
+    serialize_summary(summary)
+
+    crosspoint = summary["crosspoint"]
+    terrain = summary["terrain"]
+    substrate = summary["substrate"]
+
+    lines = [f"OVERALL={summary['overall']}"]
+
+    cp_fields = ";".join(
+        f"{key}={_format_number(crosspoint[key])}" for key in _CROSSPOINT_KEYS
+    )
+    lines.append(f"CROSSPOINT={cp_fields}")
+
+    for i, item in enumerate(terrain):
+        fields = ";".join(
+            f"{key}={_format_number(item[key])}" for key in _TERRAIN_KEYS
+        )
+        lines.append(f"TERRAIN[{i}]={fields}")
+
+    for i, item in enumerate(substrate):
+        fields = ";".join(
+            (
+                f"resolution={format(item['resolution'], '.6f')}",
+                f"nx={item['nx']}",
+                f"ny={item['ny']}",
+                f"classes={','.join(item['classes'])}",
+                "counts="
+                + ",".join(str(item["counts"][name]) for name in _COUNT_KEYS),
+            )
+        )
+        lines.append(f"SUBSTRATE[{i}]={fields}")
+
+    return "\n".join(lines)
 
 
 def write(summary, path):
