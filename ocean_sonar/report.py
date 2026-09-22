@@ -17,7 +17,7 @@ import math
 from .crosspoint import evaluate
 from .quality import assess
 
-__all__ = ["generate", "summarize", "serialize", "serialize_summary"]
+__all__ = ["generate", "summarize", "serialize", "serialize_summary", "write"]
 
 _CROSSPOINT_KEYS = (
     "count",
@@ -461,3 +461,35 @@ def serialize_summary(summary):
         return text.encode("utf-8")
     except (TypeError, ValueError, UnicodeError) as exc:
         raise ValueError(f"summary: could not be serialized to JSON: {exc}") from exc
+
+
+def write(summary, path):
+    """Serialize a :func:`summarize` result and overwrite ``path`` with it.
+
+    ``summary`` must satisfy exactly the same contract as the argument to
+    :func:`serialize_summary`; it is serialized first (before ``path`` is
+    validated or touched), so every validation or serialization error is
+    raised unchanged.
+
+    ``path`` must be a non-empty ``str``: a non-str raises ``TypeError``
+    and an empty string raises ``ValueError``. The JSON bytes are written
+    by opening ``path`` in binary write mode (``"wb"``), which truncates
+    any existing file and adds no trailing newline. A missing parent
+    directory raises ``FileNotFoundError``, a directory path raises
+    ``IsADirectoryError`` and every other ``OSError`` is propagated
+    unchanged.
+
+    Returns the JSON document as ``bytes`` (the same bytes written to
+    ``path``) and does not modify ``summary``.
+    """
+    data = serialize_summary(summary)
+
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must be non-empty")
+
+    with open(path, "wb") as handle:
+        handle.write(data)
+
+    return data
