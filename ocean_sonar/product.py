@@ -16,8 +16,8 @@ import math
 
 from . import crosspoint, grid, quality, report, substrate, terrain
 from .report import (
-    _check_crosspoint,
     _COUNT_KEYS,
+    _CROSSPOINT_KEYS,
     _overall_verdict,
     _to_jsonable,
 )
@@ -369,6 +369,58 @@ def _check_layer(index, layer):
         raise ValueError(prefix + "substrate nx/ny must match layer nx/ny")
 
 
+def _check_crosspoint(item):
+    if not isinstance(item, dict):
+        raise TypeError("crosspoint must be a dict")
+    if list(item.keys()) != list(_CROSSPOINT_KEYS):
+        raise TypeError(
+            "crosspoint keys must be in the order "
+            "count, bias, rmse, max_abs, within_tolerance, quality"
+        )
+
+    count = item["count"]
+    if type(count) is not int:
+        raise TypeError("crosspoint: count must be a non-bool int")
+    if not count > 0:
+        raise ValueError("crosspoint: count must be > 0")
+
+    for name in ("bias", "rmse", "max_abs"):
+        value = item[name]
+        if type(value) is not float:
+            raise TypeError(f"crosspoint: {name} must be a float")
+        if not math.isfinite(value):
+            raise ValueError(f"crosspoint: {name} must be finite")
+    if not item["rmse"] >= 0:
+        raise ValueError("crosspoint: rmse must be >= 0")
+    if not item["max_abs"] >= 0:
+        raise ValueError("crosspoint: max_abs must be >= 0")
+
+    within_tolerance = item["within_tolerance"]
+    if type(within_tolerance) is not int:
+        raise TypeError("crosspoint: within_tolerance must be a non-bool int")
+    if not 0 <= within_tolerance <= count:
+        raise ValueError("crosspoint: within_tolerance must be in [0, count]")
+
+    verdict = item["quality"]
+    if type(verdict) is not str:
+        raise TypeError("crosspoint: quality must be a str")
+    if verdict not in _QUALITY_VALUES:
+        raise ValueError("crosspoint: quality must be 'pass' or 'fail'")
+
+    if within_tolerance == count:
+        if verdict != "pass":
+            raise ValueError(
+                "crosspoint: quality must be 'pass' when "
+                "within_tolerance == count"
+            )
+    else:
+        if verdict != "fail":
+            raise ValueError(
+                "crosspoint: quality must be 'fail' when "
+                "within_tolerance < count"
+            )
+
+
 def serialize(product):
     """Serialize a :func:`build` result dict to UTF-8 JSON bytes.
 
@@ -376,9 +428,13 @@ def serialize(product):
     exactly in the order ``crosspoint, layers, overall``:
     ``crosspoint`` is the dict returned by
     :func:`ocean_sonar.crosspoint.evaluate` (keys
-    ``count, bias, rmse, max_abs, within_tolerance, quality``);
-    ``layers`` is a non-empty tuple with one dict per resolution and
-    ``overall`` is ``"pass"`` or ``"fail"``. Each layer dict has keys
+    ``count, bias, rmse, max_abs, within_tolerance, quality``) with
+    ``count`` a positive non-bool int, ``within_tolerance`` a non-bool
+    int in ``[0, count]``, ``bias``/``rmse``/``max_abs`` finite floats
+    (``rmse`` and ``max_abs`` non-negative) and ``quality`` exactly
+    ``"pass"`` when ``within_tolerance == count`` and ``"fail"`` when
+    ``within_tolerance < count``; ``layers`` is a non-empty tuple with
+    one dict per resolution and ``overall`` is ``"pass"`` or ``"fail"``. Each layer dict has keys
     exactly in the order
     ``resolution, nx, ny, cells, analysis, quality, substrate``:
     ``resolution`` a finite float ``> 0``; ``nx``/``ny`` non-bool
