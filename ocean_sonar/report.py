@@ -17,7 +17,7 @@ import math
 from .crosspoint import evaluate
 from .quality import assess
 
-__all__ = ["generate", "summarize", "serialize"]
+__all__ = ["generate", "summarize", "serialize", "serialize_summary"]
 
 _CROSSPOINT_KEYS = (
     "count",
@@ -36,6 +36,7 @@ _TERRAIN_KEYS = (
     "roughness_exceed",
 )
 _SUBSTRATE_KEYS = ("resolution", "nx", "ny", "classes", "counts")
+_SUMMARY_KEYS = ("crosspoint", "terrain", "substrate", "overall")
 _COUNT_KEYS = ("unknown", "mud", "sand", "gravel", "rock")
 _QUALITY_VALUES = ("pass", "fail")
 
@@ -230,6 +231,59 @@ def _check_substrate_item(index, item):
             raise ValueError(prefix + f"counts.{name} must match classes")
 
 
+def _validate_summary_parts(crosspoint, terrain, substrate):
+    """Validate the three parts of a combined report, summarize-style.
+
+    Validation order, stopping at the first error: ``crosspoint``
+    (container, key order, then each field in key order), ``terrain``
+    container, ``substrate`` container, layer-count equality,
+    per-layer resolution equality, then per-item structure (terrain
+    items in index order, then substrate items).
+    """
+    _check_crosspoint(crosspoint)
+    _check_nonempty_tuple(terrain, "terrain")
+    _check_nonempty_tuple(substrate, "substrate")
+
+    if len(terrain) != len(substrate):
+        raise ValueError(
+            "terrain and substrate must have the same number of layers"
+        )
+
+    for i in range(len(terrain)):
+        terrain_item = terrain[i]
+        substrate_item = substrate[i]
+        if not isinstance(terrain_item, dict):
+            raise TypeError(f"terrain[{i}] must be a dict")
+        if not isinstance(substrate_item, dict):
+            raise TypeError(f"substrate[{i}] must be a dict")
+        if "resolution" not in terrain_item:
+            raise TypeError(f"terrain[{i}] missing 'resolution'")
+        if "resolution" not in substrate_item:
+            raise TypeError(f"substrate[{i}] missing 'resolution'")
+        if terrain_item["resolution"] != substrate_item["resolution"]:
+            raise ValueError(
+                f"layer {i}: terrain and substrate resolution must be equal"
+            )
+
+    for i in range(len(terrain)):
+        _check_terrain_item(i, terrain[i])
+    for i in range(len(substrate)):
+        _check_substrate_item(i, substrate[i])
+
+
+def _compute_overall(crosspoint, terrain, substrate):
+    """Recompute the overall verdict from the three validated parts."""
+    if crosspoint["quality"] != "pass":
+        return "fail"
+    for item in terrain:
+        if item["slope_exceed"] != 0 or item["roughness_exceed"] != 0:
+            return "fail"
+    for item in substrate:
+        if "unknown" in item["classes"]:
+            return "fail"
+    return "pass"
+
+
 def summarize(crosspoint, terrain, substrate):
     """Combine ``evaluate``/``assess``/``classify`` results into one report.
 
@@ -263,49 +317,8 @@ def summarize(crosspoint, terrain, substrate):
     substrate item's ``classes`` contains ``"unknown"``; otherwise it
     is ``"fail"``.
     """
-    _check_crosspoint(crosspoint)
-    _check_nonempty_tuple(terrain, "terrain")
-    _check_nonempty_tuple(substrate, "substrate")
-
-    if len(terrain) != len(substrate):
-        raise ValueError(
-            "terrain and substrate must have the same number of layers"
-        )
-
-    for i in range(len(terrain)):
-        terrain_item = terrain[i]
-        substrate_item = substrate[i]
-        if not isinstance(terrain_item, dict):
-            raise TypeError(f"terrain[{i}] must be a dict")
-        if not isinstance(substrate_item, dict):
-            raise TypeError(f"substrate[{i}] must be a dict")
-        if "resolution" not in terrain_item:
-            raise TypeError(f"terrain[{i}] missing 'resolution'")
-        if "resolution" not in substrate_item:
-            raise TypeError(f"substrate[{i}] missing 'resolution'")
-        if terrain_item["resolution"] != substrate_item["resolution"]:
-            raise ValueError(
-                f"layer {i}: terrain and substrate resolution must be equal"
-            )
-
-    for i in range(len(terrain)):
-        _check_terrain_item(i, terrain[i])
-    for i in range(len(substrate)):
-        _check_substrate_item(i, substrate[i])
-
-    overall = "pass"
-    if crosspoint["quality"] != "pass":
-        overall = "fail"
-    else:
-        for item in terrain:
-            if item["slope_exceed"] != 0 or item["roughness_exceed"] != 0:
-                overall = "fail"
-                break
-        if overall == "pass":
-            for item in substrate:
-                if "unknown" in item["classes"]:
-                    overall = "fail"
-                    break
+    _validate_summary_parts(crosspoint, terrain, substrate)
+    overall = _compute_overall(crosspoint, terrain, substrate)
 
     return {
         "crosspoint": crosspoint,
@@ -368,4 +381,75 @@ def serialize(crosspoint):
     except (TypeError, ValueError, UnicodeError) as exc:
         raise ValueError(
             f"crosspoint: could not be serialized to JSON: {exc}"
+        ) from exc
+
+
+def serialize_summary(summary):
+    """Serialize a combined summary dict to UTF-8 JSON bytes.
+
+    ``summary`` must be the dict returned by :func:`summarize`, with
+    keys exactly in the order
+    ``crosspoint, terrain, substrate, overall``. The ``crosspoint``
+    item is validated as in :func:`serialize`; ``terrain`` and
+    ``substrate`` must be the non-empty equal-length tuples validated
+    by :func:`summarize` (per-layer key order and field constraints
+    unchanged). ``overall`` is ignored for validation purposes and
+    recomputed as in :func:`summarize`: ``"pass"`` only when
+    ``crosspoint["quality"] == "pass"``, no terrain item exceeds its
+    slope/roughness limits and no substrate item contains
+    ``"unknown"``.
+
+    Validation order, stopping at the first error: container, summary
+    key order, ``crosspoint``, terrain layer items, substrate layer
+    items, then ``overall``. Container, key-order, field-type and
+    tuple-level errors raise ``TypeError``; finiteness, range, enum,
+    layer-count and consistency errors raise ``ValueError``. The input
+    is not modified.
+
+    On success the summary is encoded as UTF-8 JSON with the key order
+    preserved, ``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``, no indentation and no trailing newline.
+    Floats are first rounded with ``round(float(v), 6)`` and negative
+    zero is normalized to ``0.0``; tuples are recursively converted to
+    arrays. Any JSON or UTF-8 encoding failure raises ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    if not isinstance(summary, dict):
+        raise TypeError("summary must be a dict")
+    if list(summary.keys()) != list(_SUMMARY_KEYS):
+        raise TypeError(
+            "summary keys must be in the order "
+            "crosspoint, terrain, substrate, overall"
+        )
+
+    crosspoint = summary["crosspoint"]
+    terrain = summary["terrain"]
+    substrate = summary["substrate"]
+    overall = summary["overall"]
+    _validate_summary_parts(crosspoint, terrain, substrate)
+
+    if type(overall) is not str:
+        raise TypeError("summary: overall must be a str")
+    if overall not in _QUALITY_VALUES:
+        raise ValueError("summary: overall must be 'pass' or 'fail'")
+
+    recomputed = _compute_overall(crosspoint, terrain, substrate)
+    document = {
+        "crosspoint": crosspoint,
+        "terrain": terrain,
+        "substrate": substrate,
+        "overall": recomputed,
+    }
+    try:
+        text = json.dumps(
+            _to_jsonable(document),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"summary: could not be serialized to JSON: {exc}"
         ) from exc
