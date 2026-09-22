@@ -11,12 +11,13 @@ results together with a ``classify`` result.
 
 from __future__ import annotations
 
+import json
 import math
 
 from .crosspoint import evaluate
 from .quality import assess
 
-__all__ = ["generate", "summarize"]
+__all__ = ["generate", "summarize", "serialize"]
 
 _CROSSPOINT_KEYS = (
     "count",
@@ -312,3 +313,59 @@ def summarize(crosspoint, terrain, substrate):
         "substrate": substrate,
         "overall": overall,
     }
+
+
+def _to_jsonable(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        rounded = round(float(value), 6)
+        return 0.0 if rounded == 0 else rounded
+    if isinstance(value, (tuple, list)):
+        return [_to_jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _to_jsonable(item) for key, item in value.items()}
+    return value
+
+
+def serialize(crosspoint):
+    """Serialize a crosspoint result dict to UTF-8 JSON bytes.
+
+    ``crosspoint`` must be the dict returned by
+    :func:`ocean_sonar.crosspoint.evaluate`, with keys exactly in the
+    order ``count, bias, rmse, max_abs, within_tolerance, quality``:
+    ``count`` and ``within_tolerance`` non-bool ints with
+    ``count > 0`` and ``0 <= within_tolerance <= count``; ``bias``,
+    ``rmse`` and ``max_abs`` finite non-bool floats with ``rmse`` and
+    ``max_abs`` non-negative; ``quality`` the string ``"pass"`` or
+    ``"fail"``.
+
+    Validation order, stopping at the first error: container, key
+    order, then each field in key order. Container, key-order and
+    field-type errors raise ``TypeError``; finiteness, range and
+    enum errors raise ``ValueError``. Validation exceptions are
+    propagated unchanged and the input is not modified.
+
+    On success the crosspoint structure is encoded as UTF-8 JSON with
+    the key order preserved, ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation and
+    no trailing newline. Floats are first rounded with
+    ``round(float(v), 6)`` and negative zero is normalized to ``0.0``;
+    tuples are recursively converted to arrays. Any JSON or UTF-8
+    encoding failure raises ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    _check_crosspoint(crosspoint)
+    try:
+        text = json.dumps(
+            _to_jsonable(crosspoint),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"crosspoint: could not be serialized to JSON: {exc}"
+        ) from exc
