@@ -13,7 +13,7 @@ import math
 
 from .svp import _is_real_number
 
-__all__ = ["analyze"]
+__all__ = ["analyze", "analyze_layers"]
 
 
 def _round6(value):
@@ -138,3 +138,97 @@ def analyze(r, nx, ny, cells):
                 )
             result.append((slope, roughness))
     return tuple(result)
+
+
+def analyze_layers(layers):
+    """Analyze several depth grids in one call.
+
+    ``layers`` is a non-empty list/tuple whose items, in input order,
+    are four-element list/tuples ``(r, nx, ny, cells)`` with the same
+    constraints as the parameters of :func:`analyze`.
+
+    Validation order: the outer container, non-emptiness, then per
+    layer ``i`` its container, length, ``r``, ``nx``, ``ny``, the
+    ``cells`` container and length, and finally per cell ``j`` its
+    container, length, ``count`` and ``mean``; the first error stops
+    the call. Container/type mismatches (including bool) raise
+    ``TypeError``, all other constraint errors raise ``ValueError``.
+    Errors are prefixed with ``"layers[i]: "`` or
+    ``"layers[i].cells[j]: "``.
+
+    Each layer is passed to :func:`analyze` unchanged. Returns a tuple
+    in input order of dicts with keys ``resolution``, ``nx``, ``ny``,
+    ``analysis`` (in that order): ``resolution`` is
+    ``round(float(r), 6)`` (negative zero normalized to ``0.0``),
+    ``nx``/``ny`` are ints and ``analysis`` is the tuple returned by
+    :func:`analyze` as-is. Inputs are not modified.
+    """
+    if not isinstance(layers, (list, tuple)):
+        raise TypeError("layers must be a list or tuple")
+    if len(layers) == 0:
+        raise ValueError("layers must not be empty")
+
+    results = []
+    for i in range(len(layers)):
+        prefix = f"layers[{i}]: "
+        layer = layers[i]
+        if not isinstance(layer, (list, tuple)):
+            raise TypeError(prefix + "must be a list or tuple")
+        if len(layer) != 4:
+            raise ValueError(prefix + "must have 4 elements")
+        r, nx, ny, cells = layer
+
+        if not _is_real_number(r):
+            raise TypeError(prefix + "r must be a non-bool int or float")
+        if not math.isfinite(r):
+            raise ValueError(prefix + "r must be finite")
+        if not r > 0:
+            raise ValueError(prefix + "r must be > 0")
+
+        for name, value in (("nx", nx), ("ny", ny)):
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise TypeError(prefix + f"{name} must be a non-bool int")
+            if not value > 0:
+                raise ValueError(prefix + f"{name} must be > 0")
+
+        if not isinstance(cells, (list, tuple)):
+            raise TypeError(prefix + "cells must be a list or tuple")
+        if len(cells) != nx * ny:
+            raise ValueError(prefix + "cells must have nx * ny elements")
+
+        for j in range(len(cells)):
+            cell_prefix = f"layers[{i}].cells[{j}]: "
+            cell = cells[j]
+            if not isinstance(cell, (list, tuple)):
+                raise TypeError(cell_prefix + "must be a list or tuple")
+            if len(cell) != 2:
+                raise ValueError(cell_prefix + "must have 2 elements")
+            count, mean = cell
+            if not isinstance(count, int) or isinstance(count, bool):
+                raise TypeError(cell_prefix + "count must be a non-bool int")
+            if not count >= 0:
+                raise ValueError(cell_prefix + "count must be >= 0")
+            if count == 0:
+                if mean is not None:
+                    raise ValueError(
+                        cell_prefix + "mean must be None when count is 0"
+                    )
+            else:
+                if not _is_real_number(mean):
+                    raise TypeError(
+                        cell_prefix + "mean must be a non-bool int or float"
+                    )
+                if not math.isfinite(mean):
+                    raise ValueError(cell_prefix + "mean must be finite")
+                if not mean >= 0:
+                    raise ValueError(cell_prefix + "mean must be >= 0")
+
+        results.append(
+            {
+                "resolution": _round6(r),
+                "nx": int(nx),
+                "ny": int(ny),
+                "analysis": analyze(r, nx, ny, cells),
+            }
+        )
+    return tuple(results)
