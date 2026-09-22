@@ -18,11 +18,13 @@ from . import crosspoint, grid, quality, report, substrate, terrain
 from .report import (
     _check_crosspoint,
     _COUNT_KEYS,
+    _from_jsonable,
     _overall_verdict,
+    _reject_json_constant,
     _to_jsonable,
 )
 
-__all__ = ["build", "serialize"]
+__all__ = ["build", "serialize", "load"]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
 _LAYER_KEYS = (
@@ -475,3 +477,72 @@ def serialize(product):
         raise ValueError(
             f"product: could not be serialized to JSON: {exc}"
         ) from exc
+
+
+def load(path):
+    """Load a :func:`serialize`-produced JSON product from ``path``.
+
+    ``path`` must be a non-empty ``str``: a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``. The file
+    is opened in binary mode (``"rb"``) and read in full; a missing
+    file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError`` and every other ``OSError`` is propagated
+    unchanged. The file is not modified.
+
+    The bytes must be exactly those produced by :func:`serialize` for
+    the same value: compact UTF-8 JSON with no BOM and no trailing
+    newline. A BOM, a trailing newline, a UTF-8 decoding failure, a
+    JSON parsing failure or a JSON ``NaN``/``Infinity`` constant raises
+    ``ValueError``. The decoded value must satisfy the full
+    :func:`serialize` contract — top-level key order
+    ``crosspoint, layers, overall`` and all nested key orders, tuple
+    lengths, field types/ranges and consistency rules (including the
+    per-layer ``quality``/``substrate`` resolution and size matches,
+    ``counts`` matching ``classes`` and an ``overall`` consistent with
+    the recomputed verdict) — and the file bytes must equal the
+    canonical re-serialization of the decoded value byte for byte; any
+    key-order, type, range, consistency or normalization-byte mismatch
+    raises ``ValueError``.
+
+    JSON arrays are recursively converted to tuples and floats are
+    rounded with ``round(float(v), 6)`` with negative zero normalized
+    to ``0.0``, mirroring :func:`serialize`.
+
+    Returns the product as a dict with keys in the order
+    ``crosspoint, layers, overall``.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(text, parse_constant=_reject_json_constant)
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    product = _from_jsonable(parsed)
+    try:
+        canonical = serialize(product)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"file does not contain a valid product: {exc}") from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical serialize output"
+        )
+
+    return product
