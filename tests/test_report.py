@@ -1,4 +1,4 @@
-"""Tests for report.generate."""
+"""Tests for report.generate and report.summarize."""
 
 import copy
 import math
@@ -8,7 +8,8 @@ import pytest
 from ocean_sonar import report as report_mod
 from ocean_sonar.crosspoint import evaluate
 from ocean_sonar.quality import assess
-from ocean_sonar.report import generate
+from ocean_sonar.substrate import classify
+from ocean_sonar.report import generate, summarize
 
 CROSSINGS_PASS = [(0.0, 0.0, 10.0, 10.2), (1.0, 1.0, 5.0, 4.8)]
 LAYERS_PASS = [
@@ -417,3 +418,473 @@ def test_full_error_order_chain():
             roughness_limit="z",
         )
     assert str(excinfo.value) == "slope_limit must be a non-bool int or float"
+
+
+# --- summarize --------------------------------------------------------------
+
+SUMMARIZE_CROSSINGS = [(0.0, 0.0, 10.0, 10.2), (1.0, 1.0, 5.0, 4.8)]
+SUMMARIZE_LAYERS = [
+    (1.0, 2, 2, [(1.0, 0.5), (2.0, 0.0), (4.0, 1.0), (0.0, 0.0)]),
+]
+
+CP = evaluate(SUMMARIZE_CROSSINGS)
+TER = assess(SUMMARIZE_LAYERS)
+SUB = classify(SUMMARIZE_LAYERS)
+
+
+def _cp(**changes):
+    value = copy.deepcopy(CP)
+    value.update(changes)
+    return value
+
+
+def _ter(*items):
+    return tuple(copy.deepcopy(item) for item in items)
+
+
+def _sub(*items):
+    return tuple(copy.deepcopy(item) for item in items)
+
+
+def _terrain_item(**changes):
+    item = copy.deepcopy(TER[0])
+    item.update(changes)
+    return item
+
+
+def _substrate_item(**changes):
+    item = copy.deepcopy(SUB[0])
+    item.update(changes)
+    return item
+
+
+def test_summarize_exported():
+    assert "summarize" in report_mod.__all__
+    assert report_mod.summarize is summarize
+
+
+def test_summarize_all_pass():
+    result = summarize(CP, TER, SUB)
+    assert list(result.keys()) == ["crosspoint", "terrain", "substrate", "overall"]
+    assert result["overall"] == "pass"
+
+
+def test_summarize_passes_inputs_through_unchanged():
+    result = summarize(CP, TER, SUB)
+    assert result["crosspoint"] is CP
+    assert result["terrain"] is TER
+    assert result["substrate"] is SUB
+
+
+def test_summarize_multiple_layers_pass():
+    layers = [
+        (1.0, 1, 1, [(0.0, 0.0)]),
+        (2.5, 1, 1, [(1.0, 0.5)]),
+    ]
+    result = summarize(CP, assess(layers), classify(layers))
+    assert result["overall"] == "pass"
+
+
+def test_summarize_resolution_int_float_numeric_equality():
+    terrain = _ter(_terrain_item(resolution=1.0))
+    substrate = _sub(_substrate_item(resolution=1))
+    with pytest.raises(TypeError):
+        # gate accepts 1 == 1.0; per-item structure then rejects int
+        summarize(CP, terrain, substrate)
+
+    terrain = _ter(_terrain_item(resolution=1.0))
+    substrate = _sub(_substrate_item(resolution=1.0))
+    assert summarize(CP, terrain, substrate)["overall"] == "pass"
+
+
+def test_summarize_crosspoint_fail_fails_overall():
+    cp = evaluate([(0.0, 0.0, 10.0, 9.0)])
+    assert cp["quality"] == "fail"
+    assert summarize(cp, TER, SUB)["overall"] == "fail"
+
+
+def test_summarize_slope_exceed_fails_overall():
+    layers = [(1.0, 1, 1, [(5.5, 0.5)])]
+    result = summarize(CP, assess(layers), classify(layers))
+    assert result["terrain"][0]["slope_exceed"] == 1
+    assert result["overall"] == "fail"
+
+
+def test_summarize_roughness_exceed_fails_overall():
+    layers = [(1.0, 1, 1, [(0.0, 1.5)])]
+    result = summarize(CP, assess(layers), classify(layers))
+    assert result["terrain"][0]["roughness_exceed"] == 1
+    assert result["overall"] == "fail"
+
+
+def test_summarize_any_layer_exceed_fails_overall():
+    layers = [
+        (1.0, 1, 1, [(0.0, 0.0)]),
+        (2.0, 1, 1, [(6.0, 0.0)]),
+    ]
+    result = summarize(CP, assess(layers), classify(layers))
+    assert result["terrain"][1]["slope_exceed"] == 1
+    assert result["overall"] == "fail"
+
+
+def test_summarize_unknown_class_from_none_slope_fails_overall():
+    layers = [(1.0, 1, 1, [(None, 0.5)])]
+    result = summarize(CP, assess(layers), classify(layers))
+    assert result["substrate"][0]["classes"] == ("unknown",)
+    assert result["terrain"][0]["slope_exceed"] == 0
+    assert result["overall"] == "fail"
+
+
+def test_summarize_unknown_class_from_empty_cell_fails_overall():
+    layers = [(1.0, 1, 2, [(None, None), (0.0, 0.0)])]
+    result = summarize(CP, assess(layers), classify(layers))
+    assert "unknown" in result["substrate"][0]["classes"]
+    assert result["overall"] == "fail"
+
+
+def test_summarize_any_substrate_layer_unknown_fails_overall():
+    layers = [
+        (1.0, 1, 1, [(0.0, 0.0)]),
+        (2.0, 1, 1, [(None, None)]),
+    ]
+    result = summarize(CP, assess(layers), classify(layers))
+    assert result["overall"] == "fail"
+
+
+def test_summarize_inputs_not_modified():
+    cp = copy.deepcopy(CP)
+    terrain = copy.deepcopy(TER)
+    substrate = copy.deepcopy(SUB)
+    snapshots = (copy.deepcopy(cp), copy.deepcopy(terrain), copy.deepcopy(substrate))
+    summarize(cp, terrain, substrate)
+    assert (cp, terrain, substrate) == snapshots
+
+
+# validation order: crosspoint -> terrain -> substrate -> lengths ->
+# per-layer resolution -> per-item structure
+
+def test_summarize_crosspoint_not_dict():
+    with pytest.raises(TypeError):
+        summarize([("resolution", 1.0)], TER, SUB)
+
+
+def test_summarize_crosspoint_wrong_key_order():
+    reordered = {
+        key: CP[key]
+        for key in (
+            "quality",
+            "count",
+            "bias",
+            "rmse",
+            "max_abs",
+            "within_tolerance",
+        )
+    }
+    with pytest.raises(TypeError):
+        summarize(reordered, TER, SUB)
+
+
+def test_summarize_crosspoint_missing_key():
+    broken = {key: CP[key] for key in CP if key != "quality"}
+    with pytest.raises(TypeError):
+        summarize(broken, TER, SUB)
+
+
+def test_summarize_crosspoint_extra_key():
+    broken = dict(CP, extra=1)
+    with pytest.raises(TypeError):
+        summarize(broken, TER, SUB)
+
+
+def test_summarize_crosspoint_count_type():
+    with pytest.raises(TypeError):
+        summarize(_cp(count=2.0), TER, SUB)
+    with pytest.raises(TypeError):
+        summarize(_cp(count=True), TER, SUB)
+
+
+def test_summarize_crosspoint_count_range():
+    with pytest.raises(ValueError):
+        summarize(_cp(count=0), TER, SUB)
+    with pytest.raises(ValueError):
+        summarize(_cp(count=-1), TER, SUB)
+
+
+def test_summarize_crosspoint_bias_type():
+    with pytest.raises(TypeError):
+        summarize(_cp(bias=0), TER, SUB)
+
+
+def test_summarize_crosspoint_values_nonfinite():
+    with pytest.raises(ValueError):
+        summarize(_cp(bias=float("nan")), TER, SUB)
+    with pytest.raises(ValueError):
+        summarize(_cp(rmse=float("inf")), TER, SUB)
+    with pytest.raises(ValueError):
+        summarize(_cp(max_abs=float("-inf")), TER, SUB)
+
+
+def test_summarize_crosspoint_negative_rmse_and_max_abs():
+    with pytest.raises(ValueError):
+        summarize(_cp(rmse=-0.01), TER, SUB)
+    with pytest.raises(ValueError):
+        summarize(_cp(max_abs=-0.01), TER, SUB)
+
+
+def test_summarize_crosspoint_within_tolerance_checks():
+    with pytest.raises(TypeError):
+        summarize(_cp(within_tolerance=2.0), TER, SUB)
+    with pytest.raises(ValueError):
+        summarize(_cp(within_tolerance=-1), TER, SUB)
+    with pytest.raises(ValueError):
+        summarize(_cp(within_tolerance=3), TER, SUB)
+
+
+def test_summarize_crosspoint_quality_checks():
+    with pytest.raises(TypeError):
+        summarize(_cp(quality=False), TER, SUB)
+    with pytest.raises(ValueError):
+        summarize(_cp(quality="maybe"), TER, SUB)
+
+
+def test_summarize_crosspoint_field_order():
+    broken = _cp(bias="bad", rmse="bad")
+    with pytest.raises(TypeError) as excinfo:
+        summarize(broken, TER, SUB)
+    assert "bias" in str(excinfo.value)
+
+
+def test_summarize_terrain_not_tuple():
+    with pytest.raises(TypeError):
+        summarize(CP, [dict(TER[0])], SUB)
+
+
+def test_summarize_terrain_empty():
+    with pytest.raises(ValueError):
+        summarize(CP, (), SUB)
+
+
+def test_summarize_substrate_not_tuple():
+    with pytest.raises(TypeError):
+        summarize(CP, TER, [dict(SUB[0])])
+
+
+def test_summarize_substrate_empty():
+    with pytest.raises(ValueError):
+        summarize(CP, TER, ())
+
+
+def test_summarize_layer_count_mismatch():
+    with pytest.raises(ValueError):
+        summarize(CP, TER + TER, SUB)
+    with pytest.raises(ValueError):
+        summarize(CP, TER, SUB + SUB)
+
+
+def test_summarize_resolution_mismatch():
+    terrain = assess([(1.0, 1, 1, [(0.0, 0.0)])])
+    substrate = classify([(2.0, 1, 1, [(0.0, 0.0)])])
+    with pytest.raises(ValueError) as excinfo:
+        summarize(CP, terrain, substrate)
+    assert "resolution" in str(excinfo.value)
+
+
+def test_summarize_resolution_nan_is_mismatch():
+    terrain = _ter(_terrain_item(resolution=float("nan")))
+    substrate = _sub(_substrate_item(resolution=float("nan")))
+    with pytest.raises(ValueError):
+        summarize(CP, terrain, substrate)
+
+
+def test_summarize_resolution_gate_before_item_structure():
+    terrain = assess([(1.0, 1, 1, [(0.0, 0.0)])])
+    substrate = classify([(2.0, 1, 1, [(0.0, 0.0)])])
+    bad = dict(substrate[0])
+    bad["nx"] = 5  # structural inconsistency must not be reached first
+    with pytest.raises(ValueError) as excinfo:
+        summarize(CP, terrain, (bad,))
+    assert "resolution" in str(excinfo.value)
+
+
+def test_summarize_terrain_item_not_dict():
+    with pytest.raises(TypeError) as excinfo:
+        summarize(CP, (("not", "a", "dict"),), SUB)
+    assert "terrain[0]" in str(excinfo.value)
+
+
+def test_summarize_substrate_item_not_dict():
+    with pytest.raises(TypeError) as excinfo:
+        summarize(CP, TER, ("not-a-dict",))
+    assert "substrate[0]" in str(excinfo.value)
+
+
+def test_summarize_terrain_item_wrong_key_order():
+    item = {
+        key: TER[0][key]
+        for key in (
+            "resolution",
+            "total",
+            "valid",
+            "coverage",
+            "roughness_exceed",
+            "slope_exceed",
+        )
+    }
+    with pytest.raises(TypeError):
+        summarize(CP, _ter(item), SUB)
+
+
+def test_summarize_terrain_item_field_types_and_ranges():
+    with pytest.raises(TypeError):
+        summarize(CP, _ter(_terrain_item(resolution=1)), SUB)
+    with pytest.raises(ValueError):
+        summarize(CP, _ter(_terrain_item(resolution=float("nan"))), SUB)
+    with pytest.raises(TypeError):
+        summarize(CP, _ter(_terrain_item(total=4.0)), SUB)
+    with pytest.raises(ValueError):
+        summarize(CP, _ter(_terrain_item(total=0)), SUB)
+    with pytest.raises(TypeError):
+        summarize(CP, _ter(_terrain_item(valid=4.0)), SUB)
+    with pytest.raises(ValueError):
+        summarize(CP, _ter(_terrain_item(valid=5)), SUB)
+    with pytest.raises(TypeError):
+        summarize(CP, _ter(_terrain_item(coverage=1)), SUB)
+    with pytest.raises(ValueError):
+        summarize(CP, _ter(_terrain_item(coverage=float("inf"))), SUB)
+    with pytest.raises(ValueError):
+        summarize(CP, _ter(_terrain_item(coverage=1.01)), SUB)
+    with pytest.raises(TypeError):
+        summarize(CP, _ter(_terrain_item(slope_exceed=0.0)), SUB)
+    with pytest.raises(ValueError):
+        summarize(CP, _ter(_terrain_item(slope_exceed=-1)), SUB)
+    with pytest.raises(TypeError):
+        summarize(CP, _ter(_terrain_item(roughness_exceed=False)), SUB)
+    with pytest.raises(ValueError):
+        summarize(CP, _ter(_terrain_item(roughness_exceed=5)), SUB)
+
+
+def test_summarize_terrain_items_checked_before_substrate_items():
+    terrain = _ter(_terrain_item(coverage="bad"))
+    substrate = _sub(_substrate_item(nx="bad"))
+    with pytest.raises(TypeError) as excinfo:
+        summarize(CP, terrain, substrate)
+    assert "coverage" in str(excinfo.value)
+
+
+def test_summarize_terrain_items_index_order():
+    good = _terrain_item()
+    bad = _terrain_item(total=0)
+    with pytest.raises(ValueError) as excinfo:
+        summarize(CP, _ter(good, bad), SUB + SUB)
+    assert "terrain[1]" in str(excinfo.value)
+
+
+def test_summarize_substrate_item_wrong_key_order():
+    item = {
+        key: SUB[0][key]
+        for key in ("resolution", "nx", "ny", "counts", "classes")
+    }
+    with pytest.raises(TypeError):
+        summarize(CP, TER, _sub(item))
+
+
+def test_summarize_substrate_resolution_checks():
+    with pytest.raises(TypeError):
+        summarize(CP, TER, _sub(_substrate_item(resolution=1)))
+    with pytest.raises(ValueError):
+        summarize(CP, TER, _sub(_substrate_item(resolution=float("inf"))))
+
+
+def test_summarize_substrate_nx_ny_checks():
+    with pytest.raises(TypeError):
+        summarize(CP, TER, _sub(_substrate_item(nx=2.0)))
+    with pytest.raises(TypeError):
+        summarize(CP, TER, _sub(_substrate_item(ny=False)))
+    with pytest.raises(ValueError):
+        summarize(CP, TER, _sub(_substrate_item(nx=0)))
+
+
+def test_summarize_substrate_classes_must_be_tuple():
+    item = _substrate_item(classes=["mud"] * 4)
+    with pytest.raises(TypeError):
+        summarize(CP, TER, _sub(item))
+
+
+def test_summarize_substrate_classes_length():
+    item = _substrate_item(classes=("mud",) * 3)
+    with pytest.raises(ValueError):
+        summarize(CP, TER, _sub(item))
+
+
+def test_summarize_substrate_class_element_type():
+    item = _substrate_item(classes=(1,) + ("mud",) * 3)
+    with pytest.raises(TypeError):
+        summarize(CP, TER, _sub(item))
+
+
+def test_summarize_substrate_unknown_class_name():
+    item = _substrate_item(classes=("silt",) + ("mud",) * 3)
+    with pytest.raises(ValueError) as excinfo:
+        summarize(CP, TER, _sub(item))
+    assert "silt" in str(excinfo.value)
+
+
+def test_summarize_substrate_counts_must_be_dict():
+    item = _substrate_item(counts=(0, 4, 0, 0, 0))
+    with pytest.raises(TypeError):
+        summarize(CP, TER, _sub(item))
+
+
+def test_summarize_substrate_counts_wrong_key_order():
+    counts = SUB[0]["counts"]
+    item = _substrate_item(
+        counts={key: counts[key] for key in ("mud", "unknown", "sand", "gravel", "rock")}
+    )
+    with pytest.raises(TypeError):
+        summarize(CP, TER, _sub(item))
+
+
+def test_summarize_substrate_counts_field_types():
+    item = _substrate_item(
+        counts={"unknown": 0.0, "mud": 4, "sand": 0, "gravel": 0, "rock": 0}
+    )
+    with pytest.raises(TypeError):
+        summarize(CP, TER, _sub(item))
+
+
+def test_summarize_substrate_counts_negative():
+    item = _substrate_item(
+        counts={"unknown": -1, "mud": 4, "sand": 0, "gravel": 0, "rock": 0}
+    )
+    with pytest.raises(ValueError):
+        summarize(CP, TER, _sub(item))
+
+
+def test_summarize_substrate_counts_must_match_classes():
+    item = _substrate_item(classes=("sand",) * 4)
+    with pytest.raises(ValueError) as excinfo:
+        summarize(CP, TER, _sub(item))
+    assert "counts" in str(excinfo.value)
+
+
+def test_summarize_full_error_order_chain():
+    good_layers = [(1.0, 1, 1, [(0.0, 0.0)])]
+    terrain = assess(good_layers)
+    substrate = classify(good_layers)
+
+    with pytest.raises(TypeError):
+        summarize(42, 42, 42)
+    with pytest.raises(TypeError):
+        summarize(CP, 42, 42)
+    with pytest.raises(TypeError):
+        summarize(CP, terrain, 42)
+
+    # structural item errors lose to count and resolution gates
+    with pytest.raises(ValueError):
+        summarize(CP, terrain + terrain, substrate)
+    bad_resolution_terrain = assess([(9.0, 1, 1, [(0.0, 0.0)])])
+    bad_item = dict(substrate[0])
+    bad_item["nx"] = 9
+    with pytest.raises(ValueError) as excinfo:
+        summarize(CP, bad_resolution_terrain, (bad_item,))
+    assert "resolution" in str(excinfo.value)
