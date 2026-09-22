@@ -6,7 +6,9 @@ Aggregates the dicts/tuples returned by
 :func:`ocean_sonar.substrate.classify` into reports with an overall
 pass/fail verdict. :func:`generate` runs ``evaluate``/``assess`` itself,
 while :func:`summarize` validates and combines their already-computed
-results together with a ``classify`` result.
+results together with a ``classify`` result. :func:`generate_full` runs
+all three of ``evaluate``/``assess``/``classify`` itself and adds a
+numeric score to the combined summary.
 """
 
 from __future__ import annotations
@@ -16,9 +18,11 @@ import math
 
 from .crosspoint import evaluate
 from .quality import assess
+from .substrate import classify
 
 __all__ = [
     "generate",
+    "generate_full",
     "summarize",
     "serialize",
     "serialize_summary",
@@ -340,6 +344,74 @@ def summarize(crosspoint, terrain, substrate):
         "terrain": terrain,
         "substrate": substrate,
         "overall": overall,
+    }
+
+
+def generate_full(crossings, layers, tolerance=0.5, slope_limit=5.0, roughness_limit=1.0):
+    """Generate the combined report with a numeric score.
+
+    Calls :func:`evaluate`, :func:`assess` and :func:`classify` strictly
+    in that order, exactly once each and with no interleaving, then
+    passes the three results unchanged to :func:`summarize`
+    (``evaluate`` validates ``crossings`` then ``tolerance``;
+    ``assess`` and ``classify`` each validate ``layers`` then
+    ``slope_limit`` then ``roughness_limit``; ``summarize`` applies its
+    own contract). The first-error order is therefore crossings →
+    tolerance → layers → slope_limit → roughness_limit → the
+    :func:`summarize` validation order, and every exception from any of
+    the four functions short-circuits and is propagated unchanged.
+    Inputs are not modified.
+
+    With ``T`` the sum of the terrain ``total`` values, ``V`` the sum of
+    the terrain ``valid`` values, ``C`` equal to
+    ``within_tolerance / count`` from the crosspoint result, ``G`` the
+    number of layers whose terrain item has ``slope_exceed`` and
+    ``roughness_exceed`` both equal to ``0`` and whose substrate
+    ``classes`` contain no ``"unknown"``, and ``L`` equal to ``G``
+    divided by the number of layers, the score is
+    ``round(100 * (V / T) * C * L, 6)`` as a float with negative zero
+    normalized to ``0.0``.
+
+    Returns a dict with keys in the order ``crosspoint, terrain,
+    substrate, overall, score``; the first four are the objects from
+    the :func:`summarize` result (identities preserved) and ``score``
+    is the value described above.
+    """
+    crosspoint = evaluate(crossings, tolerance)
+    terrain = assess(layers, slope_limit, roughness_limit)
+    substrate = classify(layers, slope_limit, roughness_limit)
+    summary = summarize(crosspoint, terrain, substrate)
+
+    total = 0
+    valid = 0
+    good = 0
+    for i in range(len(terrain)):
+        item = terrain[i]
+        total += item["total"]
+        valid += item["valid"]
+        if (
+            item["slope_exceed"] == 0
+            and item["roughness_exceed"] == 0
+            and "unknown" not in substrate[i]["classes"]
+        ):
+            good += 1
+
+    score = round(
+        100
+        * (valid / total)
+        * (crosspoint["within_tolerance"] / crosspoint["count"])
+        * (good / len(terrain)),
+        6,
+    )
+    if score == 0:
+        score = 0.0
+
+    return {
+        "crosspoint": summary["crosspoint"],
+        "terrain": summary["terrain"],
+        "substrate": summary["substrate"],
+        "overall": summary["overall"],
+        "score": score,
     }
 
 
