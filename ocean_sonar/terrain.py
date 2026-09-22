@@ -13,7 +13,7 @@ import math
 
 from .svp import _is_real_number
 
-__all__ = ["analyze", "analyze_layers"]
+__all__ = ["analyze", "analyze_layers", "metrics"]
 
 
 def _round6(value):
@@ -23,33 +23,11 @@ def _round6(value):
     return result
 
 
-def analyze(r, nx, ny, cells):
-    """Compute per-cell slope and roughness for a regular depth grid.
+def _validated_means(r, nx, ny, cells):
+    """Validate a depth grid exactly as :func:`analyze` does.
 
-    ``r`` is the cell size, a finite non-bool int/float with ``r > 0``.
-    ``nx``/``ny`` are non-bool positive ints. ``cells`` is a list/tuple
-    of length ``nx * ny`` ordered by ``y`` then ``x``; each item is a
-    two-element list/tuple ``(count, mean)`` where ``count`` is a
-    non-bool non-negative int, ``mean`` is exactly ``None`` when
-    ``count == 0`` and a finite non-bool int/float ``>= 0`` otherwise.
-
-    For a non-empty cell, roughness is ``max - min`` over the non-empty
-    means of the 3x3 neighbourhood clipped to the grid bounds. With
-    left/right/down/up neighbour means ``L``/``R``/``D``/``U`` all
-    present and non-empty, slope is
-    ``degrees(atan(hypot((R - L) / (2 * r), (U - D) / (2 * r))))``;
-    otherwise slope is ``None``. Empty cells are fixed as
-    ``(None, None)``.
-
-    Validation follows the signature parameter order and then grid
-    order, stopping at the first error: type mismatches (including
-    bool) raise ``TypeError``, all other constraint errors raise
-    ``ValueError``. Cell errors are prefixed with ``"cells[i]: "``.
-
-    Returns a tuple in the same order and length as ``cells`` of
-    ``(slope, roughness)`` pairs; non-``None`` values are rounded with
-    ``round(float(v), 6)`` (negative zero normalized to ``0.0``). All
-    computation uses the unrounded means; inputs are not modified.
+    Returns a list with one entry per cell: the cell mean for
+    non-empty cells (``count > 0``) and ``None`` for empty ones.
     """
     if not _is_real_number(r):
         raise TypeError("r must be a non-bool int or float")
@@ -92,7 +70,38 @@ def analyze(r, nx, ny, cells):
             if not mean >= 0:
                 raise ValueError(prefix + "mean must be >= 0")
 
-    means = [cell[1] if cell[0] > 0 else None for cell in cells]
+    return [cell[1] if cell[0] > 0 else None for cell in cells]
+
+
+def analyze(r, nx, ny, cells):
+    """Compute per-cell slope and roughness for a regular depth grid.
+
+    ``r`` is the cell size, a finite non-bool int/float with ``r > 0``.
+    ``nx``/``ny`` are non-bool positive ints. ``cells`` is a list/tuple
+    of length ``nx * ny`` ordered by ``y`` then ``x``; each item is a
+    two-element list/tuple ``(count, mean)`` where ``count`` is a
+    non-bool non-negative int, ``mean`` is exactly ``None`` when
+    ``count == 0`` and a finite non-bool int/float ``>= 0`` otherwise.
+
+    For a non-empty cell, roughness is ``max - min`` over the non-empty
+    means of the 3x3 neighbourhood clipped to the grid bounds. With
+    left/right/down/up neighbour means ``L``/``R``/``D``/``U`` all
+    present and non-empty, slope is
+    ``degrees(atan(hypot((R - L) / (2 * r), (U - D) / (2 * r))))``;
+    otherwise slope is ``None``. Empty cells are fixed as
+    ``(None, None)``.
+
+    Validation follows the signature parameter order and then grid
+    order, stopping at the first error: type mismatches (including
+    bool) raise ``TypeError``, all other constraint errors raise
+    ``ValueError``. Cell errors are prefixed with ``"cells[i]: "``.
+
+    Returns a tuple in the same order and length as ``cells`` of
+    ``(slope, roughness)`` pairs; non-``None`` values are rounded with
+    ``round(float(v), 6)`` (negative zero normalized to ``0.0``). All
+    computation uses the unrounded means; inputs are not modified.
+    """
+    means = _validated_means(r, nx, ny, cells)
 
     def mean_at(ix, iy):
         if 0 <= ix < nx and 0 <= iy < ny:
@@ -138,6 +147,58 @@ def analyze(r, nx, ny, cells):
                 )
             result.append((slope, roughness))
     return tuple(result)
+
+
+def metrics(r, nx, ny, cells):
+    """Compute coverage and depth/volume summary for a regular depth grid.
+
+    Inputs, the shape of ``cells`` and the validation order and
+    exception types are exactly as for :func:`analyze`; cell errors are
+    prefixed with ``"cells[i]: "``.
+
+    Only non-empty cells (``count > 0``) contribute. With ``A = r * r``
+    the per-cell area and ``valid`` the number of non-empty cells,
+    ``coverage`` is ``valid / (nx * ny)``, ``min_depth``/``max_depth``
+    are the smallest/largest cell means and ``mean_depth`` is
+    ``math.fsum(means) / valid``; ``volume`` is
+    ``math.fsum(mean * A for mean in means)``. When there are no
+    non-empty cells, the three depth values are ``None`` and the volume
+    is ``0.0``.
+
+    Returns a dict with keys in the order ``resolution, nx, ny, total,
+    valid, coverage, min_depth, max_depth, mean_depth, volume``:
+    ``resolution`` is ``r``, ``total``/``valid`` are ints and the other
+    fields are floats. Every non-``None`` value is rounded with
+    ``round(float(v), 6)`` (negative zero normalized to ``0.0``);
+    computations use the unrounded means. Inputs are not modified.
+    """
+    means = [m for m in _validated_means(r, nx, ny, cells) if m is not None]
+
+    total = int(nx * ny)
+    valid = len(means)
+    coverage = valid / total
+    if valid == 0:
+        min_depth = max_depth = mean_depth = None
+        volume = 0.0
+    else:
+        area = r * r
+        min_depth = _round6(min(means))
+        max_depth = _round6(max(means))
+        mean_depth = _round6(math.fsum(means) / valid)
+        volume = _round6(math.fsum(mean * area for mean in means))
+
+    return {
+        "resolution": _round6(r),
+        "nx": int(nx),
+        "ny": int(ny),
+        "total": total,
+        "valid": valid,
+        "coverage": _round6(coverage),
+        "min_depth": min_depth,
+        "max_depth": max_depth,
+        "mean_depth": mean_depth,
+        "volume": volume,
+    }
 
 
 def analyze_layers(layers):
