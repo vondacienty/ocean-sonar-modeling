@@ -17,7 +17,7 @@ import math
 from .crosspoint import evaluate
 from .quality import assess
 
-__all__ = ["generate", "summarize", "serialize"]
+__all__ = ["generate", "summarize", "serialize", "serialize_summary"]
 
 _CROSSPOINT_KEYS = (
     "count",
@@ -27,6 +27,7 @@ _CROSSPOINT_KEYS = (
     "within_tolerance",
     "quality",
 )
+_SUMMARY_KEYS = ("crosspoint", "terrain", "substrate", "overall")
 _TERRAIN_KEYS = (
     "resolution",
     "total",
@@ -230,6 +231,66 @@ def _check_substrate_item(index, item):
             raise ValueError(prefix + f"counts.{name} must match classes")
 
 
+def _check_summary(crosspoint, terrain, substrate):
+    _check_crosspoint(crosspoint)
+    _check_nonempty_tuple(terrain, "terrain")
+    _check_nonempty_tuple(substrate, "substrate")
+
+    if len(terrain) != len(substrate):
+        raise ValueError(
+            "terrain and substrate must have the same number of layers"
+        )
+
+    for i in range(len(terrain)):
+        terrain_item = terrain[i]
+        substrate_item = substrate[i]
+        if not isinstance(terrain_item, dict):
+            raise TypeError(f"terrain[{i}] must be a dict")
+        if not isinstance(substrate_item, dict):
+            raise TypeError(f"substrate[{i}] must be a dict")
+        if "resolution" not in terrain_item:
+            raise TypeError(f"terrain[{i}] missing 'resolution'")
+        if "resolution" not in substrate_item:
+            raise TypeError(f"substrate[{i}] missing 'resolution'")
+        if terrain_item["resolution"] != substrate_item["resolution"]:
+            raise ValueError(
+                f"layer {i}: terrain and substrate resolution must be equal"
+            )
+
+    for i in range(len(terrain)):
+        _check_terrain_item(i, terrain[i])
+    for i in range(len(substrate)):
+        _check_substrate_item(i, substrate[i])
+
+    return crosspoint, terrain, substrate
+
+
+def _check_summary_container(summary):
+    if not isinstance(summary, dict):
+        raise TypeError("summary must be a dict")
+    if list(summary.keys()) != list(_SUMMARY_KEYS):
+        raise TypeError(
+            "summary keys must be in the order crosspoint, terrain, substrate, overall"
+        )
+
+
+def _overall_verdict(crosspoint, terrain, substrate):
+    overall = "pass"
+    if crosspoint["quality"] != "pass":
+        overall = "fail"
+    else:
+        for item in terrain:
+            if item["slope_exceed"] != 0 or item["roughness_exceed"] != 0:
+                overall = "fail"
+                break
+        if overall == "pass":
+            for item in substrate:
+                if "unknown" in item["classes"]:
+                    overall = "fail"
+                    break
+    return overall
+
+
 def summarize(crosspoint, terrain, substrate):
     """Combine ``evaluate``/``assess``/``classify`` results into one report.
 
@@ -263,49 +324,8 @@ def summarize(crosspoint, terrain, substrate):
     substrate item's ``classes`` contains ``"unknown"``; otherwise it
     is ``"fail"``.
     """
-    _check_crosspoint(crosspoint)
-    _check_nonempty_tuple(terrain, "terrain")
-    _check_nonempty_tuple(substrate, "substrate")
-
-    if len(terrain) != len(substrate):
-        raise ValueError(
-            "terrain and substrate must have the same number of layers"
-        )
-
-    for i in range(len(terrain)):
-        terrain_item = terrain[i]
-        substrate_item = substrate[i]
-        if not isinstance(terrain_item, dict):
-            raise TypeError(f"terrain[{i}] must be a dict")
-        if not isinstance(substrate_item, dict):
-            raise TypeError(f"substrate[{i}] must be a dict")
-        if "resolution" not in terrain_item:
-            raise TypeError(f"terrain[{i}] missing 'resolution'")
-        if "resolution" not in substrate_item:
-            raise TypeError(f"substrate[{i}] missing 'resolution'")
-        if terrain_item["resolution"] != substrate_item["resolution"]:
-            raise ValueError(
-                f"layer {i}: terrain and substrate resolution must be equal"
-            )
-
-    for i in range(len(terrain)):
-        _check_terrain_item(i, terrain[i])
-    for i in range(len(substrate)):
-        _check_substrate_item(i, substrate[i])
-
-    overall = "pass"
-    if crosspoint["quality"] != "pass":
-        overall = "fail"
-    else:
-        for item in terrain:
-            if item["slope_exceed"] != 0 or item["roughness_exceed"] != 0:
-                overall = "fail"
-                break
-        if overall == "pass":
-            for item in substrate:
-                if "unknown" in item["classes"]:
-                    overall = "fail"
-                    break
+    crosspoint, terrain, substrate = _check_summary(crosspoint, terrain, substrate)
+    overall = _overall_verdict(crosspoint, terrain, substrate)
 
     return {
         "crosspoint": crosspoint,
@@ -369,3 +389,75 @@ def serialize(crosspoint):
         raise ValueError(
             f"crosspoint: could not be serialized to JSON: {exc}"
         ) from exc
+
+
+def serialize_summary(summary):
+    """Serialize a :func:`summarize` result dict to UTF-8 JSON bytes.
+
+    ``summary`` must be the dict returned by :func:`summarize`, with
+    keys exactly in the order ``crosspoint, terrain, substrate,
+    overall``. ``crosspoint`` is validated exactly as in
+    :func:`serialize`; ``terrain`` and ``substrate`` must be the same
+    non-empty, equally-sized layer tuples accepted by
+    :func:`summarize`, with the same per-layer key order, field types,
+    ranges and consistency constraints (including equal per-layer
+    ``resolution`` values and ``counts`` matching ``classes``).
+    ``overall`` must be the string ``"pass"`` or ``"fail"`` and is
+    recomputed from the other three entries: ``"pass"`` only when
+    ``crosspoint["quality"] == "pass"``, every terrain item has
+    ``slope_exceed`` and ``roughness_exceed`` equal to ``0`` and no
+    substrate item's ``classes`` contains ``"unknown"``.
+
+    Validation order, stopping at the first error: container, key
+    order, ``crosspoint``, the terrain layer items, the substrate
+    layer items (the tuple/container, layer-count and per-layer
+    resolution gates keep their :func:`summarize` order within those
+    stages), then ``overall``. Container, key-order, field-type and
+    tuple-level mismatches raise ``TypeError``; finiteness, range,
+    enum, layer-count and consistency errors (including an ``overall``
+    value that disagrees with the recomputed verdict) raise
+    ``ValueError``. The input is not modified.
+
+    On success the summary is encoded as UTF-8 JSON with the key order
+    preserved, ``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``, no indentation and no trailing newline.
+    Floats are first rounded with ``round(float(v), 6)`` and negative
+    zero is normalized to ``0.0``; tuples are recursively converted to
+    arrays. Any JSON or UTF-8 encoding failure raises ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    _check_summary_container(summary)
+
+    crosspoint, terrain, substrate = _check_summary(
+        summary["crosspoint"], summary["terrain"], summary["substrate"]
+    )
+
+    overall = summary["overall"]
+    if type(overall) is not str:
+        raise TypeError("overall must be a str")
+    if overall not in _QUALITY_VALUES:
+        raise ValueError("overall must be 'pass' or 'fail'")
+
+    recomputed = _overall_verdict(crosspoint, terrain, substrate)
+    if overall != recomputed:
+        raise ValueError(
+            "overall is inconsistent with crosspoint, terrain and substrate"
+        )
+
+    document = {
+        "crosspoint": crosspoint,
+        "terrain": terrain,
+        "substrate": substrate,
+        "overall": recomputed,
+    }
+    try:
+        text = json.dumps(
+            _to_jsonable(document),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(f"summary: could not be serialized to JSON: {exc}") from exc
