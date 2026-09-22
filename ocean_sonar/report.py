@@ -17,7 +17,15 @@ import math
 from .crosspoint import evaluate
 from .quality import assess
 
-__all__ = ["generate", "summarize", "serialize", "serialize_summary", "write", "load"]
+__all__ = [
+    "generate",
+    "summarize",
+    "serialize",
+    "serialize_summary",
+    "render",
+    "write",
+    "load",
+]
 
 _CROSSPOINT_KEYS = (
     "count",
@@ -463,9 +471,77 @@ def serialize_summary(summary):
         raise ValueError(f"summary: could not be serialized to JSON: {exc}") from exc
 
 
+def _format_number(value):
+    if isinstance(value, float):
+        return format(value, ".6f")
+    return str(value)
+
+
+def render(summary):
+    """Render a :func:`summarize` result dict as a plain-text ``str``.
+
+    ``summary`` is first validated with :func:`serialize_summary`, so it
+    must satisfy the full :func:`serialize_summary` contract; every
+    validation exception is propagated unchanged and the input is not
+    modified.
+
+    On success the report is the newline-joined concatenation (with no
+    trailing newline) of:
+
+    * ``OVERALL=<overall>``;
+    * ``CROSSPOINT=`` followed by ``count``, ``bias``, ``rmse``,
+      ``max_abs``, ``within_tolerance`` and ``quality`` as
+      semicolon-joined ``key=value`` fields;
+    * one ``TERRAIN[i]=`` line per terrain layer, in input order with
+      ``i`` starting at 0, listing ``resolution``, ``total``, ``valid``,
+      ``coverage``, ``slope_exceed`` and ``roughness_exceed`` in that
+      order as semicolon-joined ``key=value`` fields;
+    * one ``SUBSTRATE[i]=`` line per substrate layer, in input order
+      with ``i`` starting at 0, listing ``resolution``, ``nx``, ``ny``,
+      ``classes`` and ``counts`` in that order as semicolon-joined
+      ``key=value`` fields; ``classes`` is the comma-joined class names
+      with no spaces and ``counts`` is the comma-joined counts in the
+      key order ``unknown, mud, sand, gravel, rock``.
+
+    Floats are formatted with ``format(v, ".6f")`` and ints in decimal.
+
+    Returns the report text as ``str``.
+    """
+    serialize_summary(summary)
+
+    crosspoint = summary["crosspoint"]
+    terrain = summary["terrain"]
+    substrate = summary["substrate"]
+
+    lines = [f"OVERALL={summary['overall']}"]
+
+    crosspoint_fields = ";".join(
+        f"{key}={_format_number(crosspoint[key])}" for key in _CROSSPOINT_KEYS
+    )
+    lines.append(f"CROSSPOINT={crosspoint_fields}")
+
+    for i, item in enumerate(terrain):
+        fields = ";".join(
+            f"{key}={_format_number(item[key])}" for key in _TERRAIN_KEYS
+        )
+        lines.append(f"TERRAIN[{i}]={fields}")
+
+    for i, item in enumerate(substrate):
+        fields = ";".join(
+            f"{key}={_format_number(item[key])}" for key in _SUBSTRATE_KEYS
+            if key not in ("classes", "counts")
+        )
+        classes = ",".join(item["classes"])
+        counts = ",".join(str(item["counts"][key]) for key in _COUNT_KEYS)
+        lines.append(
+            f"SUBSTRATE[{i}]={fields};classes={classes};counts={counts}"
+        )
+
+    return "\n".join(lines)
+
+
 def write(summary, path):
     """Serialize a :func:`summarize` result and overwrite ``path`` with it.
-
     The bytes written are exactly those returned by
     :func:`serialize_summary` (compact UTF-8 JSON, key order preserved,
     no trailing newline); ``summary`` must therefore satisfy the full
