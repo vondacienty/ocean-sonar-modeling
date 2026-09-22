@@ -142,6 +142,18 @@ def build(
     }
 
 
+def _check_product_crosspoint(item):
+    _check_crosspoint(item)
+    expected = (
+        "pass" if item["within_tolerance"] == item["count"] else "fail"
+    )
+    if item["quality"] != expected:
+        raise ValueError(
+            "crosspoint: quality must be 'pass' when within_tolerance "
+            "== count and 'fail' when within_tolerance < count"
+        )
+
+
 def _check_cells(index, cells, nx, ny):
     if not isinstance(cells, tuple):
         raise TypeError(f"layers[{index}].cells must be a tuple")
@@ -376,7 +388,12 @@ def serialize(product):
     exactly in the order ``crosspoint, layers, overall``:
     ``crosspoint`` is the dict returned by
     :func:`ocean_sonar.crosspoint.evaluate` (keys
-    ``count, bias, rmse, max_abs, within_tolerance, quality``);
+    ``count, bias, rmse, max_abs, within_tolerance, quality``) with
+    ``count`` a positive non-bool int, ``within_tolerance`` a non-bool
+    int in ``[0, count]``, ``bias``/``rmse``/``max_abs`` finite floats
+    (the latter two ``>= 0``) and ``quality`` equal to ``"pass"``
+    exactly when ``within_tolerance == count`` and to ``"fail"``
+    exactly when ``within_tolerance < count``;
     ``layers`` is a non-empty tuple with one dict per resolution and
     ``overall`` is ``"pass"`` or ``"fail"``. Each layer dict has keys
     exactly in the order
@@ -422,7 +439,7 @@ def serialize(product):
 
     crosspoint_result = product["crosspoint"]
     layers = product["layers"]
-    _check_crosspoint(crosspoint_result)
+    _check_product_crosspoint(crosspoint_result)
 
     if not isinstance(layers, tuple):
         raise TypeError("layers must be a tuple")
