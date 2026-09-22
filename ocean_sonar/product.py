@@ -25,7 +25,7 @@ from .report import (
     _to_jsonable,
 )
 
-__all__ = ["build", "serialize", "render", "load"]
+__all__ = ["build", "serialize", "render", "metrics", "load"]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
 _LAYER_KEYS = (
@@ -564,6 +564,40 @@ def render(product):
         lines.append(f"SUBSTRATE[{i}]={substrate_fields}")
 
     return "\n".join(lines)
+
+
+def metrics(product):
+    """Compute per-layer terrain metrics for a :func:`build` result dict.
+
+    ``product`` must be the dict returned by :func:`build`; it is first
+    validated with :func:`serialize`, so it must satisfy that
+    function's full contract and every validation exception is
+    propagated unchanged. The input is not modified.
+
+    After validation, :func:`ocean_sonar.terrain.metrics` is called
+    exactly once per layer, in the input order of
+    ``product["layers"]``, with ``resolution``, ``nx``, ``ny`` and
+    ``cells`` taken unchanged from the layer (no reordering and no
+    copying); every exception raised by these calls is propagated
+    unchanged.
+
+    Returns a tuple with one item per layer in the same order; each
+    item is the dict returned by that layer's
+    :func:`~ocean_sonar.terrain.metrics` call, passed through
+    unchanged, with keys in the order ``resolution, nx, ny, total,
+    valid, coverage, min_depth, max_depth, mean_depth, volume``. The
+    numeric values, ``None`` depth fields, six-decimal rounding and
+    negative-zero normalization are exactly those produced by
+    :func:`~ocean_sonar.terrain.metrics`.
+    """
+    serialize(product)
+
+    return tuple(
+        terrain.metrics(
+            layer["resolution"], layer["nx"], layer["ny"], layer["cells"]
+        )
+        for layer in product["layers"]
+    )
 
 
 def load(path):
