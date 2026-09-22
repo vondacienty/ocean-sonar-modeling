@@ -17,7 +17,7 @@ import math
 from .crosspoint import evaluate
 from .quality import assess
 
-__all__ = ["generate", "summarize", "serialize", "serialize_summary", "write"]
+__all__ = ["generate", "summarize", "serialize", "serialize_summary", "write", "load"]
 
 _CROSSPOINT_KEYS = (
     "count",
@@ -496,3 +496,90 @@ def write(summary, path):
         handle.write(data)
 
     return data
+
+
+def _from_jsonable(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        rounded = round(float(value), 6)
+        return 0.0 if rounded == 0 else rounded
+    if isinstance(value, list):
+        return tuple(_from_jsonable(item) for item in value)
+    if isinstance(value, dict):
+        return {key: _from_jsonable(item) for key, item in value.items()}
+    return value
+
+
+def _reject_json_constant(name):
+    raise ValueError(f"invalid JSON constant {name!r}")
+
+
+def load(path):
+    """Load a :func:`write`-produced JSON summary from ``path``.
+
+    ``path`` must be a non-empty ``str``: a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``. The file
+    is opened in binary mode (``"rb"``) and read in full; a missing
+    file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError`` and every other ``OSError`` is propagated
+    unchanged. The file is not modified.
+
+    The bytes must be exactly those produced by
+    :func:`serialize_summary` for the same value: compact UTF-8 JSON
+    with no BOM and no trailing newline. A BOM, a trailing newline, a
+    UTF-8 decoding failure or a JSON parsing failure raises
+    ``ValueError``. The decoded value must satisfy the full
+    :func:`serialize_summary` contract — top-level key order
+    ``crosspoint, terrain, substrate, overall`` and the nested key
+    orders, non-empty equally-sized layer arrays, equal per-layer
+    ``resolution`` values, ``classes`` containing only
+    ``unknown/mud/sand/gravel/rock``, ``counts`` matching ``classes``
+    and an ``overall`` consistent with the recomputed verdict — and
+    the file bytes must equal the canonical re-serialization of the
+    decoded value byte for byte; any key-order, type, range,
+    consistency or normalization-byte mismatch raises ``ValueError``.
+
+    JSON arrays are recursively converted to tuples (including
+    ``classes``) and floats are rounded with ``round(float(v), 6)``
+    with negative zero normalized to ``0.0``, mirroring
+    :func:`serialize_summary`.
+
+    Returns the summary as a dict with keys in the order
+    ``crosspoint, terrain, substrate, overall``.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(text, parse_constant=_reject_json_constant)
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    summary = _from_jsonable(parsed)
+    try:
+        canonical = serialize_summary(summary)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"file does not contain a valid summary: {exc}") from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical serialize_summary output"
+        )
+
+    return summary
