@@ -16,9 +16,11 @@ import math
 
 from .crosspoint import evaluate
 from .quality import assess
+from .substrate import classify
 
 __all__ = [
     "generate",
+    "generate_full",
     "summarize",
     "serialize",
     "serialize_summary",
@@ -84,6 +86,66 @@ def generate(crossings, layers, tolerance=0.5, slope_limit=5.0, roughness_limit=
         "crosspoint": crosspoint,
         "terrain": terrain,
         "overall": overall,
+    }
+
+
+def generate_full(crossings, layers, tolerance=0.5, slope_limit=5.0, roughness_limit=1.0):
+    """Generate the full crosspoint, terrain and substrate report.
+
+    Calls :func:`evaluate` once, then :func:`assess` once, then
+    :func:`classify` once, strictly in that order (no parallel,
+    reordering or repeated calls); the three returned objects are
+    passed unchanged to :func:`summarize`. Every exception from any of
+    the four functions is propagated unchanged and short-circuits the
+    remaining calls; inputs are not modified.
+
+    With ``T`` the sum of each terrain item's ``total``, ``V`` the sum
+    of ``valid``, ``C = within_tolerance / count`` and ``G`` the number
+    of layers whose ``slope_exceed`` and ``roughness_exceed`` are both
+    ``0`` and whose ``classes`` contain no ``"unknown"``
+    (``L = G / number_of_layers``), ``score`` is
+    ``round(100 * (V / T) * C * L, 6)`` as a float (negative zero
+    normalized to ``0.0``).
+
+    Returns a dict with keys in the order
+    ``crosspoint, terrain, substrate, overall, score``; the first four
+    are the corresponding entries of the dict returned by
+    :func:`summarize` (same object identities) and ``overall`` is that
+    dict's verdict.
+    """
+    crosspoint = evaluate(crossings, tolerance)
+    terrain = assess(layers, slope_limit, roughness_limit)
+    substrate = classify(layers, slope_limit, roughness_limit)
+
+    summary = summarize(crosspoint, terrain, substrate)
+
+    total = sum(item["total"] for item in terrain)
+    valid = sum(item["valid"] for item in terrain)
+    good_layers = 0
+    for terrain_item, substrate_item in zip(terrain, substrate):
+        if (
+            terrain_item["slope_exceed"] == 0
+            and terrain_item["roughness_exceed"] == 0
+            and "unknown" not in substrate_item["classes"]
+        ):
+            good_layers += 1
+
+    score = round(
+        100
+        * (valid / total)
+        * (crosspoint["within_tolerance"] / crosspoint["count"])
+        * (good_layers / len(terrain)),
+        6,
+    )
+    if score == 0:
+        score = 0.0
+
+    return {
+        "crosspoint": summary["crosspoint"],
+        "terrain": summary["terrain"],
+        "substrate": summary["substrate"],
+        "overall": summary["overall"],
+        "score": score,
     }
 
 
