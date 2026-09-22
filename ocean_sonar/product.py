@@ -18,13 +18,14 @@ from . import crosspoint, grid, quality, report, substrate, terrain
 from .report import (
     _check_crosspoint,
     _COUNT_KEYS,
+    _CROSSPOINT_KEYS,
     _from_jsonable,
     _overall_verdict,
     _reject_json_constant,
     _to_jsonable,
 )
 
-__all__ = ["build", "serialize", "load"]
+__all__ = ["build", "serialize", "render", "load"]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
 _LAYER_KEYS = (
@@ -477,6 +478,92 @@ def serialize(product):
         raise ValueError(
             f"product: could not be serialized to JSON: {exc}"
         ) from exc
+
+
+def _format_scalar(value):
+    if value is None:
+        return "None"
+    if isinstance(value, float):
+        return format(value, ".6f")
+    return str(value)
+
+
+def render(product):
+    """Render a :func:`build` result dict as a plain-text report.
+
+    ``product`` is first validated with :func:`serialize`, so it must
+    satisfy that function's full contract; every validation exception
+    is propagated unchanged and the input is not modified.
+
+    On success returns a ``str`` of ``"\\n"``-joined lines with no
+    trailing newline: an ``OVERALL=<overall>`` line; a
+    ``CROSSPOINT=`` line with ``count, bias, rmse, max_abs,
+    within_tolerance, quality`` as semicolon-joined ``key=value``
+    fields; then, per layer in index order, five lines:
+    ``LAYER[i]=resolution=<r>;nx=<nx>;ny=<ny>``; ``CELLS[i]=`` with
+    the layer's ``(count, mean)`` cells in their y-then-x tuple order,
+    the two values of each cell joined by a comma and the cells joined
+    by ``|`` (an empty mean renders as ``None``); ``ANALYSIS[i]=`` with
+    the ``(slope, roughness)`` pairs in the same layout (a missing
+    slope or roughness renders as ``None``); ``QUALITY[i]=`` with the
+    fields ``resolution, total, valid, coverage, slope_exceed,
+    roughness_exceed``; and ``SUBSTRATE[i]=`` with the fields
+    ``resolution, nx, ny, classes, counts``. ``classes`` is the class
+    names joined by commas with no spaces; ``counts`` lists
+    ``unknown, mud, sand, gravel, rock`` in that order joined by
+    commas. Floats are formatted with ``format(v, ".6f")``, ints in
+    decimal and ``None`` as ``"None"``.
+    """
+    serialize(product)
+
+    lines = [f"OVERALL={product['overall']}"]
+
+    crosspoint = product["crosspoint"]
+    cp_fields = ";".join(
+        f"{key}={_format_scalar(crosspoint[key])}" for key in _CROSSPOINT_KEYS
+    )
+    lines.append(f"CROSSPOINT={cp_fields}")
+
+    for i, layer in enumerate(product["layers"]):
+        lines.append(
+            f"LAYER[{i}]=resolution={format(layer['resolution'], '.6f')}"
+            f";nx={layer['nx']};ny={layer['ny']}"
+        )
+
+        cell_fields = "|".join(
+            f"{count},{_format_scalar(mean)}"
+            for count, mean in layer["cells"]
+        )
+        lines.append(f"CELLS[{i}]={cell_fields}")
+
+        analysis_fields = "|".join(
+            f"{_format_scalar(slope)},{_format_scalar(roughness)}"
+            for slope, roughness in layer["analysis"]
+        )
+        lines.append(f"ANALYSIS[{i}]={analysis_fields}")
+
+        quality = layer["quality"]
+        quality_fields = ";".join(
+            f"{key}={_format_scalar(quality[key])}" for key in _QUALITY_KEYS
+        )
+        lines.append(f"QUALITY[{i}]={quality_fields}")
+
+        substrate = layer["substrate"]
+        substrate_fields = ";".join(
+            (
+                f"resolution={format(substrate['resolution'], '.6f')}",
+                f"nx={substrate['nx']}",
+                f"ny={substrate['ny']}",
+                f"classes={','.join(substrate['classes'])}",
+                "counts="
+                + ",".join(
+                    str(substrate["counts"][name]) for name in _COUNT_KEYS
+                ),
+            )
+        )
+        lines.append(f"SUBSTRATE[{i}]={substrate_fields}")
+
+    return "\n".join(lines)
 
 
 def load(path):
