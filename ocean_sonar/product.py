@@ -25,7 +25,7 @@ from .report import (
     _to_jsonable,
 )
 
-__all__ = ["build", "serialize", "render", "metrics", "load"]
+__all__ = ["build", "serialize", "render", "write", "metrics", "load"]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
 _LAYER_KEYS = (
@@ -488,7 +488,7 @@ def _format_scalar(value):
     return str(value)
 
 
-def render(product):
+def render(product) -> str:
     """Render a :func:`build` result dict as a plain-text report.
 
     ``product`` is first validated with :func:`serialize`, so it must
@@ -564,6 +564,43 @@ def render(product):
         lines.append(f"SUBSTRATE[{i}]={substrate_fields}")
 
     return "\n".join(lines)
+
+
+def write(product, path) -> bytes:
+    """Serialize a :func:`build` result and overwrite ``path`` with it.
+
+    The bytes written are exactly those returned by :func:`serialize`
+    (compact UTF-8 JSON, key order preserved, no trailing newline);
+    ``product`` must therefore satisfy the full :func:`serialize`
+    contract and is not modified.
+
+    Validation order, stopping at the first error: ``product`` is
+    serialized first — :func:`serialize` is called once and its
+    ``TypeError``/``ValueError`` exceptions are propagated unchanged —
+    and only then is ``path`` validated: a non-str ``path`` raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``. Because
+    serialization happens before the file is touched, a serialization
+    failure never creates or modifies ``path``.
+
+    On success the bytes are written by overwriting ``path`` opened in
+    binary mode (``"wb"``), with no added newline. A missing parent
+    directory raises ``FileNotFoundError``, an existing directory at
+    ``path`` raises ``IsADirectoryError`` and every other ``OSError``
+    is propagated unchanged.
+
+    Returns the JSON document as ``bytes``.
+    """
+    data = serialize(product)
+
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "wb") as handle:
+        handle.write(data)
+
+    return data
 
 
 def metrics(product):
