@@ -13,8 +13,9 @@ numeric score to the combined summary. :func:`dashboard` combines
 and adds a per-tolerance quality tuple; :func:`dashboard_summary` wraps
 :func:`dashboard` with a compact scoring summary,
 :func:`serialize_dashboard_summary` computes that summary once and
-encodes it as UTF-8 JSON bytes, and :func:`load_dashboard_summary`
-reads such a JSON document back from a file.
+encodes it as UTF-8 JSON bytes, :func:`load_dashboard_summary`
+reads such a JSON document back from a file, and
+:func:`render_dashboard_summary` renders the summary as plain text.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ __all__ = [
     "serialize",
     "serialize_summary",
     "render",
+    "render_dashboard_summary",
     "write",
     "load",
     "load_dashboard_summary",
@@ -722,6 +724,63 @@ def _check_dashboard_summary(summary):
             prefix + "quality_score must equal round(100 * (pass_count / "
             "tolerance_count) * (terrain_valid / terrain_total), 6)"
         )
+
+
+def _format_dashboard_value(value):
+    if type(value) is float:
+        return format(0.0 if value == 0 else value, ".6f")
+    if value is None:
+        return "None"
+    return str(value)
+
+
+def render_dashboard_summary(summary) -> str:
+    """Render a :func:`dashboard_summary` ``summary`` dict as plain text.
+
+    ``summary`` must be the ``"summary"`` dict returned by
+    :func:`dashboard_summary` (or one accepted by
+    :func:`load_dashboard_summary`), with keys exactly in the order
+    ``tolerance_count, pass_count, fail_count, first_pass_index,
+    terrain_total, terrain_valid, terrain_coverage, quality_score``.
+    It is validated with the same checks as
+    :func:`load_dashboard_summary`: a non-dict container, wrong key
+    order or a field of the wrong type raises ``TypeError``; writing
+    ``m`` for ``tolerance_count``, ``p`` for ``pass_count``, ``n`` for
+    ``terrain_total`` and ``v`` for ``terrain_valid``, any violation of
+    ``m > 0``, ``0 <= p <= m``, ``fail_count == m - p``, ``n > 0``,
+    ``0 <= v <= n``, ``first_pass_index`` in ``[0, m)``,
+    ``terrain_coverage == round(v / n, 6)`` or ``quality_score ==
+    round(100 * (p / m) * (v / n), 6)`` raises ``ValueError``. The
+    input is not modified.
+
+    On success returns a ``str`` of three ``"\\n"``-joined lines with
+    no trailing newline: a ``TOLERANCE=`` line with the first four
+    fields (``tolerance_count, pass_count, fail_count,
+    first_pass_index``) as semicolon-joined ``key=value`` fields; a
+    ``TERRAIN=`` line with the next three fields (``terrain_total,
+    terrain_valid, terrain_coverage``) in the same form; and a
+    ``QUALITY_SCORE=<quality_score>`` line. Ints render in decimal,
+    ``None`` renders as ``None`` and floats with
+    ``format(v, ".6f")``; negative zero renders as ``0.000000``.
+    """
+    _check_dashboard_summary(summary)
+
+    tolerance_fields = ";".join(
+        f"{key}={_format_dashboard_value(summary[key])}"
+        for key in _DASHBOARD_SUMMARY_KEYS[:4]
+    )
+    terrain_fields = ";".join(
+        f"{key}={_format_dashboard_value(summary[key])}"
+        for key in _DASHBOARD_SUMMARY_KEYS[4:7]
+    )
+
+    return "\n".join(
+        [
+            f"TOLERANCE={tolerance_fields}",
+            f"TERRAIN={terrain_fields}",
+            f"QUALITY_SCORE={_format_dashboard_value(summary['quality_score'])}",
+        ]
+    )
 
 
 def _to_jsonable(value):
