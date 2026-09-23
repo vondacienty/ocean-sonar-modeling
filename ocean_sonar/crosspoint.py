@@ -12,7 +12,15 @@ import math
 
 from .svp import _is_real_number
 
-__all__ = ["evaluate", "report", "pair", "audit", "profile", "aggregate"]
+__all__ = [
+    "evaluate",
+    "report",
+    "pair",
+    "audit",
+    "profile",
+    "aggregate",
+    "dashboard",
+]
 
 _FIELDS = ("x", "y", "d1", "d2")
 _POINT_FIELDS = ("x", "y", "d")
@@ -347,6 +355,129 @@ def aggregate(crossings, tolerances):
         result["best_tolerance"] = 0.0 if best_tolerance == 0 else best_tolerance
     result["quality"] = "pass" if pass_count == m else "fail"
     return result
+
+
+def dashboard(crossings, tolerances):
+    """Bundle :func:`audit` reports with a profile and an aggregate.
+
+    Calls :func:`audit` exactly once with ``crossings`` and
+    ``tolerances``, so its validation, first-error order, exceptions
+    (propagated unchanged) and index prefixes all apply here as well.
+    Inputs are not modified; neither :func:`profile` nor
+    :func:`aggregate` is called (their values are reproduced from the
+    single audit result).
+
+    Returns a tuple ``(reports, profile, aggregate, quality)`` where
+    ``reports`` is the tuple ``R`` returned by :func:`audit`;
+    ``profile`` is a dict with keys in the order
+    ``curve, monotonic, first_pass_tolerance, area`` holding the same
+    values as :func:`profile` (including the ``(tolerances[i], i)``
+    ordering, the trapezoidal area formula, six-decimal rounding and
+    negative-zero normalization); ``aggregate`` is a dict with keys in
+    the order
+    ``count, pass_count, fail_count, mean_bias, max_rmse, mean_ratio,
+    best_tolerance, quality`` holding the same values as
+    :func:`aggregate` (including :func:`math.fsum` summation and the
+    smallest-passing ``best_tolerance`` rule). The final ``quality``
+    is ``"pass"`` only when the aggregate quality is ``"pass"``, the
+    profile is monotonic and ``first_pass_tolerance`` is not ``None``,
+    and ``"fail"`` otherwise.
+    """
+    reports = audit(crossings, tolerances)
+    m = len(reports)
+
+    ordered = sorted(
+        ((tolerances[i], i, item) for i, item in enumerate(reports)),
+        key=lambda entry: (entry[0], entry[1]),
+    )
+
+    curve_items = []
+    counts = []
+    first_pass_tolerance = None
+    for tolerance, _index, item in ordered:
+        rounded_tolerance = round(float(tolerance), 6)
+        if rounded_tolerance == 0:
+            rounded_tolerance = 0.0
+        curve_items.append(
+            {
+                "tolerance": rounded_tolerance,
+                "within_tolerance": item["within_tolerance"],
+                "within_ratio": item["within_ratio"],
+                "bias": item["bias"],
+                "rmse": item["rmse"],
+                "quality": item["quality"],
+            }
+        )
+        counts.append(item["within_tolerance"])
+        if first_pass_tolerance is None and item["quality"] == "pass":
+            first_pass_tolerance = rounded_tolerance
+
+    monotonic = all(b >= a for a, b in zip(counts, counts[1:]))
+
+    if m < 2:
+        area = 0.0
+    else:
+        area = round(
+            float(
+                math.fsum(
+                    (ordered[i][0] - ordered[i - 1][0])
+                    * (ordered[i][2]["within_ratio"] + ordered[i - 1][2]["within_ratio"])
+                    / 2
+                    for i in range(1, m)
+                )
+            ),
+            6,
+        )
+        if area == 0:
+            area = 0.0
+
+    profiled = {
+        "curve": tuple(curve_items),
+        "monotonic": monotonic,
+        "first_pass_tolerance": first_pass_tolerance,
+        "area": area,
+    }
+
+    count = sum(x["count"] for x in reports)
+    pass_count = sum(x["quality"] == "pass" for x in reports)
+    fail_count = m - pass_count
+    mean_bias = math.fsum(x["bias"] for x in reports) / m
+    max_rmse = max(x["rmse"] for x in reports)
+    mean_ratio = math.fsum(x["within_ratio"] for x in reports) / m
+
+    passed = [t for t, x in zip(tolerances, reports) if x["quality"] == "pass"]
+    best_tolerance = min(passed) if passed else None
+
+    aggregated = {
+        "count": int(count),
+        "pass_count": int(pass_count),
+        "fail_count": int(fail_count),
+    }
+    for name, value in (
+        ("mean_bias", mean_bias),
+        ("max_rmse", max_rmse),
+        ("mean_ratio", mean_ratio),
+    ):
+        value = round(float(value), 6)
+        aggregated[name] = 0.0 if value == 0 else value
+    if best_tolerance is None:
+        aggregated["best_tolerance"] = None
+    else:
+        best_tolerance = round(float(best_tolerance), 6)
+        aggregated["best_tolerance"] = 0.0 if best_tolerance == 0 else best_tolerance
+    aggregate_quality = "pass" if pass_count == m else "fail"
+    aggregated["quality"] = aggregate_quality
+
+    if (
+        aggregate_quality == "pass"
+        and monotonic is True
+        and first_pass_tolerance is not None
+    ):
+        overall_quality = "pass"
+    else:
+        overall_quality = "fail"
+
+    return (reports, profiled, aggregated, overall_quality)
 
 
 def pair(first, second, tolerance=1.0):
