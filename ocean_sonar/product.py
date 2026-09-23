@@ -221,7 +221,7 @@ def dashboard_summary(
     tolerances,
     slope_limit=5.0,
     roughness_limit=1.0,
-):
+) -> dict:
     """Build the gridded terrain product and the dashboard summary in one call.
 
     The stages run strictly in this order, exactly once each and with
