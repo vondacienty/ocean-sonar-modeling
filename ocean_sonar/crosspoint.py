@@ -12,7 +12,7 @@ import math
 
 from .svp import _is_real_number
 
-__all__ = ["evaluate", "pair"]
+__all__ = ["evaluate", "pair", "report"]
 
 _FIELDS = ("x", "y", "d1", "d2")
 _POINT_FIELDS = ("x", "y", "d")
@@ -97,6 +97,56 @@ def evaluate(crossings, tolerance=0.5):
     result["within_tolerance"] = int(within_tolerance)
     result["quality"] = "pass" if within_tolerance == n else "fail"
     return result
+
+
+def report(crossings, tolerance=0.5):
+    """Build a crosspoint report extending :func:`evaluate` with ratios.
+
+    Calls :func:`evaluate` exactly once with ``crossings`` and
+    ``tolerance``, so its validation, exceptions (propagated
+    unchanged) and ``"crossings[i]: "`` index prefixes/order all apply
+    here as well. Inputs are not modified.
+
+    With ``r = d1 - d2`` and ``n`` the number of crosspoints, the
+    population standard deviation is
+    ``sigma = sqrt(fsum((r - mu)**2) / n)`` where
+    ``mu = fsum(r) / n``, and the within-tolerance ratio is
+    ``within_tolerance / n``; both use unrounded values.
+
+    Returns a dict with keys in the order
+    ``count, bias, rmse, max_abs, within_tolerance, within_ratio,
+    stdev, quality``. The first five keys and ``quality`` are taken
+    from the :func:`evaluate` result unchanged (``count`` and
+    ``within_tolerance`` ints, the statistics rounded floats).
+    ``within_ratio`` is ``round(float(ratio), 6)`` and ``stdev`` is
+    ``round(float(sigma), 6)``, both floats with negative zero
+    normalized to ``0.0``; ``ratio`` lies in ``[0, 1]``.
+    """
+    evaluated = evaluate(crossings, tolerance)
+
+    differences = [d1 - d2 for x, y, d1, d2 in crossings]
+    n = len(differences)
+    mean = math.fsum(differences) / n
+    stdev = math.sqrt(math.fsum((r - mean) ** 2 for r in differences) / n)
+    ratio = evaluated["within_tolerance"] / n
+
+    stdev = round(float(stdev), 6)
+    ratio = round(float(ratio), 6)
+    if stdev == 0:
+        stdev = 0.0
+    if ratio == 0:
+        ratio = 0.0
+
+    return {
+        "count": evaluated["count"],
+        "bias": evaluated["bias"],
+        "rmse": evaluated["rmse"],
+        "max_abs": evaluated["max_abs"],
+        "within_tolerance": evaluated["within_tolerance"],
+        "within_ratio": ratio,
+        "stdev": stdev,
+        "quality": evaluated["quality"],
+    }
 
 
 def pair(first, second, tolerance=1.0):
