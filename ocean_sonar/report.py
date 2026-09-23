@@ -11,7 +11,9 @@ all three of ``evaluate``/``assess``/``classify`` itself and adds a
 numeric score to the combined summary. :func:`dashboard` combines
 :func:`ocean_sonar.crosspoint.dashboard` with ``assess``/``classify``
 and adds a per-tolerance quality tuple; :func:`dashboard_summary` wraps
-:func:`dashboard` with a compact scoring summary.
+:func:`dashboard` with a compact scoring summary, and
+:func:`serialize_dashboard_summary` computes that summary once and
+encodes it as UTF-8 JSON bytes.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ __all__ = [
     "generate_full",
     "dashboard",
     "dashboard_summary",
+    "serialize_dashboard_summary",
     "summarize",
     "serialize",
     "serialize_summary",
@@ -566,6 +569,57 @@ def dashboard_summary(
             "quality_score": quality_score,
         },
     }
+
+
+def serialize_dashboard_summary(
+    crossings, tolerances, layers, slope_limit=5.0, roughness_limit=1.0
+) -> bytes:
+    """Compute the dashboard summary once and encode it as UTF-8 JSON bytes.
+
+    Calls :func:`dashboard_summary` exactly once with the given
+    arguments, so its validation order, first-error order, exception
+    messages and index prefixes all apply unchanged; every exception
+    from that call is propagated unchanged and the inputs are neither
+    modified nor reordered. Only the ``"summary"`` dict of the returned
+    value is encoded (the ``"dashboard"`` entry is not).
+
+    The encoded object has keys exactly in the order
+    ``tolerance_count, pass_count, fail_count, first_pass_index,
+    terrain_total, terrain_valid, terrain_coverage, quality_score``:
+    the first five count fields are non-bool ints — ``m`` tolerance
+    count, ``p`` pass count, ``m - p`` fail count, and ``n`` and ``v``
+    the respective sums of the terrain ``total`` and ``valid`` values
+    —, ``first_pass_index`` is a non-bool int or ``None`` when no
+    quality entry is ``"pass"``, ``terrain_coverage`` is
+    ``round(v / n, 6)`` and ``quality_score`` is
+    ``round(100 * (p / m) * (v / n), 6)``, both non-bool floats with
+    negative zero normalized to ``0.0``. All values, types, rounding
+    and key order are exactly those produced by
+    :func:`dashboard_summary`.
+
+    The summary is encoded as UTF-8 JSON with ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation and
+    no trailing newline. Any JSON or UTF-8 encoding failure raises
+    ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    result = dashboard_summary(
+        crossings, tolerances, layers, slope_limit, roughness_limit
+    )
+
+    try:
+        text = json.dumps(
+            result["summary"],
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"dashboard summary: could not be serialized to JSON: {exc}"
+        ) from exc
 
 
 def _to_jsonable(value):
