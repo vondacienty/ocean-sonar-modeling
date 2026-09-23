@@ -11,9 +11,10 @@ all three of ``evaluate``/``assess``/``classify`` itself and adds a
 numeric score to the combined summary. :func:`dashboard` combines
 :func:`ocean_sonar.crosspoint.dashboard` with ``assess``/``classify``
 and adds a per-tolerance quality tuple; :func:`dashboard_summary` wraps
-:func:`dashboard` with a compact scoring summary, and
+:func:`dashboard` with a compact scoring summary,
 :func:`serialize_dashboard_summary` computes that summary once and
-encodes it as UTF-8 JSON bytes.
+encodes it as UTF-8 JSON bytes, and :func:`load_dashboard_summary`
+reads such a JSON document back from a file and validates it.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ __all__ = [
     "dashboard",
     "dashboard_summary",
     "serialize_dashboard_summary",
+    "load_dashboard_summary",
     "summarize",
     "serialize",
     "serialize_summary",
@@ -932,3 +934,190 @@ def load(path):
         )
 
     return summary
+
+
+_DASHBOARD_SUMMARY_KEYS = (
+    "tolerance_count",
+    "pass_count",
+    "fail_count",
+    "first_pass_index",
+    "terrain_total",
+    "terrain_valid",
+    "terrain_coverage",
+    "quality_score",
+)
+
+
+def load_dashboard_summary(path):
+    """Load a :func:`serialize_dashboard_summary` JSON document from ``path``.
+
+    ``path`` must be a non-empty ``str``: a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``. The file
+    is opened in binary mode (``"rb"``) and read in full; a missing
+    file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError`` and every other ``OSError`` is propagated
+    unchanged. The file is not modified.
+
+    The bytes must be exactly those produced by
+    :func:`serialize_dashboard_summary` for the same value: compact
+    UTF-8 JSON with no BOM and no trailing newline. A BOM, a trailing
+    newline, a UTF-8 decoding failure, a JSON parsing failure or a
+    ``NaN``/``Infinity`` constant raises ``ValueError``.
+
+    The decoded value must be an object with keys exactly in the order
+    ``tolerance_count, pass_count, fail_count, first_pass_index,
+    terrain_total, terrain_valid, terrain_coverage, quality_score``.
+    With ``m``, ``p``, ``n`` and ``v`` denoting ``tolerance_count``,
+    ``pass_count``, ``terrain_total`` and ``terrain_valid``: the five
+    count fields are non-bool ints with ``m > 0``, ``0 <= p <= m``,
+    ``fail_count == m - p``, ``n > 0`` and ``0 <= v <= n``;
+    ``first_pass_index`` is ``None`` or a non-bool int in ``[0, m)``;
+    ``terrain_coverage`` and ``quality_score`` are finite non-bool
+    floats equal to ``round(v / n, 6)`` and
+    ``round(100 * (p / m) * (v / n), 6)`` respectively, with negative
+    zero normalized to ``0.0``. The file bytes must also equal the
+    canonical re-serialization of the decoded value byte for byte; any
+    key-order, type, range, relation, parsing or normalization-byte
+    mismatch raises ``ValueError``.
+
+    Returns the summary as a dict with keys in the order
+    ``tolerance_count, pass_count, fail_count, first_pass_index,
+    terrain_total, terrain_valid, terrain_coverage, quality_score``.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(text, parse_constant=_reject_json_constant)
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    if not isinstance(parsed, dict):
+        raise ValueError("dashboard summary must be a JSON object")
+    if list(parsed.keys()) != list(_DASHBOARD_SUMMARY_KEYS):
+        raise ValueError(
+            "dashboard summary keys must be in the order "
+            "tolerance_count, pass_count, fail_count, first_pass_index, "
+            "terrain_total, terrain_valid, terrain_coverage, quality_score"
+        )
+
+    m = parsed["tolerance_count"]
+    p = parsed["pass_count"]
+    f = parsed["fail_count"]
+    first_pass_index = parsed["first_pass_index"]
+    n = parsed["terrain_total"]
+    v = parsed["terrain_valid"]
+    terrain_coverage = parsed["terrain_coverage"]
+    quality_score = parsed["quality_score"]
+
+    for name, value in (
+        ("tolerance_count", m),
+        ("pass_count", p),
+        ("fail_count", f),
+        ("terrain_total", n),
+        ("terrain_valid", v),
+    ):
+        if type(value) is not int:
+            raise ValueError(f"dashboard summary: {name} must be a non-bool int")
+
+    if not m > 0:
+        raise ValueError("dashboard summary: tolerance_count must be > 0")
+    if not 0 <= p <= m:
+        raise ValueError(
+            "dashboard summary: pass_count must be in [0, tolerance_count]"
+        )
+    if f != m - p:
+        raise ValueError(
+            "dashboard summary: fail_count must equal "
+            "tolerance_count - pass_count"
+        )
+    if first_pass_index is not None:
+        if type(first_pass_index) is not int:
+            raise ValueError(
+                "dashboard summary: first_pass_index must be None or a "
+                "non-bool int"
+            )
+        if not 0 <= first_pass_index < m:
+            raise ValueError(
+                "dashboard summary: first_pass_index must be in "
+                "[0, tolerance_count)"
+            )
+    if not n > 0:
+        raise ValueError("dashboard summary: terrain_total must be > 0")
+    if not 0 <= v <= n:
+        raise ValueError(
+            "dashboard summary: terrain_valid must be in [0, terrain_total]"
+        )
+
+    expected_coverage = round(v / n, 6)
+    if expected_coverage == 0:
+        expected_coverage = 0.0
+    if type(terrain_coverage) is not float:
+        raise ValueError("dashboard summary: terrain_coverage must be a float")
+    if not math.isfinite(terrain_coverage):
+        raise ValueError("dashboard summary: terrain_coverage must be finite")
+    if terrain_coverage != expected_coverage:
+        raise ValueError(
+            "dashboard summary: terrain_coverage must equal "
+            "round(terrain_valid / terrain_total, 6)"
+        )
+
+    expected_score = round(100 * (p / m) * (v / n), 6)
+    if expected_score == 0:
+        expected_score = 0.0
+    if type(quality_score) is not float:
+        raise ValueError("dashboard summary: quality_score must be a float")
+    if not math.isfinite(quality_score):
+        raise ValueError("dashboard summary: quality_score must be finite")
+    if quality_score != expected_score:
+        raise ValueError(
+            "dashboard summary: quality_score must equal "
+            "round(100 * (pass_count / tolerance_count) * "
+            "(terrain_valid / terrain_total), 6)"
+        )
+
+    canonical_doc = {
+        "tolerance_count": m,
+        "pass_count": p,
+        "fail_count": f,
+        "first_pass_index": first_pass_index,
+        "terrain_total": n,
+        "terrain_valid": v,
+        "terrain_coverage": expected_coverage,
+        "quality_score": expected_score,
+    }
+    try:
+        canonical_text = json.dumps(
+            canonical_doc,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        canonical = canonical_text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"dashboard summary: could not be serialized to JSON: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical "
+            "serialize_dashboard_summary output"
+        )
+
+    return parsed
