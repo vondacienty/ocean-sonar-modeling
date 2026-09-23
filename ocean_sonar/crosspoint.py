@@ -12,10 +12,35 @@ import math
 
 from .svp import _is_real_number
 
-__all__ = ["evaluate", "pair", "report"]
+__all__ = ["evaluate", "report", "pair", "audit"]
 
 _FIELDS = ("x", "y", "d1", "d2")
 _POINT_FIELDS = ("x", "y", "d")
+
+
+def _validate_crossings(crossings):
+    """Validate ``crossings`` exactly as :func:`evaluate` does."""
+    if not isinstance(crossings, (list, tuple)):
+        raise TypeError("crossings must be a list or tuple")
+    if len(crossings) == 0:
+        raise ValueError("crossings must be non-empty")
+
+    for i in range(len(crossings)):
+        point = crossings[i]
+        prefix = f"crossings[{i}]: "
+        if not isinstance(point, (list, tuple)):
+            raise TypeError(prefix + "must be a list or tuple")
+        if len(point) != 4:
+            raise ValueError(prefix + "must have 4 elements")
+        for name, value in zip(_FIELDS, point):
+            if not _is_real_number(value):
+                raise TypeError(prefix + f"{name} must be a non-bool int or float")
+            if not math.isfinite(value):
+                raise ValueError(prefix + f"{name} must be finite")
+        if not point[2] >= 0:
+            raise ValueError(prefix + "d1 must be >= 0")
+        if not point[3] >= 0:
+            raise ValueError(prefix + "d2 must be >= 0")
 
 
 def evaluate(crossings, tolerance=0.5):
@@ -43,27 +68,7 @@ def evaluate(crossings, tolerance=0.5):
     ``0.0``). ``quality`` is ``"pass"`` when every crosspoint is within
     the tolerance and ``"fail"`` otherwise. Inputs are not modified.
     """
-    if not isinstance(crossings, (list, tuple)):
-        raise TypeError("crossings must be a list or tuple")
-    if len(crossings) == 0:
-        raise ValueError("crossings must be non-empty")
-
-    for i in range(len(crossings)):
-        point = crossings[i]
-        prefix = f"crossings[{i}]: "
-        if not isinstance(point, (list, tuple)):
-            raise TypeError(prefix + "must be a list or tuple")
-        if len(point) != 4:
-            raise ValueError(prefix + "must have 4 elements")
-        for name, value in zip(_FIELDS, point):
-            if not _is_real_number(value):
-                raise TypeError(prefix + f"{name} must be a non-bool int or float")
-            if not math.isfinite(value):
-                raise ValueError(prefix + f"{name} must be finite")
-        if not point[2] >= 0:
-            raise ValueError(prefix + "d1 must be >= 0")
-        if not point[3] >= 0:
-            raise ValueError(prefix + "d2 must be >= 0")
+    _validate_crossings(crossings)
 
     if not _is_real_number(tolerance):
         raise TypeError("tolerance must be a non-bool int or float")
@@ -147,6 +152,50 @@ def report(crossings, tolerance=0.5):
         "stdev": stdev,
         "quality": evaluated["quality"],
     }
+
+
+def audit(crossings, tolerances):
+    """Run :func:`report` for several tolerances.
+
+    ``crossings`` is validated with the full ``crossings`` contract of
+    :func:`evaluate` (container, non-emptiness and every item);
+    ``tolerances`` must then be a non-empty list/tuple whose items,
+    checked in input order, are finite non-bool int/float values
+    ``> 0``.
+
+    Validation order (first error wins): the complete ``crossings``
+    validation, then the ``tolerances`` container, its non-emptiness,
+    then each tolerance in index order (type, finiteness, positivity).
+    Item errors are prefixed with ``"tolerances[i]: "``.
+
+    :func:`report` is called exactly once per tolerance, in input
+    order, with no sorting, deduplication or mutation of the inputs;
+    any exception it raises is propagated unchanged.
+
+    Returns a tuple with the same length as ``tolerances`` whose items
+    are the corresponding :func:`report` dicts, each with keys in the
+    fixed order
+    ``count, bias, rmse, max_abs, within_tolerance, within_ratio,
+    stdev, quality`` and :func:`report`'s six-decimal rounding and
+    negative-zero rules.
+    """
+    _validate_crossings(crossings)
+
+    if not isinstance(tolerances, (list, tuple)):
+        raise TypeError("tolerances must be a list or tuple")
+    if len(tolerances) == 0:
+        raise ValueError("tolerances must be non-empty")
+    for i in range(len(tolerances)):
+        tolerance = tolerances[i]
+        prefix = f"tolerances[{i}]: "
+        if not _is_real_number(tolerance):
+            raise TypeError(prefix + "must be a non-bool int or float")
+        if not math.isfinite(tolerance):
+            raise ValueError(prefix + "must be finite")
+        if not tolerance > 0:
+            raise ValueError(prefix + "must be > 0")
+
+    return tuple(report(crossings, tolerance) for tolerance in tolerances)
 
 
 def pair(first, second, tolerance=1.0):
