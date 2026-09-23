@@ -16,7 +16,8 @@ and adds a per-tolerance quality tuple; :func:`dashboard_summary` wraps
 encodes it as UTF-8 JSON bytes, :func:`render_dashboard_summary`
 renders the summary as plain text,
 :func:`aggregate_dashboard_summaries` aggregates multiple such
-summaries into one batch summary, and :func:`load_dashboard_summary`
+summaries into one batch summary, :func:`serialize_batch` encodes that
+batch summary as UTF-8 JSON bytes, and :func:`load_dashboard_summary`
 reads such a JSON document back from a file.
 """
 
@@ -42,6 +43,7 @@ __all__ = [
     "render",
     "render_dashboard_summary",
     "aggregate_dashboard_summaries",
+    "serialize_batch",
     "write",
     "load",
     "load_dashboard_summary",
@@ -874,6 +876,43 @@ def aggregate_dashboard_summaries(summaries) -> dict:
         "terrain_coverage": terrain_coverage,
         "quality_score": quality_score,
     }
+
+
+def serialize_batch(summaries) -> bytes:
+    """Aggregate dashboard summaries and encode the batch as UTF-8 JSON bytes.
+
+    Calls :func:`aggregate_dashboard_summaries` exactly once with
+    ``summaries``, so its validation, first-error order, exception
+    messages and index prefixes all apply unchanged; every exception
+    from that call (``TypeError``/``ValueError``) is propagated
+    unchanged and the input is not modified.
+
+    The returned dict, with keys exactly in the order
+    ``batch_count, tolerance_count, pass_count, fail_count,
+    first_pass_summary, terrain_total, terrain_valid,
+    terrain_coverage, quality_score``, is encoded as UTF-8 JSON with
+    ``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``, no indentation and no trailing newline.
+    Floats are first rounded with ``round(float(v), 6)`` and negative
+    zero is normalized to ``0.0``; key order and ``None`` values are
+    preserved. Any JSON or UTF-8 encoding failure raises
+    ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    batch = aggregate_dashboard_summaries(summaries)
+    try:
+        text = json.dumps(
+            _to_jsonable(batch),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"batch summary: could not be serialized to JSON: {exc}"
+        ) from exc
 
 
 def _to_jsonable(value):
