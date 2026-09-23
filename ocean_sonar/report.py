@@ -10,7 +10,8 @@ results together with a ``classify`` result. :func:`generate_full` runs
 all three of ``evaluate``/``assess``/``classify`` itself and adds a
 numeric score to the combined summary. :func:`dashboard` combines
 :func:`ocean_sonar.crosspoint.dashboard` with ``assess``/``classify``
-and adds a per-tolerance quality tuple.
+and adds a per-tolerance quality tuple; :func:`dashboard_summary` wraps
+:func:`dashboard` with a compact scoring summary.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ __all__ = [
     "generate",
     "generate_full",
     "dashboard",
+    "dashboard_summary",
     "summarize",
     "serialize",
     "serialize_summary",
@@ -479,6 +481,90 @@ def dashboard(crossings, tolerances, layers, slope_limit=5.0, roughness_limit=1.
         "terrain": terrain,
         "substrate": substrate,
         "quality": quality,
+    }
+
+
+def dashboard_summary(
+    crossings, tolerances, layers, slope_limit=5.0, roughness_limit=1.0
+):
+    """Return the :func:`dashboard` result together with a compact summary.
+
+    Calls :func:`dashboard` exactly once with the given arguments (so
+    its validation, first-error order, exception messages and index
+    prefixes all apply unchanged) and propagates every exception
+    unchanged; inputs are not modified.
+
+    Returns a dict with keys in the order ``dashboard, summary``;
+    ``dashboard`` is the dict returned by :func:`dashboard` (the same
+    object, identity preserved). With ``Q`` the dashboard ``quality``
+    tuple and ``T`` the dashboard ``terrain`` tuple, ``summary`` is a
+    dict with keys in the order ``tolerance_count, pass_count,
+    fail_count, first_pass_index, terrain_total, terrain_valid,
+    terrain_coverage, quality_score``:
+
+    - ``tolerance_count`` is ``len(Q)``;
+    - ``pass_count`` is the number of ``"pass"`` entries in ``Q``;
+    - ``fail_count`` is ``tolerance_count`` minus ``pass_count``;
+    - ``first_pass_index`` is the index of the first ``"pass"`` entry
+      in ``Q``, or ``None`` if there is none;
+    - ``terrain_total`` is the sum of ``T[i]["total"]``;
+    - ``terrain_valid`` is the sum of ``T[i]["valid"]``;
+    - ``terrain_coverage`` is ``round(terrain_valid / terrain_total,
+      6)``;
+    - ``quality_score`` is
+      ``round(100 * (pass_count / tolerance_count) *
+      (terrain_valid / terrain_total), 6)``.
+
+    Counts and indices are non-bool ints (the index may also be
+    ``None``); both ratios are non-bool floats with negative zero
+    normalized to ``0.0``.
+    """
+    dashboard_result = dashboard(
+        crossings, tolerances, layers, slope_limit, roughness_limit
+    )
+
+    quality = dashboard_result["quality"]
+    terrain = dashboard_result["terrain"]
+
+    tolerance_count = len(quality)
+    pass_count = 0
+    first_pass_index = None
+    for i, verdict in enumerate(quality):
+        if verdict == "pass":
+            pass_count += 1
+            if first_pass_index is None:
+                first_pass_index = i
+    fail_count = tolerance_count - pass_count
+
+    terrain_total = 0
+    terrain_valid = 0
+    for item in terrain:
+        terrain_total += item["total"]
+        terrain_valid += item["valid"]
+
+    terrain_coverage = round(terrain_valid / terrain_total, 6)
+    if terrain_coverage == 0:
+        terrain_coverage = 0.0
+
+    quality_score = round(
+        100 * (pass_count / tolerance_count) * (terrain_valid / terrain_total),
+        6,
+    )
+    if quality_score == 0:
+        quality_score = 0.0
+
+    return {
+        "dashboard": dashboard_result,
+        "summary": {
+            "tolerance_count": tolerance_count,
+            "pass_count": pass_count,
+            "fail_count": fail_count,
+            "first_pass_index": first_pass_index,
+            "terrain_total": terrain_total,
+            "terrain_valid": terrain_valid,
+            "terrain_coverage": terrain_coverage,
+            "quality_score": quality_score,
+        },
     }
 
 
