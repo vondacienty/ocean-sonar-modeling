@@ -13,8 +13,9 @@ numeric score to the combined summary. :func:`dashboard` combines
 and adds a per-tolerance quality tuple; :func:`dashboard_summary` wraps
 :func:`dashboard` with a compact scoring summary,
 :func:`serialize_dashboard_summary` computes that summary once and
-encodes it as UTF-8 JSON bytes, and :func:`load_dashboard_summary`
-reads such a JSON document back from a file.
+encodes it as UTF-8 JSON bytes, :func:`load_dashboard_summary`
+reads such a JSON document back from a file, and
+:func:`render_dashboard_summary` renders the summary as plain text.
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ __all__ = [
     "write",
     "load",
     "load_dashboard_summary",
+    "render_dashboard_summary",
 ]
 
 _CROSSPOINT_KEYS = (
@@ -1110,3 +1112,59 @@ def load_dashboard_summary(path) -> dict:
         )
 
     return summary
+
+
+def render_dashboard_summary(summary) -> str:
+    """Render a :func:`dashboard_summary` ``"summary"`` dict as plain text.
+
+    ``summary`` must be the dict in the ``"summary"`` entry of a
+    :func:`dashboard_summary` result (or one accepted by
+    :func:`load_dashboard_summary`), with keys exactly in the order
+    ``tolerance_count, pass_count, fail_count, first_pass_index,
+    terrain_total, terrain_valid, terrain_coverage, quality_score``.
+    Writing ``m`` for ``tolerance_count``, ``p`` for ``pass_count``,
+    ``n`` for ``terrain_total`` and ``v`` for ``terrain_valid``, the
+    five count fields (``tolerance_count``, ``pass_count``,
+    ``fail_count``, ``terrain_total`` and ``terrain_valid``) must be
+    non-bool ints with ``m > 0``, ``0 <= p <= m`` and
+    ``fail_count == m - p``, ``n > 0`` and ``0 <= v <= n``;
+    ``first_pass_index`` must be ``None`` or a non-bool int in
+    ``[0, m)``; ``terrain_coverage`` and ``quality_score`` must be
+    finite non-bool floats equal respectively to ``round(v / n, 6)``
+    and ``round(100 * (p / m) * (v / n), 6)``, with negative zero
+    normalized to ``0.0``. Container, key-order and field-type
+    mismatches raise ``TypeError``; range, finiteness and relation
+    errors raise ``ValueError``. The input is not modified.
+
+    On success returns a ``str`` of three ``"\\n"``-joined lines with
+    no trailing newline: a ``TOLERANCE=`` line with the
+    ``tolerance_count, pass_count, fail_count, first_pass_index``
+    fields as semicolon-joined ``key=value`` pairs; a ``TERRAIN=``
+    line with ``terrain_total, terrain_valid, terrain_coverage`` in
+    the same form; and a ``QUALITY_SCORE=<quality_score>`` line.
+    Ints are rendered in decimal, ``None`` as ``None`` and floats with
+    ``format(v, ".6f")``.
+    """
+    _check_dashboard_summary(summary)
+
+    tolerance_fields = ";".join(
+        f"{key}={_format_number(summary[key])}"
+        for key in (
+            "tolerance_count",
+            "pass_count",
+            "fail_count",
+            "first_pass_index",
+        )
+    )
+    terrain_fields = ";".join(
+        f"{key}={_format_number(summary[key])}"
+        for key in ("terrain_total", "terrain_valid", "terrain_coverage")
+    )
+
+    return "\n".join(
+        (
+            f"TOLERANCE={tolerance_fields}",
+            f"TERRAIN={terrain_fields}",
+            f"QUALITY_SCORE={format(summary['quality_score'], '.6f')}",
+        )
+    )
