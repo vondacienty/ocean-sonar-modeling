@@ -12,7 +12,15 @@ import math
 
 from .svp import _is_real_number
 
-__all__ = ["evaluate", "report", "pair", "audit", "profile", "aggregate"]
+__all__ = [
+    "evaluate",
+    "report",
+    "pair",
+    "audit",
+    "profile",
+    "aggregate",
+    "dashboard",
+]
 
 _FIELDS = ("x", "y", "d1", "d2")
 _POINT_FIELDS = ("x", "y", "d")
@@ -198,44 +206,8 @@ def audit(crossings, tolerances):
     return tuple(report(crossings, tolerance) for tolerance in tolerances)
 
 
-def profile(crossings, tolerances):
-    """Build a tolerance profile from :func:`audit` results.
-
-    Calls :func:`audit` exactly once with ``crossings`` and
-    ``tolerances``, so its validation, first-error order, exceptions
-    (propagated unchanged) and index prefixes all apply here as well.
-    Inputs are not modified.
-
-    With ``R`` the tuple returned by :func:`audit`, one item per input
-    tolerance, items are ordered ascending by
-    ``(tolerances[i], i)``; equal tolerances therefore keep their input
-    order. ``curve`` is a tuple of dicts, one per ordered item, each
-    with keys in the order
-    ``tolerance, within_tolerance, within_ratio, bias, rmse,
-    quality``; ``tolerance`` is ``round(float(tolerances[i]), 6)``
-    (negative zero normalized to ``0.0``) and the remaining fields are
-    copied unchanged from the corresponding ``R`` item.
-
-    ``monotonic`` is whether the ``within_tolerance`` counts are
-    non-decreasing along the curve (``True`` for a single item).
-    ``first_pass_tolerance`` is the rounded threshold of the first
-    curve item whose ``quality`` is ``"pass"``, or ``None`` when no
-    item passes.
-
-    With ``t_i`` the *unrounded* tolerance and ``q_i`` the
-    ``within_ratio`` of the item at ordered position ``i`` and
-    ``m = len(R)``, ``area`` is ``0.0`` for ``m < 2`` and otherwise the
-    trapezoidal integral
-    ``round(float(fsum((t_i - t_{i-1}) * (q_i + q_{i-1}) / 2
-    for i in range(1, m))), 6)`` with negative zero normalized to
-    ``0.0``.
-
-    Returns a dict with keys in the order
-    ``curve, monotonic, first_pass_tolerance, area``; their types are
-    tuple, bool, float or ``None`` and float.
-    """
-    reports = audit(crossings, tolerances)
-
+def _profile_from_reports(reports, tolerances):
+    """Compute the :func:`profile` result from an :func:`audit` tuple."""
     ordered = sorted(
         ((tolerances[i], i, item) for i, item in enumerate(reports)),
         key=lambda entry: (entry[0], entry[1]),
@@ -290,32 +262,48 @@ def profile(crossings, tolerances):
     }
 
 
-def aggregate(crossings, tolerances):
-    """Aggregate :func:`audit` results across tolerances.
+def profile(crossings, tolerances):
+    """Build a tolerance profile from :func:`audit` results.
 
     Calls :func:`audit` exactly once with ``crossings`` and
-    ``tolerances``, so its validation, exceptions (propagated
-    unchanged) and per-tolerance reports all apply here as well.
+    ``tolerances``, so its validation, first-error order, exceptions
+    (propagated unchanged) and index prefixes all apply here as well.
     Inputs are not modified.
 
-    With ``R`` the tuple returned by :func:`audit` and ``m = len(R)``,
-    the summary is ``count = sum(x["count"])``,
-    ``pass_count`` the number of reports with ``quality == "pass"``,
-    ``fail_count = m - pass_count``,
-    ``mean_bias = fsum(x["bias"]) / m``,
-    ``max_rmse = max(x["rmse"])`` and
-    ``mean_ratio = fsum(x["within_ratio"]) / m``. ``best_tolerance``
-    is the smallest tolerance whose report passed, or ``None`` when no
-    report passed; ``quality`` is ``"pass"`` only when every report
-    passed and ``"fail"`` otherwise.
+    With ``R`` the tuple returned by :func:`audit`, one item per input
+    tolerance, items are ordered ascending by
+    ``(tolerances[i], i)``; equal tolerances therefore keep their input
+    order. ``curve`` is a tuple of dicts, one per ordered item, each
+    with keys in the order
+    ``tolerance, within_tolerance, within_ratio, bias, rmse,
+    quality``; ``tolerance`` is ``round(float(tolerances[i]), 6)``
+    (negative zero normalized to ``0.0``) and the remaining fields are
+    copied unchanged from the corresponding ``R`` item.
+
+    ``monotonic`` is whether the ``within_tolerance`` counts are
+    non-decreasing along the curve (``True`` for a single item).
+    ``first_pass_tolerance`` is the rounded threshold of the first
+    curve item whose ``quality`` is ``"pass"``, or ``None`` when no
+    item passes.
+
+    With ``t_i`` the *unrounded* tolerance and ``q_i`` the
+    ``within_ratio`` of the item at ordered position ``i`` and
+    ``m = len(R)``, ``area`` is ``0.0`` for ``m < 2`` and otherwise the
+    trapezoidal integral
+    ``round(float(fsum((t_i - t_{i-1}) * (q_i + q_{i-1}) / 2
+    for i in range(1, m))), 6)`` with negative zero normalized to
+    ``0.0``.
 
     Returns a dict with keys in the order
-    ``count, pass_count, fail_count, mean_bias, max_rmse, mean_ratio,
-    best_tolerance, quality``; ``count``/``pass_count``/``fail_count``
-    are ints and the numeric statistics are floats rounded to 6
-    decimals (negative zero normalized to ``0.0``).
+    ``curve, monotonic, first_pass_tolerance, area``; their types are
+    tuple, bool, float or ``None`` and float.
     """
     reports = audit(crossings, tolerances)
+    return _profile_from_reports(reports, tolerances)
+
+
+def _aggregate_from_reports(reports, tolerances):
+    """Compute the :func:`aggregate` result from an :func:`audit` tuple."""
     m = len(reports)
 
     count = sum(x["count"] for x in reports)
@@ -347,6 +335,66 @@ def aggregate(crossings, tolerances):
         result["best_tolerance"] = 0.0 if best_tolerance == 0 else best_tolerance
     result["quality"] = "pass" if pass_count == m else "fail"
     return result
+
+
+def aggregate(crossings, tolerances):
+    """Aggregate :func:`audit` results across tolerances.
+
+    Calls :func:`audit` exactly once with ``crossings`` and
+    ``tolerances``, so its validation, exceptions (propagated
+    unchanged) and per-tolerance reports all apply here as well.
+    Inputs are not modified.
+
+    With ``R`` the tuple returned by :func:`audit` and ``m = len(R)``,
+    the summary is ``count = sum(x["count"])``,
+    ``pass_count`` the number of reports with ``quality == "pass"``,
+    ``fail_count = m - pass_count``,
+    ``mean_bias = fsum(x["bias"]) / m``,
+    ``max_rmse = max(x["rmse"])`` and
+    ``mean_ratio = fsum(x["within_ratio"]) / m``. ``best_tolerance``
+    is the smallest tolerance whose report passed, or ``None`` when no
+    report passed; ``quality`` is ``"pass"`` only when every report
+    passed and ``"fail"`` otherwise.
+
+    Returns a dict with keys in the order
+    ``count, pass_count, fail_count, mean_bias, max_rmse, mean_ratio,
+    best_tolerance, quality``; ``count``/``pass_count``/``fail_count``
+    are ints and the numeric statistics are floats rounded to 6
+    decimals (negative zero normalized to ``0.0``).
+    """
+    reports = audit(crossings, tolerances)
+    return _aggregate_from_reports(reports, tolerances)
+
+
+def dashboard(crossings, tolerances):
+    """Bundle :func:`audit`, :func:`profile` and :func:`aggregate` results.
+
+    Calls :func:`audit` exactly once with ``crossings`` and
+    ``tolerances``, so its validation, first-error order, exceptions
+    (propagated unchanged) and index prefixes all apply here as well.
+    Inputs are not modified; :func:`profile` and :func:`aggregate` are
+    not called (their values are derived directly from the single
+    :func:`audit` result).
+
+    Returns a tuple ``(reports, profile, aggregate, quality)`` where
+    ``reports`` is the tuple returned by :func:`audit`; ``profile`` and
+    ``aggregate`` are dicts with the keys, values, types and rounding
+    rules of :func:`profile` and :func:`aggregate` respectively; and
+    ``quality`` is ``"pass"`` only when the aggregate ``quality`` is
+    ``"pass"``, the profile ``monotonic`` flag is true and
+    ``first_pass_tolerance`` is not ``None``, and ``"fail"`` otherwise.
+    """
+    reports = audit(crossings, tolerances)
+    profiled = _profile_from_reports(reports, tolerances)
+    aggregated = _aggregate_from_reports(reports, tolerances)
+    quality = (
+        "pass"
+        if aggregated["quality"] == "pass"
+        and profiled["monotonic"] is True
+        and profiled["first_pass_tolerance"] is not None
+        else "fail"
+    )
+    return reports, profiled, aggregated, quality
 
 
 def pair(first, second, tolerance=1.0):
