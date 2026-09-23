@@ -17,9 +17,10 @@ encodes it as UTF-8 JSON bytes, :func:`render_dashboard_summary`
 renders the summary as plain text,
 :func:`aggregate_dashboard_summaries` aggregates multiple such
 summaries into one batch summary, :func:`serialize_batch` computes
-that batch summary once and encodes it as UTF-8 JSON bytes, and
+that batch summary once and encodes it as UTF-8 JSON bytes,
 :func:`load_dashboard_summary`
-reads such a JSON document back from a file.
+reads such a JSON document back from a file and :func:`load_batch`
+reads a serialized batch document back from a file.
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ __all__ = [
     "write",
     "load",
     "load_dashboard_summary",
+    "load_batch",
 ]
 
 _CROSSPOINT_KEYS = (
@@ -906,6 +908,10 @@ def serialize_batch(summaries) -> bytes:
     Returns the JSON document as ``bytes``.
     """
     batch = aggregate_dashboard_summaries(summaries)
+    return _dump_batch(batch)
+
+
+def _dump_batch(batch):
     try:
         text = json.dumps(
             _to_jsonable(batch),
@@ -918,6 +924,111 @@ def serialize_batch(summaries) -> bytes:
         raise ValueError(
             f"batch summary: could not be serialized to JSON: {exc}"
         ) from exc
+
+
+def _check_batch(batch):
+    if not isinstance(batch, dict):
+        raise TypeError("batch summary must be a dict")
+    if list(batch.keys()) != list(_BATCH_SUMMARY_KEYS):
+        raise TypeError(
+            "batch summary keys must be in the order "
+            "batch_count, tolerance_count, pass_count, fail_count, "
+            "first_pass_summary, terrain_total, terrain_valid, "
+            "terrain_coverage, quality_score"
+        )
+
+    batch_count = batch["batch_count"]
+    if type(batch_count) is not int:
+        raise TypeError("batch summary: batch_count must be a non-bool int")
+    if not batch_count > 0:
+        raise ValueError("batch summary: batch_count must be > 0")
+
+    tolerance_count = batch["tolerance_count"]
+    if type(tolerance_count) is not int:
+        raise TypeError("batch summary: tolerance_count must be a non-bool int")
+    if not tolerance_count > 0:
+        raise ValueError("batch summary: tolerance_count must be > 0")
+
+    pass_count = batch["pass_count"]
+    if type(pass_count) is not int:
+        raise TypeError("batch summary: pass_count must be a non-bool int")
+    if not 0 <= pass_count <= tolerance_count:
+        raise ValueError(
+            "batch summary: pass_count must be in [0, tolerance_count]"
+        )
+
+    fail_count = batch["fail_count"]
+    if type(fail_count) is not int:
+        raise TypeError("batch summary: fail_count must be a non-bool int")
+    if fail_count != tolerance_count - pass_count:
+        raise ValueError(
+            "batch summary: fail_count must equal tolerance_count - pass_count"
+        )
+
+    first_pass_summary = batch["first_pass_summary"]
+    if pass_count == 0:
+        if first_pass_summary is not None:
+            raise ValueError(
+                "batch summary: first_pass_summary must be None when "
+                "pass_count is 0"
+            )
+    else:
+        if type(first_pass_summary) is not int:
+            raise TypeError(
+                "batch summary: first_pass_summary must be None or a "
+                "non-bool int"
+            )
+        if not 0 <= first_pass_summary < batch_count:
+            raise ValueError(
+                "batch summary: first_pass_summary must be in "
+                "[0, batch_count)"
+            )
+
+    terrain_total = batch["terrain_total"]
+    if type(terrain_total) is not int:
+        raise TypeError("batch summary: terrain_total must be a non-bool int")
+    if not terrain_total > 0:
+        raise ValueError("batch summary: terrain_total must be > 0")
+
+    terrain_valid = batch["terrain_valid"]
+    if type(terrain_valid) is not int:
+        raise TypeError("batch summary: terrain_valid must be a non-bool int")
+    if not 0 <= terrain_valid <= terrain_total:
+        raise ValueError(
+            "batch summary: terrain_valid must be in [0, terrain_total]"
+        )
+
+    terrain_coverage = batch["terrain_coverage"]
+    if type(terrain_coverage) is not float:
+        raise TypeError("batch summary: terrain_coverage must be a float")
+    if not math.isfinite(terrain_coverage):
+        raise ValueError("batch summary: terrain_coverage must be finite")
+    expected_coverage = round(terrain_valid / terrain_total, 6)
+    if expected_coverage == 0:
+        expected_coverage = 0.0
+    if terrain_coverage != expected_coverage:
+        raise ValueError(
+            "batch summary: terrain_coverage must equal "
+            "round(terrain_valid / terrain_total, 6)"
+        )
+
+    quality_score = batch["quality_score"]
+    if type(quality_score) is not float:
+        raise TypeError("batch summary: quality_score must be a float")
+    if not math.isfinite(quality_score):
+        raise ValueError("batch summary: quality_score must be finite")
+    expected_score = round(
+        100 * (pass_count / tolerance_count) * (terrain_valid / terrain_total),
+        6,
+    )
+    if expected_score == 0:
+        expected_score = 0.0
+    if quality_score != expected_score:
+        raise ValueError(
+            "batch summary: quality_score must equal round(100 * "
+            "(pass_count / tolerance_count) * "
+            "(terrain_valid / terrain_total), 6)"
+        )
 
 
 def _to_jsonable(value):
@@ -1306,3 +1417,81 @@ def load_dashboard_summary(path) -> dict:
         )
 
     return summary
+
+
+def load_batch(path) -> dict:
+    """Load a :func:`serialize_batch`-produced JSON batch summary.
+
+    ``path`` must be a non-empty ``str``: a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``. The file
+    is opened in binary mode (``"rb"``) and read in full; a missing
+    file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError`` and every other ``OSError`` is propagated
+    unchanged. The file is not modified.
+
+    The bytes must be exactly those produced by
+    :func:`serialize_batch` for the same value: compact UTF-8 JSON with
+    no BOM and no trailing newline. A BOM, a trailing newline, a UTF-8
+    decoding failure or a JSON parsing failure raises ``ValueError``;
+    the ``NaN``/``Infinity`` constants and any other non-finite token
+    are rejected.
+
+    The decoded value must be a JSON object with top-level keys exactly
+    in the order ``batch_count, tolerance_count, pass_count,
+    fail_count, first_pass_summary, terrain_total, terrain_valid,
+    terrain_coverage, quality_score``; writing ``bc`` for
+    ``batch_count``, ``tc`` for ``tolerance_count``, ``pc`` for
+    ``pass_count``, ``fc`` for ``fail_count``, ``fp`` for
+    ``first_pass_summary``, ``tt`` for ``terrain_total`` and ``tv``
+    for ``terrain_valid``, the six count fields ``bc, tc, pc, fc, tt,
+    tv`` must each be a non-bool int with ``bc > 0``, ``tc > 0``,
+    ``0 <= pc <= tc``, ``fc == tc - pc``, ``tt > 0`` and
+    ``0 <= tv <= tt``; ``fp`` must be ``None`` when ``pc == 0`` and
+    otherwise a non-bool int in ``[0, bc)``; and
+    ``terrain_coverage`` and ``quality_score`` must be finite non-bool
+    floats equal respectively to ``round(tv / tt, 6)`` and
+    ``round(100 * (pc / tc) * (tv / tt), 6)``, with negative zero
+    normalized to ``0.0``. Any key-order, type, range, relation, parse
+    or canonical-byte mismatch raises ``ValueError``.
+
+    Returns the batch summary as a dict with the keys in the order
+    above; the file is never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(text, parse_constant=_reject_json_constant)
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    batch = _from_jsonable(parsed)
+    try:
+        _check_batch(batch)
+        canonical = _dump_batch(batch)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid batch summary: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical serialize_batch output"
+        )
+
+    return batch
