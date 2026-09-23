@@ -12,7 +12,7 @@ import math
 
 from .svp import _is_real_number
 
-__all__ = ["evaluate", "report", "pair", "audit"]
+__all__ = ["evaluate", "report", "pair", "audit", "aggregate"]
 
 _FIELDS = ("x", "y", "d1", "d2")
 _POINT_FIELDS = ("x", "y", "d")
@@ -196,6 +196,67 @@ def audit(crossings, tolerances):
             raise ValueError(prefix + "must be > 0")
 
     return tuple(report(crossings, tolerance) for tolerance in tolerances)
+
+
+def aggregate(crossings, tolerances):
+    """Aggregate the :func:`audit` results over several tolerances.
+
+    Calls :func:`audit` exactly once with ``crossings`` and
+    ``tolerances``, so its validation, exceptions (propagated
+    unchanged) and input-order guarantees all apply here as well.
+    Inputs are not modified.
+
+    Letting ``R`` be the tuple returned by :func:`audit` and
+    ``m = len(R)``, the result aggregates the per-tolerance reports:
+    ``count`` is the sum of their counts, ``pass_count`` the number of
+    reports whose ``quality`` is ``"pass"`` and
+    ``fail_count = m - pass_count``; ``mean_bias`` and ``mean_ratio``
+    are the means of the (already six-decimal-rounded) ``bias`` and
+    ``within_ratio`` values, summed with :func:`math.fsum`, and
+    ``max_rmse`` is the largest ``rmse``. ``best_tolerance`` is the
+    smallest tolerance among the passing reports (compared in input
+    order, without sorting or deduplication), or ``None`` if none
+    pass. ``quality`` is ``"pass"`` only when every report passes.
+
+    Returns a dict with keys in the order
+    ``count, pass_count, fail_count, mean_bias, max_rmse,
+    mean_ratio, best_tolerance, quality``. ``count``, ``pass_count``
+    and ``fail_count`` are ints; ``mean_bias``, ``max_rmse`` and
+    ``mean_ratio`` are ``round(float(v), 6)`` floats with negative
+    zero normalized to ``0.0``.
+    """
+    results = audit(crossings, tolerances)
+    m = len(results)
+
+    count = sum(item["count"] for item in results)
+    pass_count = sum(1 for item in results if item["quality"] == "pass")
+    fail_count = m - pass_count
+    mean_bias = math.fsum(item["bias"] for item in results) / m
+    max_rmse = max(item["rmse"] for item in results)
+    mean_ratio = math.fsum(item["within_ratio"] for item in results) / m
+
+    best_tolerance = None
+    for item, tolerance in zip(results, tolerances):
+        if item["quality"] == "pass":
+            if best_tolerance is None or tolerance < best_tolerance:
+                best_tolerance = tolerance
+
+    values = {
+        "mean_bias": mean_bias,
+        "max_rmse": max_rmse,
+        "mean_ratio": mean_ratio,
+    }
+    result = {
+        "count": int(count),
+        "pass_count": int(pass_count),
+        "fail_count": int(fail_count),
+    }
+    for name in ("mean_bias", "max_rmse", "mean_ratio"):
+        value = round(float(values[name]), 6)
+        result[name] = 0.0 if value == 0 else value
+    result["best_tolerance"] = best_tolerance
+    result["quality"] = "pass" if pass_count == m else "fail"
+    return result
 
 
 def pair(first, second, tolerance=1.0):
