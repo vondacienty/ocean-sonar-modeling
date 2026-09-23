@@ -27,6 +27,7 @@ __all__ = [
     "generate",
     "generate_full",
     "dashboard",
+    "dashboard_summary",
     "summarize",
     "serialize",
     "serialize_summary",
@@ -479,6 +480,83 @@ def dashboard(crossings, tolerances, layers, slope_limit=5.0, roughness_limit=1.
         "terrain": terrain,
         "substrate": substrate,
         "quality": quality,
+    }
+
+
+def dashboard_summary(
+    crossings, tolerances, layers, slope_limit=5.0, roughness_limit=1.0
+):
+    """Attach aggregate counts and a score to a :func:`dashboard` result.
+
+    Calls :func:`dashboard` exactly once with the arguments unchanged
+    (``crossings``, ``tolerances``, ``layers``, ``slope_limit`` and
+    ``roughness_limit`` passed through as given) and performs no other
+    work, so the validation order, error types and message prefixes are
+    exactly those of :func:`dashboard`; every exception is propagated
+    unchanged and the inputs are not modified.
+
+    Returns a dict with keys in the order ``dashboard, summary``;
+    ``dashboard`` is the dict returned by :func:`dashboard` (the same
+    object). With ``Q`` the ``quality`` tuple and ``T`` the
+    ``terrain`` tuple of that dict, ``m`` the length of ``Q``, ``p``
+    the number of ``"pass"`` entries in ``Q``, ``v`` the sum of
+    ``T[i]["valid"]`` and ``n`` the sum of ``T[i]["total"]``,
+    ``summary`` is a dict with keys in the order
+    ``tolerance_count, pass_count, fail_count, first_pass_index,
+    terrain_total, terrain_valid, terrain_coverage, quality_score`` and
+    values ``m``, ``p``, ``m - p``, the index of the first ``"pass"``
+    in ``Q`` (``None`` if there is none), ``n``, ``v``,
+    ``round(v / n, 6)`` and ``round(100 * (p / m) * (v / n), 6)``.
+    Counts and the first-pass index are non-bool ints (the index may be
+    ``None``) and the two ratios are floats with negative zero
+    normalized to ``0.0``.
+    """
+    dashboard_result = dashboard(
+        crossings, tolerances, layers, slope_limit, roughness_limit
+    )
+
+    quality = dashboard_result["quality"]
+    terrain = dashboard_result["terrain"]
+
+    tolerance_count = len(quality)
+    pass_count = quality.count("pass")
+    fail_count = tolerance_count - pass_count
+
+    first_pass_index = None
+    for i, verdict in enumerate(quality):
+        if verdict == "pass":
+            first_pass_index = i
+            break
+
+    terrain_total = 0
+    terrain_valid = 0
+    for item in terrain:
+        terrain_total += item["total"]
+        terrain_valid += item["valid"]
+
+    terrain_coverage = round(terrain_valid / terrain_total, 6)
+    if terrain_coverage == 0:
+        terrain_coverage = 0.0
+
+    quality_score = round(
+        100 * (pass_count / tolerance_count) * (terrain_valid / terrain_total),
+        6,
+    )
+    if quality_score == 0:
+        quality_score = 0.0
+
+    return {
+        "dashboard": dashboard_result,
+        "summary": {
+            "tolerance_count": tolerance_count,
+            "pass_count": pass_count,
+            "fail_count": fail_count,
+            "first_pass_index": first_pass_index,
+            "terrain_total": terrain_total,
+            "terrain_valid": terrain_valid,
+            "terrain_coverage": terrain_coverage,
+            "quality_score": quality_score,
+        },
     }
 
 
