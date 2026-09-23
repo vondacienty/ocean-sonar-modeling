@@ -16,11 +16,13 @@ from __future__ import annotations
 import json
 import math
 
+from .crosspoint import dashboard as crosspoint_dashboard
 from .crosspoint import evaluate
 from .quality import assess
 from .substrate import classify
 
 __all__ = [
+    "dashboard",
     "generate",
     "generate_full",
     "summarize",
@@ -412,6 +414,52 @@ def generate_full(crossings, layers, tolerance=0.5, slope_limit=5.0, roughness_l
         "substrate": summary["substrate"],
         "overall": summary["overall"],
         "score": score,
+    }
+
+
+def dashboard(crossings, tolerances, layers, slope_limit=5.0, roughness_limit=1.0):
+    """Bundle crosspoint, terrain, substrate and per-tolerance quality.
+
+    Calls :func:`ocean_sonar.crosspoint.dashboard` exactly once with
+    ``crossings`` and ``tolerances``, then :func:`assess` exactly once
+    with ``layers``, ``slope_limit`` and ``roughness_limit``, then
+    :func:`classify` exactly once with the same three arguments, in
+    that order and with no sorting, deduplication or mutation of the
+    inputs. No other combining functions are called; the called
+    functions' validation, first-error order, exceptions (propagated
+    unchanged), key order, tuple levels and rounding rules all apply
+    here as well.
+
+    Let ``R`` be the first item of the crosspoint dashboard result (the
+    :func:`ocean_sonar.crosspoint.audit` report tuple). Returns a dict
+    with keys in the order ``crosspoint, terrain, substrate,
+    quality``; the first three values are the called results (identities
+    preserved). ``quality`` is a tuple of strings, one per entry of
+    ``R`` in ``tolerances`` order and of length ``len(R)``: its ``i``-th
+    item is ``"pass"`` only when ``R[i]["quality"] == "pass"``, every
+    terrain item has ``slope_exceed`` and ``roughness_exceed`` equal to
+    ``0`` and no substrate item's ``classes`` contains ``"unknown"``;
+    otherwise it is ``"fail"``.
+    """
+    crosspoint = crosspoint_dashboard(crossings, tolerances)
+    terrain = assess(layers, slope_limit, roughness_limit)
+    substrate = classify(layers, slope_limit, roughness_limit)
+
+    reports = crosspoint[0]
+    layers_pass = all(
+        item["slope_exceed"] == 0 and item["roughness_exceed"] == 0
+        for item in terrain
+    ) and all("unknown" not in item["classes"] for item in substrate)
+    quality = tuple(
+        "pass" if reports[i]["quality"] == "pass" and layers_pass else "fail"
+        for i in range(len(reports))
+    )
+
+    return {
+        "crosspoint": crosspoint,
+        "terrain": terrain,
+        "substrate": substrate,
+        "quality": quality,
     }
 
 
