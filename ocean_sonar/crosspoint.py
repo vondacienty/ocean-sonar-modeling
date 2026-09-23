@@ -12,7 +12,7 @@ import math
 
 from .svp import _is_real_number
 
-__all__ = ["evaluate", "report", "pair", "audit", "aggregate"]
+__all__ = ["evaluate", "report", "pair", "audit", "profile", "aggregate"]
 
 _FIELDS = ("x", "y", "d1", "d2")
 _POINT_FIELDS = ("x", "y", "d")
@@ -196,6 +196,98 @@ def audit(crossings, tolerances):
             raise ValueError(prefix + "must be > 0")
 
     return tuple(report(crossings, tolerance) for tolerance in tolerances)
+
+
+def profile(crossings, tolerances):
+    """Build a tolerance profile from :func:`audit` results.
+
+    Calls :func:`audit` exactly once with ``crossings`` and
+    ``tolerances``, so its validation, first-error order, exceptions
+    (propagated unchanged) and index prefixes all apply here as well.
+    Inputs are not modified.
+
+    With ``R`` the tuple returned by :func:`audit`, one item per input
+    tolerance, items are ordered ascending by
+    ``(tolerances[i], i)``; equal tolerances therefore keep their input
+    order. ``curve`` is a tuple of dicts, one per ordered item, each
+    with keys in the order
+    ``tolerance, within_tolerance, within_ratio, bias, rmse,
+    quality``; ``tolerance`` is ``round(float(tolerances[i]), 6)``
+    (negative zero normalized to ``0.0``) and the remaining fields are
+    copied unchanged from the corresponding ``R`` item.
+
+    ``monotonic`` is whether the ``within_tolerance`` counts are
+    non-decreasing along the curve (``True`` for a single item).
+    ``first_pass_tolerance`` is the rounded threshold of the first
+    curve item whose ``quality`` is ``"pass"``, or ``None`` when no
+    item passes.
+
+    With ``t_i`` the *unrounded* tolerance and ``q_i`` the
+    ``within_ratio`` of the item at ordered position ``i`` and
+    ``m = len(R)``, ``area`` is ``0.0`` for ``m < 2`` and otherwise the
+    trapezoidal integral
+    ``round(float(fsum((t_i - t_{i-1}) * (q_i + q_{i-1}) / 2
+    for i in range(1, m))), 6)`` with negative zero normalized to
+    ``0.0``.
+
+    Returns a dict with keys in the order
+    ``curve, monotonic, first_pass_tolerance, area``; their types are
+    tuple, bool, float or ``None`` and float.
+    """
+    reports = audit(crossings, tolerances)
+
+    ordered = sorted(
+        ((tolerances[i], i, item) for i, item in enumerate(reports)),
+        key=lambda entry: (entry[0], entry[1]),
+    )
+
+    curve_items = []
+    counts = []
+    first_pass_tolerance = None
+    for tolerance, _index, item in ordered:
+        rounded_tolerance = round(float(tolerance), 6)
+        if rounded_tolerance == 0:
+            rounded_tolerance = 0.0
+        curve_items.append(
+            {
+                "tolerance": rounded_tolerance,
+                "within_tolerance": item["within_tolerance"],
+                "within_ratio": item["within_ratio"],
+                "bias": item["bias"],
+                "rmse": item["rmse"],
+                "quality": item["quality"],
+            }
+        )
+        counts.append(item["within_tolerance"])
+        if first_pass_tolerance is None and item["quality"] == "pass":
+            first_pass_tolerance = rounded_tolerance
+
+    monotonic = all(b >= a for a, b in zip(counts, counts[1:]))
+
+    m = len(ordered)
+    if m < 2:
+        area = 0.0
+    else:
+        area = round(
+            float(
+                math.fsum(
+                    (ordered[i][0] - ordered[i - 1][0])
+                    * (ordered[i][2]["within_ratio"] + ordered[i - 1][2]["within_ratio"])
+                    / 2
+                    for i in range(1, m)
+                )
+            ),
+            6,
+        )
+        if area == 0:
+            area = 0.0
+
+    return {
+        "curve": tuple(curve_items),
+        "monotonic": monotonic,
+        "first_pass_tolerance": first_pass_tolerance,
+        "area": area,
+    }
 
 
 def aggregate(crossings, tolerances):
