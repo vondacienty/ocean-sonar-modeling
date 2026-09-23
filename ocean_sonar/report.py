@@ -13,9 +13,11 @@ numeric score to the combined summary. :func:`dashboard` combines
 and adds a per-tolerance quality tuple; :func:`dashboard_summary` wraps
 :func:`dashboard` with a compact scoring summary,
 :func:`serialize_dashboard_summary` computes that summary once and
-encodes it as UTF-8 JSON bytes, :func:`load_dashboard_summary`
-reads such a JSON document back from a file, and
-:func:`render_dashboard_summary` renders the summary as plain text.
+encodes it as UTF-8 JSON bytes, :func:`render_dashboard_summary`
+renders the summary as plain text,
+:func:`aggregate_dashboard_summaries` aggregates multiple such
+summaries into one batch summary, and :func:`load_dashboard_summary`
+reads such a JSON document back from a file.
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ __all__ = [
     "serialize_summary",
     "render",
     "render_dashboard_summary",
+    "aggregate_dashboard_summaries",
     "write",
     "load",
     "load_dashboard_summary",
@@ -69,6 +72,17 @@ _DASHBOARD_SUMMARY_KEYS = (
     "pass_count",
     "fail_count",
     "first_pass_index",
+    "terrain_total",
+    "terrain_valid",
+    "terrain_coverage",
+    "quality_score",
+)
+_BATCH_SUMMARY_KEYS = (
+    "batch_count",
+    "tolerance_count",
+    "pass_count",
+    "fail_count",
+    "first_pass_summary",
     "terrain_total",
     "terrain_valid",
     "terrain_coverage",
@@ -639,17 +653,17 @@ def _dump_dashboard_summary(summary):
         ) from exc
 
 
-def _check_dashboard_summary(summary):
+def _check_dashboard_summary(summary, prefix="dashboard summary: ", label=None):
+    if label is None:
+        label = "dashboard summary"
     if not isinstance(summary, dict):
-        raise TypeError("dashboard summary must be a dict")
+        raise TypeError(f"{label} must be a dict")
     if list(summary.keys()) != list(_DASHBOARD_SUMMARY_KEYS):
         raise TypeError(
-            "dashboard summary keys must be in the order "
+            f"{label} keys must be in the order "
             "tolerance_count, pass_count, fail_count, first_pass_index, "
             "terrain_total, terrain_valid, terrain_coverage, quality_score"
         )
-
-    prefix = "dashboard summary: "
 
     tolerance_count = summary["tolerance_count"]
     if type(tolerance_count) is not int:
@@ -781,6 +795,85 @@ def render_dashboard_summary(summary) -> str:
             f"QUALITY_SCORE={_format_dashboard_value(summary['quality_score'])}",
         ]
     )
+
+
+def aggregate_dashboard_summaries(summaries) -> dict:
+    """Aggregate multiple :func:`dashboard_summary` ``summary`` dicts.
+
+    ``summaries`` must be a non-empty ``list`` or ``tuple``; each item
+    must be a ``"summary"`` dict as returned by
+    :func:`dashboard_summary` and is validated with the same contract
+    as :func:`render_dashboard_summary`, in input order, stopping at the
+    first error. A non-list/tuple outer container raises ``TypeError``
+    and an empty one raises ``ValueError``; per-item errors are prefixed
+    with ``summaries[i]: `` (the container/key-order messages read
+    ``summaries[i]: must be a dict`` / ``summaries[i]: keys must be in
+    the order ...``). Item container, key-order and field-type errors raise
+    ``TypeError``; emptiness, finiteness, range and relation errors
+    raise ``ValueError``. The input is not modified.
+
+    With ``K`` the number of items, ``M`` the sum of their
+    ``tolerance_count`` values, ``P`` the sum of their ``pass_count``
+    values, ``N`` the sum of their ``terrain_total`` values and ``V``
+    the sum of their ``terrain_valid`` values, returns a dict with keys
+    in the order ``batch_count, tolerance_count, pass_count,
+    fail_count, first_pass_summary, terrain_total, terrain_valid,
+    terrain_coverage, quality_score``; the values are respectively ``K``,
+    ``M``, ``P``, ``M - P``, the index of the first item with
+    ``pass_count > 0`` (or ``None``), ``N``, ``V``, ``round(V / N, 6)``
+    and ``round(100 * (P / M) * (V / N), 6)``. Counts are non-bool ints,
+    ``first_pass_summary`` is a non-bool int or ``None`` and the last
+    two values are non-bool floats with negative zero normalized to
+    ``0.0``.
+    """
+    if not isinstance(summaries, (list, tuple)):
+        raise TypeError("summaries must be a list or tuple")
+    if len(summaries) == 0:
+        raise ValueError("summaries must be non-empty")
+
+    batch_count = len(summaries)
+    tolerance_count = 0
+    pass_count = 0
+    first_pass_summary = None
+    terrain_total = 0
+    terrain_valid = 0
+
+    for i, item in enumerate(summaries):
+        item_prefix = f"summaries[{i}]: "
+        _check_dashboard_summary(
+            item, prefix=item_prefix, label=f"summaries[{i}]:"
+        )
+        tolerance_count += item["tolerance_count"]
+        pass_count += item["pass_count"]
+        if first_pass_summary is None and item["pass_count"] > 0:
+            first_pass_summary = i
+        terrain_total += item["terrain_total"]
+        terrain_valid += item["terrain_valid"]
+
+    fail_count = tolerance_count - pass_count
+
+    terrain_coverage = round(terrain_valid / terrain_total, 6)
+    if terrain_coverage == 0:
+        terrain_coverage = 0.0
+
+    quality_score = round(
+        100 * (pass_count / tolerance_count) * (terrain_valid / terrain_total),
+        6,
+    )
+    if quality_score == 0:
+        quality_score = 0.0
+
+    return {
+        "batch_count": batch_count,
+        "tolerance_count": tolerance_count,
+        "pass_count": pass_count,
+        "fail_count": fail_count,
+        "first_pass_summary": first_pass_summary,
+        "terrain_total": terrain_total,
+        "terrain_valid": terrain_valid,
+        "terrain_coverage": terrain_coverage,
+        "quality_score": quality_score,
+    }
 
 
 def _to_jsonable(value):
