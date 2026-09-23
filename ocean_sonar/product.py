@@ -25,7 +25,7 @@ from .report import (
     _to_jsonable,
 )
 
-__all__ = ["build", "serialize", "render", "write", "metrics", "load"]
+__all__ = ["build", "dashboard", "serialize", "render", "write", "metrics", "load"]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
 _LAYER_KEYS = (
@@ -143,6 +143,65 @@ def build(
         "layers": layers,
         "overall": overall,
     }
+
+
+def dashboard(
+    points,
+    bounds,
+    resolutions,
+    crossings,
+    tolerances,
+    slope_limit=5.0,
+    roughness_limit=1.0,
+):
+    """Build the gridded terrain product and the combined dashboard in one call.
+
+    The stages run strictly in this order, exactly once each and with
+    no interleaving, and every exception from any stage short-circuits
+    and is propagated unchanged:
+
+    1. :func:`grid.build(points, bounds, resolutions)
+       <ocean_sonar.grid.build>` bins the soundings into one grid per
+       resolution; each layer is ``(resolution, nx, ny, cells)``.
+    2. The grids are passed unchanged to
+       :func:`terrain.analyze_layers <ocean_sonar.terrain.analyze_layers>`.
+    3. From every analysis dict the tuple
+       ``(resolution, nx, ny, analysis)`` is built, in input order, and
+       these tuples are passed together with ``crossings``,
+       ``tolerances``, ``slope_limit`` and ``roughness_limit`` to
+       :func:`report.dashboard <ocean_sonar.report.dashboard>`.
+
+    The validation and first-error order is therefore that of
+    :func:`~ocean_sonar.grid.build` (points, bounds, resolutions),
+    then :func:`~ocean_sonar.terrain.analyze_layers`, then the
+    :func:`~ocean_sonar.report.dashboard` order (its internal
+    ``crosspoint.dashboard``, ``assess`` and ``classify`` parameter
+    checks, including their index prefixes). Inputs are neither
+    modified nor reordered and no other function is called.
+
+    Returns the dict returned by :func:`~ocean_sonar.report.dashboard`
+    unchanged, with keys in the order
+    ``crosspoint, terrain, substrate, quality``; the first three items
+    keep their identity and ``quality`` is a tuple of ``str`` with one
+    entry per tolerance in ``tolerances`` order. All nested key orders,
+    tuple levels, types and six-decimal rounding are exactly those
+    produced by :func:`~ocean_sonar.report.dashboard`.
+    """
+    grids = grid.build(points, bounds, resolutions)
+    analyzed = terrain.analyze_layers(grids)
+
+    layers = tuple(
+        (item["resolution"], item["nx"], item["ny"], item["analysis"])
+        for item in analyzed
+    )
+
+    return report.dashboard(
+        crossings,
+        tolerances,
+        layers,
+        slope_limit,
+        roughness_limit,
+    )
 
 
 def _check_product_crosspoint(item):
