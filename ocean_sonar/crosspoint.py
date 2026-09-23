@@ -12,7 +12,7 @@ import math
 
 from .svp import _is_real_number
 
-__all__ = ["evaluate", "pair"]
+__all__ = ["evaluate", "pair", "report"]
 
 _FIELDS = ("x", "y", "d1", "d2")
 _POINT_FIELDS = ("x", "y", "d")
@@ -97,6 +97,49 @@ def evaluate(crossings, tolerance=0.5):
     result["within_tolerance"] = int(within_tolerance)
     result["quality"] = "pass" if within_tolerance == n else "fail"
     return result
+
+
+def report(crossings, tolerance=0.5):
+    """Build an extended crosspoint accuracy report.
+
+    Calls :func:`evaluate` once with ``crossings`` and ``tolerance``;
+    all validation, exceptions and ``crossings[i]: `` index prefixes
+    follow :func:`evaluate`, and inputs are not modified.
+
+    With ``r_i = d1 - d2``, ``n = len(crossings)``,
+    ``mu = fsum(r_i) / n`` and ``within`` the within-tolerance count
+    from :func:`evaluate`, the extra statistics are computed from the
+    unrounded residuals: ``stdev = sqrt(fsum((r_i - mu)**2) / n)`` and
+    ``within_ratio = within / n``.
+
+    Returns a dict with keys in the order
+    ``count, bias, rmse, max_abs, within_tolerance, within_ratio,
+    stdev, quality``; ``count``/``within_tolerance`` are ints and
+    ``within_ratio``/``stdev`` are floats rounded to 6 decimals
+    (negative zero normalized to ``0.0``). The other keys are taken
+    unchanged from :func:`evaluate`.
+    """
+    result = evaluate(crossings, tolerance)
+
+    differences = [d1 - d2 for x, y, d1, d2 in crossings]
+    n = len(differences)
+    mean = math.fsum(differences) / n
+    stdev = math.sqrt(math.fsum((r - mean) ** 2 for r in differences) / n)
+    within_ratio = result["within_tolerance"] / n
+
+    within_ratio = round(float(within_ratio), 6)
+    stdev = round(float(stdev), 6)
+
+    return {
+        "count": result["count"],
+        "bias": result["bias"],
+        "rmse": result["rmse"],
+        "max_abs": result["max_abs"],
+        "within_tolerance": result["within_tolerance"],
+        "within_ratio": 0.0 if within_ratio == 0 else within_ratio,
+        "stdev": 0.0 if stdev == 0 else stdev,
+        "quality": result["quality"],
+    }
 
 
 def pair(first, second, tolerance=1.0):
