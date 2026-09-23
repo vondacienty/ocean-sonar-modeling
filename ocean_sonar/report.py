@@ -8,7 +8,9 @@ pass/fail verdict. :func:`generate` runs ``evaluate``/``assess`` itself,
 while :func:`summarize` validates and combines their already-computed
 results together with a ``classify`` result. :func:`generate_full` runs
 all three of ``evaluate``/``assess``/``classify`` itself and adds a
-numeric score to the combined summary.
+numeric score to the combined summary. :func:`dashboard` combines
+:func:`ocean_sonar.crosspoint.dashboard` with ``assess``/``classify``
+and adds a per-tolerance quality tuple.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from __future__ import annotations
 import json
 import math
 
+from .crosspoint import dashboard as crosspoint_dashboard
 from .crosspoint import evaluate
 from .quality import assess
 from .substrate import classify
@@ -23,6 +26,7 @@ from .substrate import classify
 __all__ = [
     "generate",
     "generate_full",
+    "dashboard",
     "summarize",
     "serialize",
     "serialize_summary",
@@ -412,6 +416,69 @@ def generate_full(crossings, layers, tolerance=0.5, slope_limit=5.0, roughness_l
         "substrate": summary["substrate"],
         "overall": summary["overall"],
         "score": score,
+    }
+
+
+def dashboard(crossings, tolerances, layers, slope_limit=5.0, roughness_limit=1.0):
+    """Combine the crosspoint dashboard with terrain and substrate results.
+
+    Calls :func:`ocean_sonar.crosspoint.dashboard` with ``crossings``
+    and ``tolerances``, then :func:`ocean_sonar.quality.assess` and
+    :func:`ocean_sonar.substrate.classify`, each with ``layers``,
+    ``slope_limit`` and ``roughness_limit``, strictly in that order,
+    exactly once each. No other combining function is called and the
+    inputs are neither modified nor reordered; every exception from any
+    of the three functions short-circuits and is propagated unchanged.
+    The first-error order is therefore the ``crosspoint.dashboard``
+    validation order (the full ``crossings`` validation, then
+    ``tolerances``), then ``layers`` → ``slope_limit`` →
+    ``roughness_limit`` as validated by ``assess``, then the same order
+    again as validated by ``classify``.
+
+    Returns a dict with keys in the order
+    ``crosspoint, terrain, substrate, quality``; ``crosspoint`` is the
+    tuple returned by :func:`~ocean_sonar.crosspoint.dashboard`,
+    ``terrain`` the tuple returned by
+    :func:`~ocean_sonar.quality.assess` and ``substrate`` the tuple
+    returned by :func:`~ocean_sonar.substrate.classify` (identities,
+    nested key order, tuple levels, numeric types and rounding all
+    unchanged).
+
+    With ``R`` the first element of the ``crosspoint`` tuple (the
+    :func:`~ocean_sonar.crosspoint.audit` report tuple, one entry per
+    tolerance in input order), ``quality`` is a tuple of ``str`` of
+    length ``len(R)`` in ``tolerances`` order. Its ``i``-th item is
+    ``"pass"`` only when ``R[i]["quality"] == "pass"``, every terrain
+    item has ``slope_exceed`` and ``roughness_exceed`` equal to ``0``
+    and no substrate item's ``classes`` contains ``"unknown"``;
+    otherwise it is ``"fail"``.
+    """
+    crosspoint = crosspoint_dashboard(crossings, tolerances)
+    terrain = assess(layers, slope_limit, roughness_limit)
+    substrate = classify(layers, slope_limit, roughness_limit)
+
+    layers_ok = True
+    for item in terrain:
+        if item["slope_exceed"] != 0 or item["roughness_exceed"] != 0:
+            layers_ok = False
+            break
+    if layers_ok:
+        for item in substrate:
+            if "unknown" in item["classes"]:
+                layers_ok = False
+                break
+
+    reports = crosspoint[0]
+    quality = tuple(
+        "pass" if item["quality"] == "pass" and layers_ok else "fail"
+        for item in reports
+    )
+
+    return {
+        "crosspoint": crosspoint,
+        "terrain": terrain,
+        "substrate": substrate,
+        "quality": quality,
     }
 
 
