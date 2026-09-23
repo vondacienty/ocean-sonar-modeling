@@ -12,7 +12,7 @@ import math
 
 from .svp import _is_real_number
 
-__all__ = ["evaluate", "report", "pair", "audit", "aggregate"]
+__all__ = ["evaluate", "report", "pair", "audit", "aggregate", "profile"]
 
 _FIELDS = ("x", "y", "d1", "d2")
 _POINT_FIELDS = ("x", "y", "d")
@@ -255,6 +255,93 @@ def aggregate(crossings, tolerances):
         result["best_tolerance"] = 0.0 if best_tolerance == 0 else best_tolerance
     result["quality"] = "pass" if pass_count == m else "fail"
     return result
+
+
+def profile(crossings, tolerances):
+    """Profile :func:`audit` results as a tolerance-sorted curve.
+
+    Calls :func:`audit` exactly once with ``crossings`` and
+    ``tolerances``, so its validation, exceptions (propagated
+    unchanged) and per-tolerance reports all apply here as well.
+    Inputs are not modified.
+
+    With ``R`` the tuple returned by :func:`audit`, the pairs
+    ``(tolerances[i], R[i])`` are sorted ascending by
+    ``(tolerances[i], i)``. The ``curve`` is the sorted tuple of dicts
+    with keys in the order ``tolerance, within_tolerance,
+    within_ratio, bias, rmse, quality``; ``tolerance`` is
+    ``round(float(tolerances[i]), 6)`` (negative zero normalized to
+    ``0.0``) and the remaining fields are copied from the
+    corresponding ``R`` item. ``monotonic`` is ``True`` when
+    ``within_tolerance`` is non-decreasing along the curve (a single
+    item counts as monotonic). ``first_pass_tolerance`` is the rounded
+    tolerance of the first curve item with ``quality == "pass"``, or
+    ``None`` when no item passed.
+
+    With ``t_i`` the unrounded sorted tolerances, ``q_i`` the
+    corresponding ``within_ratio`` values and ``m = len(R)``, ``area``
+    is ``0.0`` when ``m < 2`` and otherwise the trapezoidal sum
+    ``round(float(fsum((t_i - t_{i-1}) * (q_i + q_{i-1}) / 2 for i in
+    range(1, m))), 6)`` (negative zero normalized to ``0.0``).
+
+    Returns a dict with keys in the order ``curve, monotonic,
+    first_pass_tolerance, area``; the value types are ``tuple``,
+    ``bool``, ``float`` or ``None``, and ``float``.
+    """
+    reports = audit(crossings, tolerances)
+    m = len(reports)
+
+    ordered = sorted(zip(tolerances, reports), key=lambda pair: pair[0])
+
+    curve = []
+    for tolerance, report in ordered:
+        rounded = round(float(tolerance), 6)
+        curve.append(
+            {
+                "tolerance": 0.0 if rounded == 0 else rounded,
+                "within_tolerance": report["within_tolerance"],
+                "within_ratio": report["within_ratio"],
+                "bias": report["bias"],
+                "rmse": report["rmse"],
+                "quality": report["quality"],
+            }
+        )
+    curve = tuple(curve)
+
+    monotonic = all(
+        curve[i]["within_tolerance"] >= curve[i - 1]["within_tolerance"]
+        for i in range(1, m)
+    )
+
+    first_pass_tolerance = None
+    for item in curve:
+        if item["quality"] == "pass":
+            first_pass_tolerance = item["tolerance"]
+            break
+
+    if m < 2:
+        area = 0.0
+    else:
+        area = round(
+            float(
+                math.fsum(
+                    (ordered[i][0] - ordered[i - 1][0])
+                    * (ordered[i][1]["within_ratio"] + ordered[i - 1][1]["within_ratio"])
+                    / 2
+                    for i in range(1, m)
+                )
+            ),
+            6,
+        )
+        if area == 0:
+            area = 0.0
+
+    return {
+        "curve": curve,
+        "monotonic": bool(monotonic),
+        "first_pass_tolerance": first_pass_tolerance,
+        "area": area,
+    }
 
 
 def pair(first, second, tolerance=1.0):
