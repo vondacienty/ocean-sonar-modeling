@@ -32,6 +32,8 @@ import subprocess
 import sys
 import tempfile
 import venv
+import zipfile
+from email.parser import HeaderParser
 from pathlib import Path
 from types import ModuleType
 
@@ -57,6 +59,40 @@ _INJECTABLE_ENV_VARS = (
 )
 
 
+def _scrubbed_env(
+    scripts_dir: Path,
+    *,
+    scrub: tuple[str, ...] = _INJECTABLE_ENV_VARS,
+) -> dict[str, str]:
+    """An environment that cannot inject the source tree into a subprocess.
+
+    Every name in ``scrub`` is removed outright (rather than emptied) and the
+    resulting mapping is asserted not to carry it, even under a differently
+    cased spelling: on Windows environment names are case-insensitive, so a
+    leftover ``pythonpath`` would defeat the removal of ``PYTHONPATH``.
+    """
+    scrub_upper = {name.upper() for name in scrub}
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key.upper() not in scrub_upper
+    }
+    leaked = [key for key in env if key.upper() in scrub_upper]
+    assert not leaked, f"scrubbed environment variables survived: {leaked}"
+    # Belt and braces: even a PYTHONUSERBASE slipped through elsewhere, the
+    # user site-packages must not shadow the venv (no preinstalled packages).
+    env["PYTHONNOUSERSITE"] = "1"
+    # Do not litter the checkout (the cwd-leak negative control imports from
+    # it) or the venv with __pycache__ directories.
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    # CLI output here is ASCII, but pin IO encoding for deterministic bytes.
+    env["PYTHONIOENCODING"] = "utf-8"
+    # Make the venv's console scripts discoverable without relying on the
+    # caller's PATH.
+    env["PATH"] = str(scripts_dir) + os.pathsep + env.get("PATH", "")
+    return env
+
+
 class InstalledEnv:
     """The fresh venv created for the test module."""
 
@@ -67,12 +103,16 @@ class InstalledEnv:
         console_script: Path,
         site_packages: Path,
         scripts_dir: Path,
+        wheel: Path,
+        dist_info: Path,
     ) -> None:
         self.root = root
         self.python = python
         self.console_script = console_script
         self.site_packages = site_packages
         self.scripts_dir = scripts_dir
+        self.wheel = wheel
+        self.dist_info = dist_info
 
 
 @pytest.fixture(scope="module")
@@ -91,27 +131,6 @@ def outside_cwd() -> Path:
         yield workdir
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
-
-
-def _scrubbed_env(scripts_dir: Path) -> dict[str, str]:
-    """An environment that cannot inject the source tree into a subprocess."""
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if key not in _INJECTABLE_ENV_VARS
-    }
-    # Belt and braces: even a PYTHONUSERBASE slipped through elsewhere, the
-    # user site-packages must not shadow the venv (no preinstalled packages).
-    env["PYTHONNOUSERSITE"] = "1"
-    # Do not litter the checkout (the cwd-leak negative control imports from
-    # it) or the venv with __pycache__ directories.
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    # CLI output here is ASCII, but pin IO encoding for deterministic bytes.
-    env["PYTHONIOENCODING"] = "utf-8"
-    # Make the venv's console scripts discoverable without relying on the
-    # caller's PATH.
-    env["PATH"] = str(scripts_dir) + os.pathsep + env.get("PATH", "")
-    return env
 
 
 def _run(
@@ -159,6 +178,46 @@ def _venv_layout(venv_dir: Path) -> tuple[Path, Path]:
     return interpreter, console_script
 
 
+def _wheel_dist_info_name(wheel: Path) -> str:
+    """Return the ``*.dist-info`` directory name carried by a wheel file.
+
+    A wheel named ``name-version-*.whl`` contains a single top-level
+    ``name-version.dist-info/`` directory; the installed project must land in
+    site-packages under that same name.
+    """
+    with zipfile.ZipFile(wheel) as zf:
+        names = zf.namelist()
+    dist_info_dirs = {
+        name.split("/", 1)[0]
+        for name in names
+        if name.count("/") >= 1 and name.split("/", 1)[0].endswith(".dist-info")
+    }
+    assert len(dist_info_dirs) == 1, (
+        f"wheel {wheel.name} must contain exactly one .dist-info directory, got {dist_info_dirs}"
+    )
+    return next(iter(dist_info_dirs))
+
+
+def _wheel_metadata_text(wheel: Path) -> str:
+    """Read the ``METADATA`` file shipped inside the wheel as text."""
+    return _wheel_metadata_bytes(wheel).decode("utf-8")
+
+
+def _wheel_metadata_bytes(wheel: Path) -> bytes:
+    """Read the raw ``METADATA`` bytes shipped inside the wheel."""
+    dist_info = _wheel_dist_info_name(wheel)
+    with zipfile.ZipFile(wheel) as zf:
+        return zf.read(f"{dist_info}/METADATA")
+
+
+def _metadata_version(metadata_text: str) -> str:
+    """Parse the ``Version:`` header from a distribution METADATA file."""
+    message = HeaderParser().parsestr(metadata_text)
+    version = message.get("Version")
+    assert version is not None, "distribution metadata is missing a Version header"
+    return str(version)
+
+
 @pytest.fixture(scope="module")
 def installed_env(tmp_path_factory: pytest.TempPathFactory, outside_cwd: Path) -> InstalledEnv:
     """Build a wheel with the current interpreter and install it offline."""
@@ -182,6 +241,13 @@ def installed_env(tmp_path_factory: pytest.TempPathFactory, outside_cwd: Path) -
     assert len(wheels) == 1, f"expected exactly one built wheel, got {wheels}"
     wheel = wheels[0]
 
+    # The wheel itself advertises the expected version, so later checks verify
+    # the *installed* copy against the artifact rather than against the source.
+    wheel_dist_info = _wheel_dist_info_name(wheel)
+    assert _metadata_version(_wheel_metadata_text(wheel)) == "0.1.0", (
+        f"wheel {wheel.name} does not advertise Version: 0.1.0"
+    )
+
     venv_dir = base / "venv"
     # A plain EnvBuilder: pip bootstrapped from ensurepip, no system
     # site-packages, so nothing preinstalled on the host can satisfy imports.
@@ -191,9 +257,21 @@ def installed_env(tmp_path_factory: pytest.TempPathFactory, outside_cwd: Path) -
     assert interpreter.exists(), f"venv interpreter missing at {interpreter}"
     scripts_dir = interpreter.parent
 
+    # The venv must not inherit the host interpreter's site-packages.
+    pyvenv_cfg = (venv_dir / "pyvenv.cfg").read_text(encoding="utf-8")
+    assert "include-system-site-packages = false" in pyvenv_cfg, pyvenv_cfg
+
     env = _scrubbed_env(scripts_dir)
+    # Install strictly from the wheel file: --force-reinstall guarantees the
+    # artifact's contents are what ends up in the venv even if an earlier copy
+    # exists; the source tree path never appears on this command line.
+    install_cmd = [
+        interpreter, "-m", "pip", "install",
+        "--no-index", "--no-deps", "--force-reinstall", str(wheel),
+    ]
+    assert str(REPO_ROOT) not in [str(part) for part in install_cmd]
     _run_check(
-        [interpreter, "-m", "pip", "install", "--no-index", "--no-deps", str(wheel)],
+        install_cmd,
         cwd=outside_cwd,
         env=env,
         what="install wheel into fresh venv",
@@ -213,12 +291,27 @@ def installed_env(tmp_path_factory: pytest.TempPathFactory, outside_cwd: Path) -
     site_packages = Path(probe.stdout.decode().strip())
     assert site_packages.is_dir(), f"site-packages does not exist: {site_packages}"
 
+    # The installed .dist-info must be the one carried by the wheel, and its
+    # installed METADATA must byte-match the wheel's and keep Version: 0.1.0.
+    dist_info = site_packages / wheel_dist_info
+    assert dist_info.is_dir(), (
+        f"installed dist-info {dist_info} missing; the venv does not match wheel {wheel.name}"
+    )
+    installed_metadata = dist_info / "METADATA"
+    assert installed_metadata.is_file(), f"installed METADATA missing at {installed_metadata}"
+    assert _metadata_version(installed_metadata.read_text(encoding="utf-8")) == "0.1.0"
+    assert installed_metadata.read_bytes() == _wheel_metadata_bytes(wheel), (
+        "installed METADATA differs from the METADATA inside the installed wheel"
+    )
+
     return InstalledEnv(
         root=venv_dir,
         python=interpreter,
         console_script=console_script,
         site_packages=site_packages,
         scripts_dir=scripts_dir,
+        wheel=wheel,
+        dist_info=dist_info,
     )
 
 
@@ -368,17 +461,20 @@ def test_main_forwards_argv_verbatim_once_and_returns_int() -> None:
 
 def _probe_import(python: Path, *, cwd: Path, env: dict[str, str]) -> dict[str, object]:
     code = (
-        "import json, site, sys;"
+        "import json, os, site, sys;"
         "import ocean_sonar;"
         "import ocean_sonar.__main__ as m;"
         "print(json.dumps({"
         "'main': m.__file__,"
         " 'package': ocean_sonar.__file__,"
         " 'sys_path': sys.path,"
+        " 'executable': sys.executable,"
         " 'prefix': sys.prefix,"
         " 'base_prefix': sys.base_prefix,"
         " 'user_site_enabled': site.ENABLE_USER_SITE,"
-        " 'user_site': site.getusersitepackages()"
+        " 'user_site': site.getusersitepackages(),"
+        " 'env_keys': sorted(os.environ),"
+        " 'pythonnousersite': os.environ.get('PYTHONNOUSERSITE')"
         "}))"
     )
     result = _run_check(
@@ -406,13 +502,24 @@ def test_installed_main_resides_in_venv_site_packages(
     assert not main_file.is_relative_to(REPO_ROOT)
     assert not package_file.is_relative_to(REPO_ROOT)
 
-    # The interpreter really is the venv's, not the ambient one, and user
-    # site-packages (host preinstalled packages) are disabled.
+    # The interpreter really is the venv's (both sys.executable and the
+    # prefixes), not the ambient one, and user site-packages (host
+    # preinstalled packages) are disabled.
+    assert Path(str(info["executable"])).resolve() == installed_env.python.resolve()
     assert Path(str(info["prefix"])).resolve() == installed_env.root.resolve()
     assert Path(str(info["base_prefix"])).resolve() != installed_env.root.resolve()
     assert info["user_site_enabled"] is False
+    assert str(info["pythonnousersite"]) == "1"
     user_site = Path(str(info["user_site"])).resolve()
     assert not user_site.is_relative_to(installed_env.root.resolve())
+
+    # The probe subprocess itself must not carry any source-injecting
+    # environment variable (checked case-insensitively for Windows).
+    probe_env_upper = {str(key).upper() for key in info["env_keys"]}  # type: ignore[union-attr]
+    for name in _INJECTABLE_ENV_VARS:
+        assert name.upper() not in probe_env_upper, (
+            f"subprocess inherited {name}; isolation cannot be guaranteed"
+        )
 
     # No sys.path entry may lead back into the source tree: empty entries
     # stand for cwd, which is the outside working directory here.
@@ -422,6 +529,54 @@ def test_installed_main_resides_in_venv_site_packages(
         assert not resolved.is_relative_to(REPO_ROOT), (
             f"sys.path entry {entry!r} ({resolved}) leaks the source tree"
         )
+
+
+def test_installed_distribution_metadata_matches_wheel(
+    installed_env: InstalledEnv,
+    outside_cwd: Path,
+) -> None:
+    """The venv's .dist-info is the one from the built wheel at version 0.1.0."""
+    wheel = installed_env.wheel
+    assert wheel.is_file()
+    # The install command never copied the wheel into the venv; it lives in
+    # the build scratch directory, outside both the venv and the checkout.
+    assert not wheel.resolve().is_relative_to(installed_env.root.resolve())
+    assert not wheel.resolve().is_relative_to(REPO_ROOT)
+
+    expected_dist_info = _wheel_dist_info_name(wheel)
+    assert installed_env.dist_info.name == expected_dist_info
+    assert installed_env.dist_info.parent.resolve() == installed_env.site_packages.resolve()
+
+    wheel_metadata = _wheel_metadata_text(wheel)
+    installed_metadata = (installed_env.dist_info / "METADATA").read_text(encoding="utf-8")
+    assert _metadata_version(wheel_metadata) == "0.1.0"
+    assert _metadata_version(installed_metadata) == "0.1.0"
+    assert installed_metadata == wheel_metadata
+
+    # The wheel name itself must carry the 0.1.0 version.
+    assert wheel.name.startswith("ocean_sonar_modeling-0.1.0-"), wheel.name
+
+    # No other ocean-sonar installation/dist-info may share site-packages.
+    sibling_dist_infos = sorted(installed_env.site_packages.glob("ocean_sonar_modeling-*.dist-info"))
+    assert sibling_dist_infos == [installed_env.dist_info]
+
+    # The installed package also reports 0.1.0 at runtime, from the venv,
+    # with no possibility of the checkout satisfying the import.
+    env = _scrubbed_env(installed_env.scripts_dir)
+    result = _run_check(
+        [
+            installed_env.python,
+            "-c",
+            "import ocean_sonar; print(ocean_sonar.__version__, ocean_sonar.__file__)",
+        ],
+        cwd=outside_cwd,
+        env=env,
+        what="read installed ocean_sonar.__version__",
+    )
+    version_line, _, package_path = result.stdout.decode().strip().partition(" ")
+    assert version_line == "0.1.0"
+    assert Path(package_path).resolve().is_relative_to(installed_env.site_packages.resolve())
+    assert not Path(package_path).resolve().is_relative_to(REPO_ROOT)
 
 
 def test_installed_console_script_is_on_path(installed_env: InstalledEnv) -> None:
