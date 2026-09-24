@@ -20,9 +20,10 @@ summaries into one batch summary, :func:`serialize_batch` computes
 that batch summary once and encodes it as UTF-8 JSON bytes,
 :func:`load_dashboard_summary`
 reads such a JSON document back from a file, :func:`load_batch`
-reads a serialized batch document back from a file and
-:func:`compare_batch` compares two validated batch summaries by
-quality score and terrain coverage.
+reads a serialized batch document back from a file, :func:`compare_batch`
+compares two validated batch summaries by quality score and terrain
+coverage and :func:`rank_batches` ranks multiple validated batch
+summaries by quality score and terrain coverage.
 """
 
 from __future__ import annotations
@@ -53,6 +54,7 @@ __all__ = [
     "load_dashboard_summary",
     "load_batch",
     "compare_batch",
+    "rank_batches",
 ]
 
 _CROSSPOINT_KEYS = (
@@ -1575,4 +1577,74 @@ def compare_batch(first, second) -> dict:
         "second_score": second_score,
         "delta": delta,
         "winner": winner,
+    }
+
+
+def rank_batches(batches) -> dict:
+    """Rank multiple batch summaries by quality score and terrain coverage.
+
+    ``batches`` must be a non-empty ``list`` or ``tuple``; each item
+    must be a batch summary dict as returned by
+    :func:`aggregate_dashboard_summaries`, with keys exactly in the
+    order ``batch_count, tolerance_count, pass_count, fail_count,
+    first_pass_summary, terrain_total, terrain_valid,
+    terrain_coverage, quality_score``; writing ``bc`` for
+    ``batch_count``, ``tc`` for ``tolerance_count``, ``pc`` for
+    ``pass_count``, ``fc`` for ``fail_count``, ``fp`` for
+    ``first_pass_summary``, ``tt`` for ``terrain_total``, ``tv`` for
+    ``terrain_valid``, ``cv`` for ``terrain_coverage`` and ``sc`` for
+    ``quality_score``, the six count fields ``bc, tc, pc, fc, tt, tv``
+    must each be a non-bool int with ``bc > 0``, ``tc > 0``,
+    ``0 <= pc <= tc``, ``fc == tc - pc``, ``tt > 0`` and
+    ``0 <= tv <= tt``; ``fp`` must be ``None`` when ``pc == 0`` and
+    otherwise a non-bool int in ``[0, bc)``; and ``cv`` and ``sc`` must
+    be finite non-bool floats equal respectively to
+    ``round(tv / tt, 6)`` and
+    ``round(100 * (pc / tc) * (tv / tt), 6)``, with negative zero
+    normalized to ``0.0``.
+
+    A non-list/tuple outer container raises ``TypeError`` and an empty
+    one raises ``ValueError``; items are validated in input order with
+    the same contract as :func:`compare_batch`, stopping at the first
+    error, with every message prefixed ``batches[i]: `` (the
+    container/key-order messages read ``batches[i]: must be a dict`` /
+    ``batches[i]: keys must be in the order ...``). Item container,
+    key-order and field-type errors raise ``TypeError``; emptiness,
+    finiteness, range and relation errors raise ``ValueError``. The
+    input is not modified.
+
+    Returns a dict with keys in the order ``ranking, score_spread``:
+    ``ranking`` is a tuple with one ``(i, sc, cv)`` tuple per item,
+    sorted by ``sc`` descending, then ``cv`` descending, then the
+    original index ascending (``i`` a non-bool int, ``sc`` and ``cv``
+    the validated float values); ``score_spread`` is
+    ``round(max(sc) - min(sc), 6)`` as a float with negative zero
+    normalized to ``0.0``.
+    """
+    if not isinstance(batches, (list, tuple)):
+        raise TypeError("batches must be a list or tuple")
+    if len(batches) == 0:
+        raise ValueError("batches must be non-empty")
+
+    scores = []
+    coverages = []
+    for i, item in enumerate(batches):
+        item_prefix = f"batches[{i}]: "
+        _check_batch(item, prefix=item_prefix, label=f"batches[{i}]:")
+        scores.append(item["quality_score"])
+        coverages.append(item["terrain_coverage"])
+
+    order = sorted(
+        range(len(batches)),
+        key=lambda i: (-scores[i], -coverages[i], i),
+    )
+    ranking = tuple((i, scores[i], coverages[i]) for i in order)
+
+    score_spread = round(max(scores) - min(scores), 6)
+    if score_spread == 0:
+        score_spread = 0.0
+
+    return {
+        "ranking": ranking,
+        "score_spread": score_spread,
     }
