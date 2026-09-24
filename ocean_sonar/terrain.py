@@ -13,7 +13,14 @@ import math
 
 from .svp import _is_real_number
 
-__all__ = ["analyze", "analyze_layers", "compare_layers", "metrics", "stats"]
+__all__ = [
+    "analyze",
+    "analyze_layers",
+    "compare_layers",
+    "metrics",
+    "quality",
+    "stats",
+]
 
 
 def _round6(value):
@@ -508,4 +515,55 @@ def compare_layers(layers, slope_limit=5.0, roughness_limit=1.0):
         "slope_deltas": slope_deltas,
         "roughness_deltas": roughness_deltas,
         "stable": stable,
+    }
+
+
+def quality(layers, slope_limit=5.0, roughness_limit=1.0):
+    """Grade the multi-layer comparison of several depth grids.
+
+    ``layers``, ``slope_limit`` and ``roughness_limit`` and their
+    validation (including the strictly increasing ``r`` values, the
+    first-error order and the ``"layers[i]: "`` /
+    ``"layers[i].cells[j]: "`` prefixes) are exactly as for
+    :func:`compare_layers`; type mismatches (including bool) raise
+    ``TypeError``, all other constraint errors raise ``ValueError``.
+    :func:`compare_layers` is called exactly once with the arguments
+    unchanged, its exceptions propagate unchanged and inputs are not
+    modified.
+
+    With ``C`` the dict returned by :func:`compare_layers` and ``n``
+    the number of its layers, ``coverage`` holds, per layer,
+    ``round(valid / total, 6)`` from that layer's summary;
+    ``mean_coverage`` is ``round(math.fsum(coverage) / n, 6)`` and
+    ``score`` is ``round(100 * mean_coverage * (1 if C["stable"] else
+    0), 6)`` (negative zero normalized to ``0.0``). ``quality`` is
+    ``"pass"`` when ``C`` is stable and every coverage is ``1.0``, and
+    ``"fail"`` otherwise.
+
+    Returns a dict with keys in the order ``comparison, coverage,
+    mean_coverage, score, quality``: ``comparison`` is ``C`` as-is,
+    ``coverage`` is a tuple of ``n`` floats and ``mean_coverage``/
+    ``score`` are floats.
+    """
+    comparison = compare_layers(layers, slope_limit, roughness_limit)
+
+    summaries = comparison["layers"]
+    n = len(summaries)
+    coverage = tuple(
+        _round6(summary["valid"] / summary["total"]) for summary in summaries
+    )
+    mean_coverage = _round6(math.fsum(coverage) / n)
+    score = _round6(100 * mean_coverage * (1 if comparison["stable"] else 0))
+    grade = (
+        "pass"
+        if comparison["stable"] and all(value == 1.0 for value in coverage)
+        else "fail"
+    )
+
+    return {
+        "comparison": comparison,
+        "coverage": coverage,
+        "mean_coverage": mean_coverage,
+        "score": score,
+        "quality": grade,
     }
