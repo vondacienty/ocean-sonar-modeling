@@ -25,8 +25,10 @@ reads a serialized batch document back from a file,
 quality score and terrain coverage and :func:`rank_batches` ranks
 multiple validated batch summaries by quality score and terrain
 coverage; :func:`serialize_ranking` validates such a ranking result
-and encodes it as UTF-8 JSON bytes, and :func:`load_ranking` reads a
-serialized ranking document back from a file.
+and encodes it as UTF-8 JSON bytes, :func:`load_ranking` reads a
+serialized ranking document back from a file, and :func:`rank_files`
+loads one batch document per path, ranks them, serializes the ranking
+and overwrites an output file with it.
 """
 
 from __future__ import annotations
@@ -60,6 +62,7 @@ __all__ = [
     "rank_batches",
     "serialize_ranking",
     "load_ranking",
+    "rank_files",
 ]
 
 _CROSSPOINT_KEYS = (
@@ -1868,3 +1871,57 @@ def load_ranking(path) -> dict:
         )
 
     return ranking
+
+
+def rank_files(paths, output) -> bytes:
+    """Load batch summaries from files, rank them and write the ranking.
+
+    ``paths`` must be a non-empty ``list`` or ``tuple`` whose items are
+    each a non-empty ``str``; ``output`` must be a non-empty ``str``.
+    Validation order, stopping at the first error: the ``paths``
+    container (a non-list/tuple raises ``TypeError``), its non-emptiness
+    (an empty container raises ``ValueError``), then each item in order
+    (a non-str raises ``TypeError`` and an empty ``str`` raises
+    ``ValueError``), then ``output`` (a non-str raises ``TypeError`` and
+    an empty ``str`` raises ``ValueError``).
+
+    After validation, :func:`load_batch` is called exactly once per
+    path in ``paths`` order, the resulting batch summaries are passed
+    as a tuple to exactly one :func:`rank_batches` call and its result
+    to exactly one :func:`serialize_ranking` call. Every exception from
+    those calls — including ``OSError`` while reading — is propagated
+    unchanged, as are the ``TypeError``/``ValueError`` exceptions above;
+    inputs are not modified and ``output`` is not touched on failure.
+
+    Only once serialization succeeds is ``output`` overwritten by
+    opening it in binary mode (``"wb"``) and writing exactly the
+    serialized bytes, with no added newline. A missing parent
+    directory raises ``FileNotFoundError``, an existing directory at
+    ``output`` raises ``IsADirectoryError`` and every other ``OSError``
+    is propagated unchanged.
+
+    Returns the JSON document (exactly the
+    :func:`serialize_ranking` bytes) as ``bytes``.
+    """
+    if not isinstance(paths, (list, tuple)):
+        raise TypeError("paths must be a list or tuple")
+    if len(paths) == 0:
+        raise ValueError("paths must be non-empty")
+    for i, path in enumerate(paths):
+        if not isinstance(path, str):
+            raise TypeError(f"paths[{i}] must be a str")
+        if path == "":
+            raise ValueError(f"paths[{i}] must not be empty")
+    if not isinstance(output, str):
+        raise TypeError("output must be a str")
+    if output == "":
+        raise ValueError("output must not be empty")
+
+    batches = tuple(load_batch(path) for path in paths)
+    ranking = rank_batches(batches)
+    data = serialize_ranking(ranking)
+
+    with open(output, "wb") as handle:
+        handle.write(data)
+
+    return data
