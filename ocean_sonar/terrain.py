@@ -13,7 +13,7 @@ import math
 
 from .svp import _is_real_number
 
-__all__ = ["analyze", "analyze_layers", "metrics", "stats"]
+__all__ = ["analyze", "analyze_layers", "compare_layers", "metrics", "stats"]
 
 
 def _round6(value):
@@ -262,35 +262,13 @@ def stats(r, nx, ny, cells):
     }
 
 
-def analyze_layers(layers):
-    """Analyze several depth grids in one call.
-
-    ``layers`` is a non-empty list/tuple whose items, in input order,
-    are four-element list/tuples ``(r, nx, ny, cells)`` with the same
-    constraints as the parameters of :func:`analyze`.
-
-    Validation order: the outer container, non-emptiness, then per
-    layer ``i`` its container, length, ``r``, ``nx``, ``ny``, the
-    ``cells`` container and length, and finally per cell ``j`` its
-    container, length, ``count`` and ``mean``; the first error stops
-    the call. Container/type mismatches (including bool) raise
-    ``TypeError``, all other constraint errors raise ``ValueError``.
-    Errors are prefixed with ``"layers[i]: "`` or
-    ``"layers[i].cells[j]: "``.
-
-    Each layer is passed to :func:`analyze` unchanged. Returns a tuple
-    in input order of dicts with keys ``resolution``, ``nx``, ``ny``,
-    ``analysis`` (in that order): ``resolution`` is
-    ``round(float(r), 6)`` (negative zero normalized to ``0.0``),
-    ``nx``/``ny`` are ints and ``analysis`` is the tuple returned by
-    :func:`analyze` as-is. Inputs are not modified.
-    """
+def _validated_layers(layers):
+    """Validate ``layers`` exactly as :func:`analyze_layers` does."""
     if not isinstance(layers, (list, tuple)):
         raise TypeError("layers must be a list or tuple")
     if len(layers) == 0:
         raise ValueError("layers must not be empty")
 
-    results = []
     for i in range(len(layers)):
         prefix = f"layers[{i}]: "
         layer = layers[i]
@@ -345,6 +323,35 @@ def analyze_layers(layers):
                 if not mean >= 0:
                     raise ValueError(cell_prefix + "mean must be >= 0")
 
+
+def analyze_layers(layers):
+    """Analyze several depth grids in one call.
+
+    ``layers`` is a non-empty list/tuple whose items, in input order,
+    are four-element list/tuples ``(r, nx, ny, cells)`` with the same
+    constraints as the parameters of :func:`analyze`.
+
+    Validation order: the outer container, non-emptiness, then per
+    layer ``i`` its container, length, ``r``, ``nx``, ``ny``, the
+    ``cells`` container and length, and finally per cell ``j`` its
+    container, length, ``count`` and ``mean``; the first error stops
+    the call. Container/type mismatches (including bool) raise
+    ``TypeError``, all other constraint errors raise ``ValueError``.
+    Errors are prefixed with ``"layers[i]: "`` or
+    ``"layers[i].cells[j]: "``.
+
+    Each layer is passed to :func:`analyze` unchanged. Returns a tuple
+    in input order of dicts with keys ``resolution``, ``nx``, ``ny``,
+    ``analysis`` (in that order): ``resolution`` is
+    ``round(float(r), 6)`` (negative zero normalized to ``0.0``),
+    ``nx``/``ny`` are ints and ``analysis`` is the tuple returned by
+    :func:`analyze` as-is. Inputs are not modified.
+    """
+    _validated_layers(layers)
+
+    results = []
+    for i in range(len(layers)):
+        r, nx, ny, cells = layers[i]
         results.append(
             {
                 "resolution": _round6(r),
@@ -354,3 +361,82 @@ def analyze_layers(layers):
             }
         )
     return tuple(results)
+
+
+def compare_layers(layers, slope_limit=5.0, roughness_limit=1.0):
+    """Compare the slope/roughness summaries of several depth grids.
+
+    ``layers`` is a non-empty list/tuple whose items, in input order,
+    are four-element list/tuples ``(r, nx, ny, cells)`` with the same
+    constraints as the parameters of :func:`analyze`; the ``r`` values
+    must be strictly increasing. ``slope_limit`` and
+    ``roughness_limit`` are finite non-bool int/float thresholds
+    ``> 0``.
+
+    Validation order: ``layers`` (exactly as for
+    :func:`analyze_layers`, with errors prefixed with ``"layers[i]: "``
+    or ``"layers[i].cells[j]: "``), then the strictly increasing
+    ``r`` check, then ``slope_limit``, then ``roughness_limit``; the
+    first error stops the call. Type mismatches (including bool) raise
+    ``TypeError``, all other constraint errors raise ``ValueError``.
+
+    Each layer is summarized by exactly one :func:`stats` call in
+    input order; its exceptions propagate unchanged and the inputs are
+    not modified.
+
+    Returns a dict with keys in the order ``layers, slope_deltas,
+    roughness_deltas, stable``: ``layers`` is the tuple of the
+    :func:`stats` dicts in input order; ``slope_deltas``/
+    ``roughness_deltas`` are tuples of length ``len(layers) - 1``
+    whose entry ``i`` is ``None`` when either of the ``mean_slope``/
+    ``mean_roughness`` values of layers ``i + 1`` and ``i`` is
+    ``None``, and otherwise ``round(float(next - prev), 6)`` (negative
+    zero normalized to ``0.0``); ``stable`` is ``True`` when every
+    non-``None`` delta has absolute value at most the corresponding
+    threshold (vacuously ``True`` when there is nothing to compare),
+    ``False`` otherwise.
+    """
+    _validated_layers(layers)
+
+    for i in range(1, len(layers)):
+        if not layers[i][0] > layers[i - 1][0]:
+            raise ValueError(f"layers[{i}]: r must be strictly increasing")
+
+    for name, value in (("slope_limit", slope_limit), ("roughness_limit", roughness_limit)):
+        if not _is_real_number(value):
+            raise TypeError(f"{name} must be a non-bool int or float")
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite")
+        if not value > 0:
+            raise ValueError(f"{name} must be > 0")
+
+    summaries = tuple(stats(r, nx, ny, cells) for r, nx, ny, cells in layers)
+
+    def deltas(key):
+        result = []
+        for i in range(len(summaries) - 1):
+            prev = summaries[i][key]
+            following = summaries[i + 1][key]
+            if prev is None or following is None:
+                result.append(None)
+            else:
+                result.append(_round6(following - prev))
+        return tuple(result)
+
+    slope_deltas = deltas("mean_slope")
+    roughness_deltas = deltas("mean_roughness")
+
+    stable = all(
+        abs(delta) <= slope_limit for delta in slope_deltas if delta is not None
+    ) and all(
+        abs(delta) <= roughness_limit
+        for delta in roughness_deltas
+        if delta is not None
+    )
+
+    return {
+        "layers": summaries,
+        "slope_deltas": slope_deltas,
+        "roughness_deltas": roughness_deltas,
+        "stable": stable,
+    }
