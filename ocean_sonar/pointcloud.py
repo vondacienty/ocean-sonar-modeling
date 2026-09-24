@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import math
 
-from . import attitude, singlebeam, tide
+from . import attitude, grid, singlebeam, terrain, tide
 from .svp import _checked_profile, _is_real_number
 
-__all__ = ["build"]
+__all__ = ["build", "grid_metrics"]
 
 _FIELDS = ("angle", "time", "y", "roll", "pitch", "heave")
 
@@ -172,4 +172,42 @@ def build(observations, z, c, tide_times, levels, z0=0.0, datum=0.0):
             _round6(reduced_depths[i]),
         )
         for i in range(len(observations))
+    )
+
+
+def grid_metrics(points, bounds, resolutions):
+    """Bin points into grids and summarize each layer in one call.
+
+    ``points`` is a non-empty list/tuple of three-element lists/tuples
+    ``(x, y, d)``; ``bounds`` is a four-element list/tuple
+    ``(xmin, ymin, xmax, ymax)``; ``resolutions`` is a list/tuple of at
+    least two strictly increasing positive values. Grid boundaries,
+    empty-cell handling and all parameter validation (first-error
+    order, exception types) are exactly as for
+    :func:`ocean_sonar.grid.build`.
+
+    :func:`ocean_sonar.grid.build` is called exactly once with the
+    three arguments unchanged; then, in layer input order,
+    :func:`ocean_sonar.terrain.metrics` is called exactly once per
+    layer with its ``(r, nx, ny, cells)`` as produced — no reordering,
+    copying or repeated calls. Any exception raised by either function
+    propagates unchanged; inputs are not modified.
+
+    Returns a tuple in layer order of dicts with keys ``grid``,
+    ``metrics`` (in that order): ``grid`` is the layer tuple
+    ``(r, nx, ny, cells)`` exactly as returned by
+    :func:`~ocean_sonar.grid.build` and ``metrics`` is the dict
+    returned by :func:`~ocean_sonar.terrain.metrics` as-is, with keys
+    ``resolution, nx, ny, total, valid, coverage, min_depth,
+    max_depth, mean_depth, volume``. Tuple nesting, int/float/None
+    typing, 6-decimal rounding and negative-zero normalization follow
+    the contracts of the two underlying functions.
+    """
+    layers = grid.build(points, bounds, resolutions)
+    return tuple(
+        {
+            "grid": layer,
+            "metrics": terrain.metrics(layer[0], layer[1], layer[2], layer[3]),
+        }
+        for layer in layers
     )
