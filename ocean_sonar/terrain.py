@@ -13,7 +13,7 @@ import math
 
 from .svp import _is_real_number
 
-__all__ = ["analyze", "analyze_layers", "metrics"]
+__all__ = ["analyze", "analyze_layers", "metrics", "stats"]
 
 
 def _round6(value):
@@ -198,6 +198,67 @@ def metrics(r, nx, ny, cells):
         "max_depth": max_depth,
         "mean_depth": mean_depth,
         "volume": volume,
+    }
+
+
+def stats(r, nx, ny, cells):
+    """Summarize the slope/roughness analysis of a regular depth grid.
+
+    Inputs, the shape of ``cells`` and the validation order and
+    exception types are exactly as for :func:`analyze`; cell errors are
+    prefixed with ``"cells[i]: "``. :func:`analyze` is called exactly
+    once and its exceptions propagate unchanged; inputs are not
+    modified.
+
+    With ``A`` the tuple returned by :func:`analyze`, ``valid`` is the
+    number of non-empty cells, ``slope_valid`` the number of entries of
+    ``A`` whose slope is not ``None`` and ``roughness_valid`` the
+    number whose roughness is not ``None``. ``min_slope``/
+    ``max_slope``/``mean_slope`` and ``min_roughness``/
+    ``max_roughness``/``mean_roughness`` summarize the non-``None``
+    slopes and roughnesses of ``A``, with means computed via
+    ``math.fsum``; when the corresponding count is zero all three
+    values of that metric are ``None``.
+
+    Returns a dict with keys in the order ``resolution, total, valid,
+    slope_valid, roughness_valid, min_slope, max_slope, mean_slope,
+    min_roughness, max_roughness, mean_roughness``: ``total`` is
+    ``nx * ny``, the counts are ints and every non-``None`` numeric
+    value is rounded with ``round(float(v), 6)`` (negative zero
+    normalized to ``0.0``).
+    """
+    analysis = analyze(r, nx, ny, cells)
+
+    valid = sum(1 for cell in cells if cell[0] > 0)
+    slopes = [slope for slope, _ in analysis if slope is not None]
+    roughnesses = [roughness for _, roughness in analysis if roughness is not None]
+
+    if slopes:
+        min_slope = _round6(min(slopes))
+        max_slope = _round6(max(slopes))
+        mean_slope = _round6(math.fsum(slopes) / len(slopes))
+    else:
+        min_slope = max_slope = mean_slope = None
+
+    if roughnesses:
+        min_roughness = _round6(min(roughnesses))
+        max_roughness = _round6(max(roughnesses))
+        mean_roughness = _round6(math.fsum(roughnesses) / len(roughnesses))
+    else:
+        min_roughness = max_roughness = mean_roughness = None
+
+    return {
+        "resolution": _round6(r),
+        "total": int(nx * ny),
+        "valid": valid,
+        "slope_valid": len(slopes),
+        "roughness_valid": len(roughnesses),
+        "min_slope": min_slope,
+        "max_slope": max_slope,
+        "mean_slope": mean_slope,
+        "min_roughness": min_roughness,
+        "max_roughness": max_roughness,
+        "mean_roughness": mean_roughness,
     }
 
 
