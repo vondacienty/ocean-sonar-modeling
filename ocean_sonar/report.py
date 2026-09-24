@@ -25,7 +25,8 @@ reads a serialized batch document back from a file,
 quality score and terrain coverage and :func:`rank_batches` ranks
 multiple validated batch summaries by quality score and terrain
 coverage; :func:`serialize_ranking` validates such a ranking result
-and encodes it as UTF-8 JSON bytes.
+and encodes it as UTF-8 JSON bytes, and :func:`load_ranking` reads a
+serialized ranking document back from a file.
 """
 
 from __future__ import annotations
@@ -58,6 +59,7 @@ __all__ = [
     "compare_batch",
     "rank_batches",
     "serialize_ranking",
+    "load_ranking",
 ]
 
 _CROSSPOINT_KEYS = (
@@ -1651,41 +1653,7 @@ def rank_batches(batches) -> dict:
     }
 
 
-def serialize_ranking(ranking) -> bytes:
-    """Validate a :func:`rank_batches` result and encode it as UTF-8 JSON bytes.
-
-    ``ranking`` must be the dict returned by :func:`rank_batches`, with
-    keys exactly in the order ``ranking, score_spread``. ``ranking``
-    itself must be a non-empty tuple whose items are
-    ``(index, score, coverage)`` triples: ``index`` a non-bool
-    non-negative int whose values form exactly the set
-    ``{0, 1, ..., n - 1}`` where ``n`` is the tuple length; ``score`` a
-    finite non-bool float in ``[0, 100]``; ``coverage`` a finite
-    non-bool float in ``[0, 1]``. The triples must be ordered by
-    ``score`` descending, then ``coverage`` descending, then ``index``
-    ascending. ``score_spread`` must be a finite non-bool float equal
-    to ``round(max(score) - min(score), 6)`` (negative zero normalized
-    to ``0.0``).
-
-    Validation order, stopping at the first error: container, key
-    order, the ``ranking`` tuple (container, non-emptiness, then each
-    triple in order — tuple level, arity, then index, score and
-    coverage), then ``score_spread``. Container, key-order, tuple-level
-    and field-type mismatches raise ``TypeError``; emptiness, arity,
-    finiteness, range, index-set, ordering and score_spread-relation
-    errors raise ``ValueError``; per-triple messages are prefixed with
-    ``ranking[i]: ``. The input is not modified.
-
-    On success the ranking is encoded as UTF-8 JSON with the key order
-    preserved, ``ensure_ascii=False``, ``separators=(",", ":")``,
-    ``allow_nan=False``, no indentation, no BOM and no trailing
-    newline. Floats are first rounded with ``round(float(v), 6)`` and
-    negative zero is normalized to ``0.0``; tuples are recursively
-    converted to arrays. Any JSON or UTF-8 encoding failure raises
-    ``ValueError``.
-
-    Returns the JSON document as ``bytes``.
-    """
+def _check_ranking(ranking):
     if not isinstance(ranking, dict):
         raise TypeError("ranking must be a dict")
     if list(ranking.keys()) != list(_RANKING_KEYS):
@@ -1771,6 +1739,8 @@ def serialize_ranking(ranking) -> bytes:
             "score_spread must equal round(max(score) - min(score), 6)"
         )
 
+
+def _dump_ranking(ranking):
     try:
         text = json.dumps(
             _to_jsonable(ranking),
@@ -1783,3 +1753,118 @@ def serialize_ranking(ranking) -> bytes:
         raise ValueError(
             f"ranking: could not be serialized to JSON: {exc}"
         ) from exc
+
+
+def serialize_ranking(ranking) -> bytes:
+    """Validate a :func:`rank_batches` result and encode it as UTF-8 JSON bytes.
+
+    ``ranking`` must be the dict returned by :func:`rank_batches`, with
+    keys exactly in the order ``ranking, score_spread``. ``ranking``
+    itself must be a non-empty tuple whose items are
+    ``(index, score, coverage)`` triples: ``index`` a non-bool
+    non-negative int whose values form exactly the set
+    ``{0, 1, ..., n - 1}`` where ``n`` is the tuple length; ``score`` a
+    finite non-bool float in ``[0, 100]``; ``coverage`` a finite
+    non-bool float in ``[0, 1]``. The triples must be ordered by
+    ``score`` descending, then ``coverage`` descending, then ``index``
+    ascending. ``score_spread`` must be a finite non-bool float equal
+    to ``round(max(score) - min(score), 6)`` (negative zero normalized
+    to ``0.0``).
+
+    Validation order, stopping at the first error: container, key
+    order, the ``ranking`` tuple (container, non-emptiness, then each
+    triple in order — tuple level, arity, then index, score and
+    coverage), then ``score_spread``. Container, key-order, tuple-level
+    and field-type mismatches raise ``TypeError``; emptiness, arity,
+    finiteness, range, index-set, ordering and score_spread-relation
+    errors raise ``ValueError``; per-triple messages are prefixed with
+    ``ranking[i]: ``. The input is not modified.
+
+    On success the ranking is encoded as UTF-8 JSON with the key order
+    preserved, ``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``, no indentation, no BOM and no trailing
+    newline. Floats are first rounded with ``round(float(v), 6)`` and
+    negative zero is normalized to ``0.0``; tuples are recursively
+    converted to arrays. Any JSON or UTF-8 encoding failure raises
+    ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    _check_ranking(ranking)
+    return _dump_ranking(ranking)
+
+
+def load_ranking(path) -> dict:
+    """Load a :func:`serialize_ranking`-produced JSON ranking from ``path``.
+
+    ``path`` must be a non-empty ``str``: a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``. The file
+    is opened in binary mode (``"rb"``) and read in full; a missing
+    file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError`` and every other ``OSError`` is propagated
+    unchanged. The file is not modified.
+
+    The bytes must be exactly those produced by
+    :func:`serialize_ranking` for the same value: compact UTF-8 JSON
+    with no BOM and no trailing newline. A BOM, a trailing newline, a
+    UTF-8 decoding failure or a JSON parsing failure raises
+    ``ValueError``; the ``NaN``/``Infinity`` constants and any other
+    non-finite token are rejected.
+
+    The decoded value must be a JSON object with top-level keys exactly
+    in the order ``ranking, score_spread``. ``ranking`` must be a
+    non-empty array (recursively converted to a tuple, as are all
+    nested arrays) of three-element ``(index, score, coverage)``
+    arrays: ``index`` a non-bool non-negative int whose values form
+    exactly the set ``{0, 1, ..., n - 1}`` where ``n`` is the array
+    length, ``score`` a finite non-bool float in ``[0, 100]`` and
+    ``coverage`` a finite non-bool float in ``[0, 1]``; the triples
+    must be ordered by ``score`` descending, then ``coverage``
+    descending, then ``index`` ascending. ``score_spread`` must be a
+    finite non-bool float equal to
+    ``round(max(score) - min(score), 6)``, with negative zero
+    normalized to ``0.0``. Any key-order, type, range, index-set,
+    ordering, relation, parse or canonical-byte mismatch raises
+    ``ValueError``.
+
+    Returns the ranking as a dict with keys in the order
+    ``ranking, score_spread``; the file is never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(text, parse_constant=_reject_json_constant)
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    ranking = _from_jsonable(parsed)
+    try:
+        _check_ranking(ranking)
+        canonical = _dump_ranking(ranking)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid ranking: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical serialize_ranking output"
+        )
+
+    return ranking
