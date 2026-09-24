@@ -19,8 +19,10 @@ renders the summary as plain text,
 summaries into one batch summary, :func:`serialize_batch` computes
 that batch summary once and encodes it as UTF-8 JSON bytes,
 :func:`load_dashboard_summary`
-reads such a JSON document back from a file and :func:`load_batch`
-reads a serialized batch document back from a file.
+reads such a JSON document back from a file, :func:`load_batch`
+reads a serialized batch document back from a file and
+:func:`compare_batch` compares two validated batch summaries by
+quality score and terrain coverage.
 """
 
 from __future__ import annotations
@@ -50,6 +52,7 @@ __all__ = [
     "load",
     "load_dashboard_summary",
     "load_batch",
+    "compare_batch",
 ]
 
 _CROSSPOINT_KEYS = (
@@ -926,12 +929,14 @@ def _dump_batch(batch):
         ) from exc
 
 
-def _check_batch(batch):
+def _check_batch(batch, prefix="batch summary: ", label=None):
+    if label is None:
+        label = "batch summary"
     if not isinstance(batch, dict):
-        raise TypeError("batch summary must be a dict")
+        raise TypeError(f"{label} must be a dict")
     if list(batch.keys()) != list(_BATCH_SUMMARY_KEYS):
         raise TypeError(
-            "batch summary keys must be in the order "
+            f"{label} keys must be in the order "
             "batch_count, tolerance_count, pass_count, fail_count, "
             "first_pass_summary, terrain_total, terrain_valid, "
             "terrain_coverage, quality_score"
@@ -939,84 +944,84 @@ def _check_batch(batch):
 
     batch_count = batch["batch_count"]
     if type(batch_count) is not int:
-        raise TypeError("batch summary: batch_count must be a non-bool int")
+        raise TypeError(prefix + "batch_count must be a non-bool int")
     if not batch_count > 0:
-        raise ValueError("batch summary: batch_count must be > 0")
+        raise ValueError(prefix + "batch_count must be > 0")
 
     tolerance_count = batch["tolerance_count"]
     if type(tolerance_count) is not int:
-        raise TypeError("batch summary: tolerance_count must be a non-bool int")
+        raise TypeError(prefix + "tolerance_count must be a non-bool int")
     if not tolerance_count > 0:
-        raise ValueError("batch summary: tolerance_count must be > 0")
+        raise ValueError(prefix + "tolerance_count must be > 0")
 
     pass_count = batch["pass_count"]
     if type(pass_count) is not int:
-        raise TypeError("batch summary: pass_count must be a non-bool int")
+        raise TypeError(prefix + "pass_count must be a non-bool int")
     if not 0 <= pass_count <= tolerance_count:
         raise ValueError(
-            "batch summary: pass_count must be in [0, tolerance_count]"
+            prefix + "pass_count must be in [0, tolerance_count]"
         )
 
     fail_count = batch["fail_count"]
     if type(fail_count) is not int:
-        raise TypeError("batch summary: fail_count must be a non-bool int")
+        raise TypeError(prefix + "fail_count must be a non-bool int")
     if fail_count != tolerance_count - pass_count:
         raise ValueError(
-            "batch summary: fail_count must equal tolerance_count - pass_count"
+            prefix + "fail_count must equal tolerance_count - pass_count"
         )
 
     first_pass_summary = batch["first_pass_summary"]
     if pass_count == 0:
         if first_pass_summary is not None:
             raise ValueError(
-                "batch summary: first_pass_summary must be None when "
-                "pass_count is 0"
+                prefix
+                + "first_pass_summary must be None when pass_count is 0"
             )
     else:
         if type(first_pass_summary) is not int:
             raise TypeError(
-                "batch summary: first_pass_summary must be None or a "
-                "non-bool int"
+                prefix
+                + "first_pass_summary must be None or a non-bool int"
             )
         if not 0 <= first_pass_summary < batch_count:
             raise ValueError(
-                "batch summary: first_pass_summary must be in "
-                "[0, batch_count)"
+                prefix + "first_pass_summary must be in [0, batch_count)"
             )
 
     terrain_total = batch["terrain_total"]
     if type(terrain_total) is not int:
-        raise TypeError("batch summary: terrain_total must be a non-bool int")
+        raise TypeError(prefix + "terrain_total must be a non-bool int")
     if not terrain_total > 0:
-        raise ValueError("batch summary: terrain_total must be > 0")
+        raise ValueError(prefix + "terrain_total must be > 0")
 
     terrain_valid = batch["terrain_valid"]
     if type(terrain_valid) is not int:
-        raise TypeError("batch summary: terrain_valid must be a non-bool int")
+        raise TypeError(prefix + "terrain_valid must be a non-bool int")
     if not 0 <= terrain_valid <= terrain_total:
         raise ValueError(
-            "batch summary: terrain_valid must be in [0, terrain_total]"
+            prefix + "terrain_valid must be in [0, terrain_total]"
         )
 
     terrain_coverage = batch["terrain_coverage"]
     if type(terrain_coverage) is not float:
-        raise TypeError("batch summary: terrain_coverage must be a float")
+        raise TypeError(prefix + "terrain_coverage must be a float")
     if not math.isfinite(terrain_coverage):
-        raise ValueError("batch summary: terrain_coverage must be finite")
+        raise ValueError(prefix + "terrain_coverage must be finite")
     expected_coverage = round(terrain_valid / terrain_total, 6)
     if expected_coverage == 0:
         expected_coverage = 0.0
     if terrain_coverage != expected_coverage:
         raise ValueError(
-            "batch summary: terrain_coverage must equal "
+            prefix
+            + "terrain_coverage must equal "
             "round(terrain_valid / terrain_total, 6)"
         )
 
     quality_score = batch["quality_score"]
     if type(quality_score) is not float:
-        raise TypeError("batch summary: quality_score must be a float")
+        raise TypeError(prefix + "quality_score must be a float")
     if not math.isfinite(quality_score):
-        raise ValueError("batch summary: quality_score must be finite")
+        raise ValueError(prefix + "quality_score must be finite")
     expected_score = round(
         100 * (pass_count / tolerance_count) * (terrain_valid / terrain_total),
         6,
@@ -1025,7 +1030,8 @@ def _check_batch(batch):
         expected_score = 0.0
     if quality_score != expected_score:
         raise ValueError(
-            "batch summary: quality_score must equal round(100 * "
+            prefix
+            + "quality_score must equal round(100 * "
             "(pass_count / tolerance_count) * "
             "(terrain_valid / terrain_total), 6)"
         )
@@ -1495,3 +1501,78 @@ def load_batch(path) -> dict:
         )
 
     return batch
+
+
+def compare_batch(first, second) -> dict:
+    """Compare two batch summaries by quality score and terrain coverage.
+
+    Each argument must be a batch summary dict as returned by
+    :func:`aggregate_dashboard_summaries`, with keys exactly in the
+    order ``batch_count, tolerance_count, pass_count, fail_count,
+    first_pass_summary, terrain_total, terrain_valid,
+    terrain_coverage, quality_score``; writing ``bc`` for
+    ``batch_count``, ``tc`` for ``tolerance_count``, ``pc`` for
+    ``pass_count``, ``fc`` for ``fail_count``, ``fp`` for
+    ``first_pass_summary``, ``tt`` for ``terrain_total`` and ``tv``
+    for ``terrain_valid``, the six count fields ``bc, tc, pc, fc, tt,
+    tv`` must each be a non-bool int with ``bc > 0``, ``tc > 0``,
+    ``0 <= pc <= tc``, ``fc == tc - pc``, ``tt > 0`` and
+    ``0 <= tv <= tt``; ``fp`` must be ``None`` when ``pc == 0`` and
+    otherwise a non-bool int in ``[0, bc)``; and
+    ``terrain_coverage`` (``cv``) and ``quality_score`` (``sc``) must
+    be finite non-bool floats equal respectively to
+    ``round(tv / tt, 6)`` and
+    ``round(100 * (pc / tc) * (tv / tt), 6)``, with negative zero
+    normalized to ``0.0``.
+
+    Validation order is ``first`` fully, then ``second``, stopping at
+    the first error; the container and key-order messages read
+    ``first must be a dict`` / ``first keys must be in the order ...``
+    and field messages are prefixed ``first: `` (likewise
+    ``second``). Non-dict containers, wrong key order and field-type
+    mismatches raise ``TypeError``; range, relation and finiteness
+    errors raise ``ValueError``. Both inputs are validated read-only
+    and are not modified.
+
+    Returns a dict with keys in the order
+    ``first_score, second_score, delta, winner``:
+    ``first_score`` and ``second_score`` are the respective
+    ``quality_score`` values (``sc``); ``delta`` is
+    ``round(second_score - first_score, 6)`` as a float with negative
+    zero normalized to ``0.0``; and ``winner`` is decided by comparing
+    the original (unsubtracted) ``quality_score`` values — ``"second"``
+    when ``second`` has the greater score, ``"first"`` when ``first``
+    does, and on an exact score tie the batch with the greater
+    ``terrain_coverage`` wins (compared on the original coverage
+    values), with ``"tie"`` returned only when both are equal.
+    """
+    _check_batch(first, prefix="first: ", label="first")
+    _check_batch(second, prefix="second: ", label="second")
+
+    first_score = first["quality_score"]
+    second_score = second["quality_score"]
+
+    delta = round(second_score - first_score, 6)
+    if delta == 0:
+        delta = 0.0
+
+    if second_score > first_score:
+        winner = "second"
+    elif first_score > second_score:
+        winner = "first"
+    else:
+        second_coverage = second["terrain_coverage"]
+        first_coverage = first["terrain_coverage"]
+        if second_coverage > first_coverage:
+            winner = "second"
+        elif first_coverage > second_coverage:
+            winner = "first"
+        else:
+            winner = "tie"
+
+    return {
+        "first_score": first_score,
+        "second_score": second_score,
+        "delta": delta,
+        "winner": winner,
+    }
