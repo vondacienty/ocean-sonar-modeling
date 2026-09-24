@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import math
 
-from . import attitude, singlebeam, tide
+from . import attitude, grid, singlebeam, terrain, tide
 from .svp import _checked_profile, _is_real_number
 
-__all__ = ["build"]
+__all__ = ["build", "grid_metrics"]
 
 _FIELDS = ("angle", "time", "y", "roll", "pitch", "heave")
 
@@ -172,4 +172,39 @@ def build(observations, z, c, tide_times, levels, z0=0.0, datum=0.0):
             _round6(reduced_depths[i]),
         )
         for i in range(len(observations))
+    )
+
+
+def grid_metrics(points, bounds, resolutions):
+    """Bin points into grids and summarize each layer in one call.
+
+    ``points`` is a non-empty list/tuple of three-element lists/tuples
+    ``(x, y, d)``; ``bounds`` and ``resolutions`` follow the exact
+    contract of :func:`ocean_sonar.grid.build`, including the grid
+    boundary and empty-cell rules.
+
+    The pipeline runs :func:`ocean_sonar.grid.build` exactly once on
+    the arguments as given, then calls
+    :func:`ocean_sonar.terrain.metrics` exactly once per returned layer
+    in layer order, passing that layer's ``(r, nx, ny, cells)``
+    unchanged. Validation, first-error order and exception types are
+    those of the two underlying functions; any exception propagates
+    unchanged and the inputs are not modified.
+
+    Returns a tuple in layer order; each item is a dict with keys
+    ``grid``, ``metrics`` (in that order): ``grid`` is the layer
+    ``(r, nx, ny, cells)`` exactly as returned by
+    :func:`ocean_sonar.grid.build` and ``metrics`` is the dict returned
+    by :func:`ocean_sonar.terrain.metrics` as-is, with its key order
+    ``resolution, nx, ny, total, valid, coverage, min_depth,
+    max_depth, mean_depth, volume`` and its int/float/``None``,
+    6-decimal rounding and negative-zero rules preserved.
+    """
+    layers = grid.build(points, bounds, resolutions)
+    return tuple(
+        {
+            "grid": layer,
+            "metrics": terrain.metrics(layer[0], layer[1], layer[2], layer[3]),
+        }
+        for layer in layers
     )
