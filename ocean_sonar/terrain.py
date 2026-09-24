@@ -16,6 +16,7 @@ from .svp import _is_real_number
 __all__ = [
     "analyze",
     "analyze_layers",
+    "breakdown",
     "compare_layers",
     "metrics",
     "quality",
@@ -515,6 +516,172 @@ def compare_layers(layers, slope_limit=5.0, roughness_limit=1.0):
         "slope_deltas": slope_deltas,
         "roughness_deltas": roughness_deltas,
         "stable": stable,
+    }
+
+
+def breakdown(layers, slope_limit=5.0, roughness_limit=1.0):
+    """Break down per-cell slope/roughness exceedance per depth grid.
+
+    ``layers``, ``slope_limit`` and ``roughness_limit`` have exactly the
+    same constraints and validation order as in
+    :func:`compare_layers` (including the strictly increasing ``r``
+    values, the first-error rule and the ``"layers[i]: "`` /
+    ``"layers[i].cells[j]: "`` prefixes); the limits are finite
+    non-bool ints/floats ``> 0``. Type mismatches (including bool)
+    raise ``TypeError`` and all other constraint errors raise
+    ``ValueError``.
+
+    Each layer is passed to :func:`analyze` exactly once, in input
+    order; exceptions propagate unchanged and inputs are not modified.
+
+    For each layer, ``slope_valid``/``roughness_valid`` are the numbers
+    of entries whose slope/roughness is not ``None`` in the tuple
+    returned by :func:`analyze`, and ``slope_exceed``/
+    ``roughness_exceed`` are the numbers of those values strictly
+    greater than ``slope_limit``/``roughness_limit``.
+    ``slope_rate``/``roughness_rate`` are the exceedance fractions
+    ``slope_exceed / slope_valid`` and
+    ``roughness_exceed / roughness_valid`` (``0.0`` when the
+    denominator is zero), rounded with ``round(float(v), 6)``
+    (negative zero normalized to ``0.0``). ``quality`` is ``"pass"``
+    when both exceedance counts are zero and ``"fail"`` otherwise.
+
+    Returns a dict with keys in the order ``layers, overall``:
+    ``layers`` is a tuple, in input order, of dicts with keys
+    ``resolution, total, slope_valid, roughness_valid, slope_exceed,
+    roughness_exceed, slope_rate, roughness_rate, quality`` (in that
+    order), where ``resolution`` is ``round(float(r), 6)`` (negative
+    zero normalized to ``0.0``), ``total`` is ``nx * ny`` and the
+    counts are ints. ``overall`` is ``"pass"`` when every layer passes
+    and ``"fail"`` otherwise.
+    """
+    if not isinstance(layers, (list, tuple)):
+        raise TypeError("layers must be a list or tuple")
+    if len(layers) == 0:
+        raise ValueError("layers must not be empty")
+
+    validated = []
+    for i in range(len(layers)):
+        prefix = f"layers[{i}]: "
+        layer = layers[i]
+        if not isinstance(layer, (list, tuple)):
+            raise TypeError(prefix + "must be a list or tuple")
+        if len(layer) != 4:
+            raise ValueError(prefix + "must have 4 elements")
+        r, nx, ny, cells = layer
+
+        if not _is_real_number(r):
+            raise TypeError(prefix + "r must be a non-bool int or float")
+        if not math.isfinite(r):
+            raise ValueError(prefix + "r must be finite")
+        if not r > 0:
+            raise ValueError(prefix + "r must be > 0")
+
+        for name, value in (("nx", nx), ("ny", ny)):
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise TypeError(prefix + f"{name} must be a non-bool int")
+            if not value > 0:
+                raise ValueError(prefix + f"{name} must be > 0")
+
+        if not isinstance(cells, (list, tuple)):
+            raise TypeError(prefix + "cells must be a list or tuple")
+        if len(cells) != nx * ny:
+            raise ValueError(prefix + "cells must have nx * ny elements")
+
+        for j in range(len(cells)):
+            cell_prefix = f"layers[{i}].cells[{j}]: "
+            cell = cells[j]
+            if not isinstance(cell, (list, tuple)):
+                raise TypeError(cell_prefix + "must be a list or tuple")
+            if len(cell) != 2:
+                raise ValueError(cell_prefix + "must have 2 elements")
+            count, mean = cell
+            if not isinstance(count, int) or isinstance(count, bool):
+                raise TypeError(cell_prefix + "count must be a non-bool int")
+            if not count >= 0:
+                raise ValueError(cell_prefix + "count must be >= 0")
+            if count == 0:
+                if mean is not None:
+                    raise ValueError(
+                        cell_prefix + "mean must be None when count is 0"
+                    )
+            else:
+                if not _is_real_number(mean):
+                    raise TypeError(
+                        cell_prefix + "mean must be a non-bool int or float"
+                    )
+                if not math.isfinite(mean):
+                    raise ValueError(cell_prefix + "mean must be finite")
+                if not mean >= 0:
+                    raise ValueError(cell_prefix + "mean must be >= 0")
+
+        validated.append((r, nx, ny, cells))
+
+    for i in range(1, len(validated)):
+        if not validated[i][0] > validated[i - 1][0]:
+            raise ValueError(
+                f"layers[{i}]: r must be strictly greater than the "
+                f"previous layer's r"
+            )
+
+    for name, value in (
+        ("slope_limit", slope_limit),
+        ("roughness_limit", roughness_limit),
+    ):
+        if not _is_real_number(value):
+            raise TypeError(f"{name} must be a non-bool int or float")
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite")
+        if not value > 0:
+            raise ValueError(f"{name} must be > 0")
+
+    results = []
+    for r, nx, ny, cells in validated:
+        analysis = analyze(r, nx, ny, cells)
+
+        slope_valid = sum(1 for slope, _ in analysis if slope is not None)
+        roughness_valid = sum(
+            1 for _, roughness in analysis if roughness is not None
+        )
+        slope_exceed = sum(
+            1 for slope, _ in analysis if slope is not None and slope > slope_limit
+        )
+        roughness_exceed = sum(
+            1
+            for _, roughness in analysis
+            if roughness is not None and roughness > roughness_limit
+        )
+        slope_rate = (
+            _round6(slope_exceed / slope_valid) if slope_valid > 0 else 0.0
+        )
+        roughness_rate = (
+            _round6(roughness_exceed / roughness_valid)
+            if roughness_valid > 0
+            else 0.0
+        )
+        grade = (
+            "pass" if slope_exceed == 0 and roughness_exceed == 0 else "fail"
+        )
+
+        results.append(
+            {
+                "resolution": _round6(r),
+                "total": int(nx * ny),
+                "slope_valid": int(slope_valid),
+                "roughness_valid": int(roughness_valid),
+                "slope_exceed": int(slope_exceed),
+                "roughness_exceed": int(roughness_exceed),
+                "slope_rate": slope_rate,
+                "roughness_rate": roughness_rate,
+                "quality": grade,
+            }
+        )
+
+    overall = "pass" if all(layer["quality"] == "pass" for layer in results) else "fail"
+
+    return {
+        "layers": tuple(results),
+        "overall": overall,
     }
 
 
