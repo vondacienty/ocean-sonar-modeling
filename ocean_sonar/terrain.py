@@ -18,6 +18,7 @@ __all__ = [
     "analyze_layers",
     "breakdown",
     "compare_layers",
+    "dashboard",
     "metrics",
     "quality",
     "stats",
@@ -796,5 +797,40 @@ def trend(layers, slope_limit=5.0, roughness_limit=1.0):
         "slope_deltas": slope_deltas,
         "roughness_deltas": roughness_deltas,
         "monotonic": monotonic,
+        "overall": overall,
+    }
+
+
+def dashboard(layers, slope_limit=5.0, roughness_limit=1.0):
+    """Combine the :func:`quality` grade and the :func:`trend` grade.
+
+    ``layers``, ``slope_limit`` and ``roughness_limit`` have exactly the
+    same constraints and validation order as in :func:`quality` and
+    :func:`trend` (including the strictly increasing ``r`` values,
+    finite non-bool limits ``> 0``, the first-error rule and the
+    ``"layers[i]: "`` / ``"layers[i].cells[j]: "`` prefixes); type
+    mismatches (including bool) raise ``TypeError`` and all other
+    constraint errors raise ``ValueError``.
+
+    :func:`quality` is called exactly once as
+    ``quality(layers, slope_limit, roughness_limit)`` and then
+    :func:`trend` is called exactly once as
+    ``trend(layers, slope_limit, roughness_limit)``; exceptions from
+    either call propagate unchanged and inputs are not modified.
+
+    Returns a dict with keys in the order ``quality, trend, overall``:
+    ``quality`` and ``trend`` are the dicts returned by the two calls
+    as-is, and ``overall`` is ``"pass"`` when the ``quality`` value of
+    the first dict and the ``overall`` value of the second dict are
+    both ``"pass"``, and ``"fail"`` otherwise.
+    """
+    Q = quality(layers, slope_limit, roughness_limit)
+    T = trend(layers, slope_limit, roughness_limit)
+
+    overall = "pass" if Q["quality"] == "pass" and T["overall"] == "pass" else "fail"
+
+    return {
+        "quality": Q,
+        "trend": T,
         "overall": overall,
     }
