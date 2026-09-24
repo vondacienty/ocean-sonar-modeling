@@ -4,7 +4,11 @@ These tests prove that an actually *installed* copy of the project (not the
 source checkout) is what runs after installation:
 
 * a wheel is built with the current interpreter and installed with
-  ``pip install --no-index`` into a freshly created venv;
+  ``pip install --no-index --no-deps --force-reinstall`` into a freshly
+  created venv;
+* the installed distribution metadata reports version ``0.1.0`` and the
+  ``.dist-info`` directory in the venv's ``site-packages`` is the one named
+  after exactly that wheel;
 * every tested subprocess is started from a working directory outside the
   source tree with an environment that cannot inject the checkout
   (``PYTHONPATH`` and friends removed, user site-packages disabled);
@@ -67,12 +71,14 @@ class InstalledEnv:
         console_script: Path,
         site_packages: Path,
         scripts_dir: Path,
+        wheel: Path,
     ) -> None:
         self.root = root
         self.python = python
         self.console_script = console_script
         self.site_packages = site_packages
         self.scripts_dir = scripts_dir
+        self.wheel = wheel
 
 
 @pytest.fixture(scope="module")
@@ -192,8 +198,13 @@ def installed_env(tmp_path_factory: pytest.TempPathFactory, outside_cwd: Path) -
     scripts_dir = interpreter.parent
 
     env = _scrubbed_env(scripts_dir)
+    # Install from the wheel path only (never the source tree), offline, and
+    # force-reinstall so a pre-existing copy could never satisfy the request.
     _run_check(
-        [interpreter, "-m", "pip", "install", "--no-index", "--no-deps", str(wheel)],
+        [
+            interpreter, "-m", "pip", "install",
+            "--no-index", "--no-deps", "--force-reinstall", str(wheel),
+        ],
         cwd=outside_cwd,
         env=env,
         what="install wheel into fresh venv",
@@ -219,6 +230,7 @@ def installed_env(tmp_path_factory: pytest.TempPathFactory, outside_cwd: Path) -
         console_script=console_script,
         site_packages=site_packages,
         scripts_dir=scripts_dir,
+        wheel=wheel,
     )
 
 
@@ -427,6 +439,46 @@ def test_installed_main_resides_in_venv_site_packages(
 def test_installed_console_script_is_on_path(installed_env: InstalledEnv) -> None:
     assert installed_env.console_script.is_file()
     assert installed_env.python.is_file()
+
+
+def test_installed_metadata_matches_built_wheel(
+    installed_env: InstalledEnv, outside_cwd: Path
+) -> None:
+    """The installed dist-info is exactly the one the built wheel carries."""
+    # Wheel filename: {distribution}-{version}-{py tag}-{abi tag}-{platform}.whl
+    wheel_name = installed_env.wheel.name
+    assert wheel_name.endswith(".whl")
+    dist_name, wheel_version = wheel_name[: -len(".whl")].split("-")[:2]
+    assert wheel_version == "0.1.0", f"unexpected wheel version in {wheel_name}"
+
+    # The venv's own importlib.metadata must report the same version, located
+    # inside the venv's site-packages (not anywhere on the host).
+    probe = _run_check(
+        [
+            installed_env.python,
+            "-c",
+            "import importlib.metadata as m, json;"
+            "d = m.distribution('ocean-sonar-modeling');"
+            "print(json.dumps({'version': d.version, 'path': str(d._path)}))",
+        ],
+        cwd=outside_cwd,
+        env=_scrubbed_env(installed_env.scripts_dir),
+        what="read installed distribution metadata",
+    )
+    metadata = json.loads(probe.stdout.decode())
+    assert metadata["version"] == "0.1.0"
+    dist_info = Path(str(metadata["path"])).resolve()
+    assert dist_info.is_relative_to(installed_env.site_packages.resolve())
+    assert not dist_info.is_relative_to(REPO_ROOT)
+
+    # The dist-info directory name must be derived from this exact wheel.
+    assert dist_info.name == f"{dist_name}-{wheel_version}.dist-info"
+    assert dist_info.is_dir()
+    siblings = list(installed_env.site_packages.glob(f"{dist_name}-*.dist-info"))
+    assert siblings == [dist_info], f"unexpected dist-info directories: {siblings}"
+    # The wheel's own RECORD identity: the installed RECORD must exist.
+    assert (dist_info / "RECORD").is_file()
+    assert (dist_info / "METADATA").is_file()
 
 
 @pytest.mark.parametrize("args", CASES)
