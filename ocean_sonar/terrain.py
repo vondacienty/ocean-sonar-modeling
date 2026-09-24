@@ -21,6 +21,7 @@ __all__ = [
     "metrics",
     "quality",
     "stats",
+    "trend",
 ]
 
 
@@ -736,4 +737,61 @@ def quality(layers, slope_limit=5.0, roughness_limit=1.0):
         "mean_coverage": mean_coverage,
         "score": score,
         "quality": grade,
+    }
+
+
+def trend(layers, slope_limit=5.0, roughness_limit=1.0):
+    """Assess the monotonic trend of per-layer exceedance rates.
+
+    ``layers``, ``slope_limit`` and ``roughness_limit`` have exactly the
+    same constraints and validation order as in
+    :func:`compare_layers` (including the strictly increasing ``r``
+    values, finite non-bool limits ``> 0``, the first-error rule and
+    the ``"layers[i]: "`` / ``"layers[i].cells[j]: "`` prefixes); type
+    mismatches raise ``TypeError`` and all other constraint errors
+    raise ``ValueError``. :func:`breakdown` is called exactly once as
+    ``breakdown(layers, slope_limit, roughness_limit)``; its exceptions
+    propagate unchanged and inputs are not modified.
+
+    With ``B`` the dict returned by :func:`breakdown` and
+    ``n = len(B["layers"])``, entry ``i`` (``0 <= i < n - 1``) of
+    ``slope_deltas``/``roughness_deltas`` is the later layer's
+    ``slope_rate``/``roughness_rate`` minus the earlier layer's, as
+    ``round(float(delta), 6)`` (negative zero normalized to ``0.0``);
+    both deltas are tuples of floats with ``n - 1`` entries.
+    ``monotonic`` is ``True`` when every delta is ``<= 0`` (including
+    when ``n == 1``) and ``False`` otherwise. ``overall`` is
+    ``"pass"`` when ``monotonic`` is true and ``"fail"`` otherwise.
+
+    Returns a dict with keys in the order ``breakdown, slope_deltas,
+    roughness_deltas, monotonic, overall``: ``breakdown`` is ``B``
+    as-is.
+    """
+    breakdown_result = breakdown(layers, slope_limit, roughness_limit)
+
+    layer_results = breakdown_result["layers"]
+    n = len(layer_results)
+
+    slope_deltas = tuple(
+        _round6(layer_results[i + 1]["slope_rate"] - layer_results[i]["slope_rate"])
+        for i in range(n - 1)
+    )
+    roughness_deltas = tuple(
+        _round6(
+            layer_results[i + 1]["roughness_rate"]
+            - layer_results[i]["roughness_rate"]
+        )
+        for i in range(n - 1)
+    )
+
+    monotonic = all(delta <= 0 for delta in slope_deltas) and all(
+        delta <= 0 for delta in roughness_deltas
+    )
+
+    return {
+        "breakdown": breakdown_result,
+        "slope_deltas": slope_deltas,
+        "roughness_deltas": roughness_deltas,
+        "monotonic": monotonic,
+        "overall": "pass" if monotonic else "fail",
     }
