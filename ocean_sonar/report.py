@@ -24,7 +24,8 @@ reads a serialized batch document back from a file,
 :func:`compare_batch` compares two validated batch summaries by
 quality score and terrain coverage and :func:`rank_batches` ranks
 multiple validated batch summaries by quality score and terrain
-coverage.
+coverage; :func:`serialize_ranking` validates such a ranking result
+and encodes it as UTF-8 JSON bytes.
 """
 
 from __future__ import annotations
@@ -56,6 +57,7 @@ __all__ = [
     "load_batch",
     "compare_batch",
     "rank_batches",
+    "serialize_ranking",
 ]
 
 _CROSSPOINT_KEYS = (
@@ -99,6 +101,7 @@ _BATCH_SUMMARY_KEYS = (
     "terrain_coverage",
     "quality_score",
 )
+_RANKING_KEYS = ("ranking", "score_spread")
 
 
 def generate(crossings, layers, tolerance=0.5, slope_limit=5.0, roughness_limit=1.0):
@@ -1646,3 +1649,137 @@ def rank_batches(batches) -> dict:
         "ranking": ranking,
         "score_spread": score_spread,
     }
+
+
+def serialize_ranking(ranking) -> bytes:
+    """Validate a :func:`rank_batches` result and encode it as UTF-8 JSON bytes.
+
+    ``ranking`` must be the dict returned by :func:`rank_batches`, with
+    keys exactly in the order ``ranking, score_spread``. ``ranking``
+    itself must be a non-empty tuple whose items are
+    ``(index, score, coverage)`` triples: ``index`` a non-bool
+    non-negative int whose values form exactly the set
+    ``{0, 1, ..., n - 1}`` where ``n`` is the tuple length; ``score`` a
+    finite non-bool float in ``[0, 100]``; ``coverage`` a finite
+    non-bool float in ``[0, 1]``. The triples must be ordered by
+    ``score`` descending, then ``coverage`` descending, then ``index``
+    ascending. ``score_spread`` must be a finite non-bool float equal
+    to ``round(max(score) - min(score), 6)`` (negative zero normalized
+    to ``0.0``).
+
+    Validation order, stopping at the first error: container, key
+    order, the ``ranking`` tuple (container, non-emptiness, then each
+    triple in order — tuple level, arity, then index, score and
+    coverage), then ``score_spread``. Container, key-order, tuple-level
+    and field-type mismatches raise ``TypeError``; emptiness, arity,
+    finiteness, range, index-set, ordering and score_spread-relation
+    errors raise ``ValueError``; per-triple messages are prefixed with
+    ``ranking[i]: ``. The input is not modified.
+
+    On success the ranking is encoded as UTF-8 JSON with the key order
+    preserved, ``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``, no indentation, no BOM and no trailing
+    newline. Floats are first rounded with ``round(float(v), 6)`` and
+    negative zero is normalized to ``0.0``; tuples are recursively
+    converted to arrays. Any JSON or UTF-8 encoding failure raises
+    ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    if not isinstance(ranking, dict):
+        raise TypeError("ranking must be a dict")
+    if list(ranking.keys()) != list(_RANKING_KEYS):
+        raise TypeError(
+            "ranking keys must be in the order ranking, score_spread"
+        )
+
+    entries = ranking["ranking"]
+    _check_nonempty_tuple(entries, "ranking")
+
+    seen = set()
+    previous = None
+    for i, item in enumerate(entries):
+        prefix = f"ranking[{i}]: "
+        if not isinstance(item, tuple):
+            raise TypeError(prefix + "must be a tuple")
+        if len(item) != 3:
+            raise ValueError(prefix + "must have 3 elements")
+
+        index, score, coverage = item
+
+        if type(index) is not int:
+            raise TypeError(prefix + "index must be a non-bool int")
+        if index < 0:
+            raise ValueError(prefix + "index must be >= 0")
+        if index >= len(entries):
+            raise ValueError(
+                prefix + "index must be in [0, len(ranking))"
+            )
+        if index in seen:
+            raise ValueError(prefix + "index must be unique")
+        seen.add(index)
+
+        if type(score) is not float:
+            raise TypeError(prefix + "score must be a float")
+        if not math.isfinite(score):
+            raise ValueError(prefix + "score must be finite")
+        if not 0 <= score <= 100:
+            raise ValueError(prefix + "score must be in [0, 100]")
+
+        if type(coverage) is not float:
+            raise TypeError(prefix + "coverage must be a float")
+        if not math.isfinite(coverage):
+            raise ValueError(prefix + "coverage must be finite")
+        if not 0 <= coverage <= 1:
+            raise ValueError(prefix + "coverage must be in [0, 1]")
+
+        if previous is not None:
+            prev_score, prev_coverage, prev_index = previous
+            if score > prev_score:
+                raise ValueError(
+                    prefix
+                    + "ranking must be ordered by score descending"
+                )
+            if score == prev_score:
+                if coverage > prev_coverage:
+                    raise ValueError(
+                        prefix
+                        + "ranking must be ordered by coverage descending "
+                        "for equal scores"
+                    )
+                if coverage == prev_coverage and index < prev_index:
+                    raise ValueError(
+                        prefix
+                        + "ranking must be ordered by index ascending "
+                        "for equal scores and coverage"
+                    )
+        previous = (score, coverage, index)
+
+    score_spread = ranking["score_spread"]
+    if type(score_spread) is not float:
+        raise TypeError("score_spread must be a float")
+    if not math.isfinite(score_spread):
+        raise ValueError("score_spread must be finite")
+    expected_spread = round(
+        max(item[1] for item in entries) - min(item[1] for item in entries),
+        6,
+    )
+    if expected_spread == 0:
+        expected_spread = 0.0
+    if score_spread != expected_spread:
+        raise ValueError(
+            "score_spread must equal round(max(score) - min(score), 6)"
+        )
+
+    try:
+        text = json.dumps(
+            _to_jsonable(ranking),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"ranking: could not be serialized to JSON: {exc}"
+        ) from exc
