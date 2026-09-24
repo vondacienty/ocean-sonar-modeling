@@ -13,7 +13,7 @@ import math
 
 from .svp import _is_real_number
 
-__all__ = ["analyze", "analyze_layers", "metrics", "stats"]
+__all__ = ["analyze", "analyze_layers", "compare_layers", "metrics", "stats"]
 
 
 def _round6(value):
@@ -354,3 +354,158 @@ def analyze_layers(layers):
             }
         )
     return tuple(results)
+
+
+def compare_layers(layers, slope_limit=5.0, roughness_limit=1.0):
+    """Compare the :func:`stats` summaries of several depth grids.
+
+    ``layers`` is a non-empty list/tuple whose items, in input order,
+    are four-element list/tuples ``(r, nx, ny, cells)`` with the same
+    constraints as the parameters of :func:`analyze`; the ``r`` values
+    must additionally be strictly increasing in layer order.
+
+    Validation order: the outer container, non-emptiness and the
+    per-layer/per-cell checks exactly as in :func:`analyze_layers`
+    (with the same ``"layers[i]: "`` /
+    ``"layers[i].cells[j]: "`` prefixes), then the strictly increasing
+    ``r`` values, then ``slope_limit`` and ``roughness_limit``; the
+    first error stops the call. The limits are finite non-bool
+    ints/floats ``> 0``. Type mismatches (including bool) raise
+    ``TypeError``, all other constraint errors raise ``ValueError``.
+
+    Each layer is passed to :func:`stats` exactly once, in input order;
+    :func:`analyze_layers` is not called. Exceptions from :func:`stats`
+    propagate unchanged and inputs are not modified.
+
+    Returns a dict with keys in the order ``layers, slope_deltas,
+    roughness_deltas, stable``: ``layers`` is a tuple of the dicts
+    returned by :func:`stats`, and each delta list has ``n - 1``
+    entries. Entry ``i`` compares layers ``i + 1`` and ``i`` using
+    their ``mean_slope``/``mean_roughness`` values; it is ``None`` when
+    either mean is ``None`` and ``round(float(next - prev), 6)``
+    otherwise (negative zero normalized to ``0.0``). ``stable`` is
+    ``True`` when every non-``None`` slope delta has absolute value
+    ``<= slope_limit`` and every non-``None`` roughness delta has
+    absolute value ``<= roughness_limit`` (including when there is
+    nothing to compare), and ``False`` otherwise.
+    """
+    if not isinstance(layers, (list, tuple)):
+        raise TypeError("layers must be a list or tuple")
+    if len(layers) == 0:
+        raise ValueError("layers must not be empty")
+
+    validated = []
+    for i in range(len(layers)):
+        prefix = f"layers[{i}]: "
+        layer = layers[i]
+        if not isinstance(layer, (list, tuple)):
+            raise TypeError(prefix + "must be a list or tuple")
+        if len(layer) != 4:
+            raise ValueError(prefix + "must have 4 elements")
+        r, nx, ny, cells = layer
+
+        if not _is_real_number(r):
+            raise TypeError(prefix + "r must be a non-bool int or float")
+        if not math.isfinite(r):
+            raise ValueError(prefix + "r must be finite")
+        if not r > 0:
+            raise ValueError(prefix + "r must be > 0")
+
+        for name, value in (("nx", nx), ("ny", ny)):
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise TypeError(prefix + f"{name} must be a non-bool int")
+            if not value > 0:
+                raise ValueError(prefix + f"{name} must be > 0")
+
+        if not isinstance(cells, (list, tuple)):
+            raise TypeError(prefix + "cells must be a list or tuple")
+        if len(cells) != nx * ny:
+            raise ValueError(prefix + "cells must have nx * ny elements")
+
+        for j in range(len(cells)):
+            cell_prefix = f"layers[{i}].cells[{j}]: "
+            cell = cells[j]
+            if not isinstance(cell, (list, tuple)):
+                raise TypeError(cell_prefix + "must be a list or tuple")
+            if len(cell) != 2:
+                raise ValueError(cell_prefix + "must have 2 elements")
+            count, mean = cell
+            if not isinstance(count, int) or isinstance(count, bool):
+                raise TypeError(cell_prefix + "count must be a non-bool int")
+            if not count >= 0:
+                raise ValueError(cell_prefix + "count must be >= 0")
+            if count == 0:
+                if mean is not None:
+                    raise ValueError(
+                        cell_prefix + "mean must be None when count is 0"
+                    )
+            else:
+                if not _is_real_number(mean):
+                    raise TypeError(
+                        cell_prefix + "mean must be a non-bool int or float"
+                    )
+                if not math.isfinite(mean):
+                    raise ValueError(cell_prefix + "mean must be finite")
+                if not mean >= 0:
+                    raise ValueError(cell_prefix + "mean must be >= 0")
+
+        validated.append((r, nx, ny, cells))
+
+    for i in range(1, len(validated)):
+        if not validated[i][0] > validated[i - 1][0]:
+            raise ValueError(
+                f"layers[{i}]: r must be strictly greater than the "
+                f"previous layer's r"
+            )
+
+    for name, value in (
+        ("slope_limit", slope_limit),
+        ("roughness_limit", roughness_limit),
+    ):
+        if not _is_real_number(value):
+            raise TypeError(f"{name} must be a non-bool int or float")
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite")
+        if not value > 0:
+            raise ValueError(f"{name} must be > 0")
+
+    summaries = tuple(stats(r, nx, ny, cells) for r, nx, ny, cells in validated)
+
+    slope_deltas = []
+    roughness_deltas = []
+    for i in range(1, len(summaries)):
+        prev, nxt = summaries[i - 1], summaries[i]
+
+        prev_slope, next_slope = prev["mean_slope"], nxt["mean_slope"]
+        if prev_slope is None or next_slope is None:
+            slope_deltas.append(None)
+        else:
+            slope_deltas.append(_round6(next_slope - prev_slope))
+
+        prev_roughness, next_roughness = (
+            prev["mean_roughness"],
+            nxt["mean_roughness"],
+        )
+        if prev_roughness is None or next_roughness is None:
+            roughness_deltas.append(None)
+        else:
+            roughness_deltas.append(_round6(next_roughness - prev_roughness))
+
+    stable = True
+    for slope_delta, roughness_delta in zip(slope_deltas, roughness_deltas):
+        if slope_delta is not None and abs(slope_delta) > slope_limit:
+            stable = False
+            break
+        if (
+            roughness_delta is not None
+            and abs(roughness_delta) > roughness_limit
+        ):
+            stable = False
+            break
+
+    return {
+        "layers": summaries,
+        "slope_deltas": slope_deltas,
+        "roughness_deltas": roughness_deltas,
+        "stable": stable,
+    }
