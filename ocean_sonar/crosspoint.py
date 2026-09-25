@@ -40,6 +40,20 @@ _FIELDS = ("x", "y", "d1", "d2")
 _POINT_FIELDS = ("x", "y", "d")
 
 
+def _is_finite_number(value):
+    """Finite non-bool int/float without raising on oversized ints.
+
+    Every non-bool int is finite; checking it via ``math.isfinite``
+    would convert to float and raise ``OverflowError`` for values like
+    ``10 ** 400``, which must surface as ``ValueError`` instead.
+    """
+    if not _is_real_number(value):
+        return False
+    if isinstance(value, int):
+        return True
+    return math.isfinite(value)
+
+
 def _validate_crossings(crossings):
     """Validate ``crossings`` exactly as :func:`evaluate` does."""
     if not isinstance(crossings, (list, tuple)):
@@ -1082,13 +1096,13 @@ def pair_gate_quality(
 
     if not _is_real_number(min_coverage):
         raise TypeError("min_coverage must be a non-bool int or float")
-    if not math.isfinite(min_coverage):
+    if not _is_finite_number(min_coverage):
         raise ValueError("min_coverage must be finite")
     if not 0 <= min_coverage <= 1:
         raise ValueError("min_coverage must be in [0, 1]")
     if not _is_real_number(min_score):
         raise TypeError("min_score must be a non-bool int or float")
-    if not math.isfinite(min_score):
+    if not _is_finite_number(min_score):
         raise ValueError("min_score must be finite")
     if not 0 <= min_score <= 100:
         raise ValueError("min_score must be in [0, 100]")
