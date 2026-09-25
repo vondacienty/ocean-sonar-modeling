@@ -22,6 +22,7 @@ __all__ = [
     "dashboard",
     "metrics",
     "quality",
+    "scale_profile",
     "stats",
     "trend",
 ]
@@ -337,6 +338,143 @@ def cross_scale(fine, coarse, tolerance=0.5):
         "max_abs": max_abs,
         "within_tolerance": int(within),
         "quality": quality,
+    }
+
+
+def scale_profile(fine, coarse, tolerances):
+    """Sweep :func:`cross_scale` over several tolerance values.
+
+    ``fine`` and ``coarse`` have exactly the same constraints as in
+    :func:`cross_scale`; they are validated first, in that order, with
+    the same exception types and ``"fine.cells[i]: "`` /
+    ``"coarse.cells[i]: "`` prefixes, and the scale relations are
+    checked by :func:`cross_scale` as well.
+
+    ``tolerances`` is a non-empty list/tuple validated after ``fine``
+    and ``coarse``: first the container type and non-emptiness, then
+    each item ``i`` in order. Every item must be a finite non-bool
+    int/float ``> 0``; type mismatches (including bool) raise
+    ``TypeError`` and all other constraint errors raise
+    ``ValueError``, prefixed with ``"tolerances[i]: "``. The first
+    error stops the call.
+
+    :func:`cross_scale` is called once per tolerance as
+    ``cross_scale(fine, coarse, t)`` in ascending ``(t, i)`` order,
+    where the original index ``i`` breaks tolerance ties; its
+    exceptions propagate unchanged and inputs are not modified.
+
+    The sorted results form ``curve``, a tuple of one dict per
+    tolerance with keys in the order ``tolerance, matched, missing,
+    bias, rmse, max_abs, within_tolerance, quality``: ``tolerance`` is
+    ``round(float(t), 6)`` (negative zero normalized to ``0.0``) and
+    the other fields are copied from the :func:`cross_scale` result.
+
+    With ``r_i = within_tolerance / matched`` for curve item ``i``
+    (``0.0`` when ``matched == 0``), ``monotonic`` is ``True`` iff
+    ``within_tolerance`` is non-decreasing and ``missing`` is
+    non-increasing along the curve; ``first_pass_tolerance`` is the
+    tolerance of the first curve item whose ``quality`` is ``"pass"``,
+    or ``None``. ``area`` is ``0.0`` for fewer than two curve items,
+    otherwise
+    ``round(sum((t_i - t_{i-1}) * (r_i + r_{i-1}) / 2), 6)`` over the
+    unrounded sorted tolerances (negative zero normalized to ``0.0``).
+
+    ``quality`` is ``"pass"`` only when every curve item has
+    ``missing == 0``, every item's ``quality`` is ``"pass"``, the curve
+    is monotonic and a first passing tolerance exists, and ``"fail"``
+    otherwise.
+
+    Returns a dict with keys in the order ``curve, monotonic,
+    first_pass_tolerance, area, quality``: ``curve`` is a tuple,
+    ``monotonic`` is a bool, ``first_pass_tolerance`` is a float or
+    ``None``, ``area`` is a float and ``quality`` is a str.
+    """
+    _validate_scale_grid("fine", fine)
+    _validate_scale_grid("coarse", coarse)
+
+    if not isinstance(tolerances, (list, tuple)):
+        raise TypeError("tolerances must be a list or tuple")
+    if len(tolerances) == 0:
+        raise ValueError("tolerances must not be empty")
+
+    checked = []
+    for i in range(len(tolerances)):
+        prefix = f"tolerances[{i}]: "
+        value = tolerances[i]
+        if not _is_real_number(value):
+            raise TypeError(prefix + "must be a non-bool int or float")
+        if not math.isfinite(value):
+            raise ValueError(prefix + "must be finite")
+        if not value > 0:
+            raise ValueError(prefix + "must be > 0")
+        checked.append(value)
+
+    order = sorted(range(len(checked)), key=lambda i: (checked[i], i))
+
+    curve = []
+    ratios = []
+    for i in order:
+        tolerance = checked[i]
+        result = cross_scale(fine, coarse, tolerance)
+        matched = result["matched"]
+        missing = result["missing"]
+        within = result["within_tolerance"]
+        ratios.append(within / matched if matched > 0 else 0)
+        curve.append(
+            {
+                "tolerance": _round6(tolerance),
+                "matched": matched,
+                "missing": missing,
+                "bias": result["bias"],
+                "rmse": result["rmse"],
+                "max_abs": result["max_abs"],
+                "within_tolerance": within,
+                "quality": result["quality"],
+            }
+        )
+    curve = tuple(curve)
+
+    monotonic = all(
+        curve[i]["within_tolerance"] >= curve[i - 1]["within_tolerance"]
+        and curve[i]["missing"] <= curve[i - 1]["missing"]
+        for i in range(1, len(curve))
+    )
+
+    first_pass_tolerance = None
+    for item in curve:
+        if item["quality"] == "pass":
+            first_pass_tolerance = item["tolerance"]
+            break
+
+    m = len(curve)
+    if m < 2:
+        area = 0.0
+    else:
+        sorted_tolerances = [checked[i] for i in order]
+        area = _round6(
+            math.fsum(
+                (sorted_tolerances[i] - sorted_tolerances[i - 1])
+                * (ratios[i] + ratios[i - 1])
+                / 2
+                for i in range(1, m)
+            )
+        )
+
+    grade = (
+        "pass"
+        if all(item["missing"] == 0 for item in curve)
+        and all(item["quality"] == "pass" for item in curve)
+        and monotonic
+        and first_pass_tolerance is not None
+        else "fail"
+    )
+
+    return {
+        "curve": curve,
+        "monotonic": monotonic,
+        "first_pass_tolerance": first_pass_tolerance,
+        "area": area,
+        "quality": grade,
     }
 
 
