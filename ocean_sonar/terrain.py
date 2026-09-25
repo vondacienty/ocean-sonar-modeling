@@ -24,6 +24,7 @@ __all__ = [
     "quality",
     "scale_dashboard",
     "scale_profile",
+    "scale_report",
     "stats",
     "trend",
 ]
@@ -592,6 +593,58 @@ def scale_dashboard(records) -> dict:
             "quality_score": quality_score,
         },
         "quality": quality,
+    }
+
+
+def scale_report(fine, coarse, tolerances) -> dict:
+    """Combine a :func:`scale_profile` sweep with its dashboard summary.
+
+    ``fine``, ``coarse`` and ``tolerances`` have exactly the same
+    constraints, validation order, exception types and
+    ``"fine.cells[i]: "`` / ``"coarse.cells[i]: "`` /
+    ``"tolerances[i]: "`` prefixes as in :func:`scale_profile`; all
+    validation is carried out by that function. Inputs are not
+    modified.
+
+    :func:`scale_profile` is called exactly once as
+    ``scale_profile(fine, coarse, tolerances)``; its exceptions
+    propagate unchanged. From its ``curve``, a new tuple is built in
+    the same order, one dict per curve item with keys in the order
+    ``matched, missing, within_tolerance, quality`` and the four
+    values copied as-is (no sorting, rounding or rewriting). That
+    tuple is passed to :func:`scale_dashboard`, which is called
+    exactly once; its exceptions propagate unchanged.
+
+    Returns a dict with keys in the order ``profile, dashboard,
+    quality``: ``profile`` and ``dashboard`` are the objects returned
+    by the two calls as-is, and ``quality`` is ``"pass"`` only when
+    both their ``quality`` fields are ``"pass"``, and ``"fail"``
+    otherwise.
+    """
+    profile = scale_profile(fine, coarse, tolerances)
+
+    records = tuple(
+        {
+            "matched": item["matched"],
+            "missing": item["missing"],
+            "within_tolerance": item["within_tolerance"],
+            "quality": item["quality"],
+        }
+        for item in profile["curve"]
+    )
+
+    dashboard = scale_dashboard(records)
+
+    grade = (
+        "pass"
+        if profile["quality"] == "pass" and dashboard["quality"] == "pass"
+        else "fail"
+    )
+
+    return {
+        "profile": profile,
+        "dashboard": dashboard,
+        "quality": grade,
     }
 
 
