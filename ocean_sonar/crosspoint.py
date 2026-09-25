@@ -38,6 +38,7 @@ __all__ = [
     "aggregate_quality_batches",
     "dump_aggregate",
     "load_aggregate",
+    "render_aggregate",
     "serialize_pair_gate_score_summary",
     "render_pair_gate_score_summary",
     "load_pair_gate_score_summary",
@@ -2055,6 +2056,60 @@ def load_aggregate(path) -> dict:
         )
 
     return aggregate
+
+
+def render_aggregate(path) -> str:
+    """Render a :func:`load_aggregate`-loaded aggregate as three text lines.
+
+    Calls :func:`load_aggregate` exactly once with ``path`` — and no
+    other loader — so its path validation, file reading, canonical-byte
+    checks and every exception (propagated unchanged) all apply here as
+    well. Neither the file nor the loaded aggregate is modified.
+
+    With ``A`` the dict returned by :func:`load_aggregate`,
+    ``S = A["summary"]``, ``b = S["worst_batch_index"]``,
+    ``r = S["worst_record_index"]``, ``I = A["batches"][b]`` and
+    ``W = I["batch"]["records"][r]``, returns three lines joined by
+    ``"\\n"`` with no trailing newline::
+
+        QUALITY=<A["quality"]>
+        SUMMARY=<seven key=value pairs from S, in S's existing key order>
+        WORST=path=<...>;batch_index=<b>;record_index=<r>;coverage=<...>;score=<...>;quality=<...>
+
+    The SUMMARY pairs are written in ``S``'s existing key order (no
+    sorting, recomputation, copying or added/removed keys) and joined by
+    ``";"``. The WORST values are ``I["path"]`` (rendered as the JSON
+    string produced by
+    ``json.dumps(v, ensure_ascii=False, separators=(",", ":"))``), the
+    ints ``b`` and ``r`` in decimal, and ``W["coverage"]``,
+    ``W["score"]`` and ``W["quality"]`` taken unchanged. Other ints are
+    formatted in decimal, floats use ``format(v, ".6f")`` (negative
+    zero rendered as ``"0.000000"``) and strings are copied as-is.
+    """
+    aggregate = load_aggregate(path)
+    summary = aggregate["summary"]
+    worst_batch_index = summary["worst_batch_index"]
+    worst_record_index = summary["worst_record_index"]
+    batch_item = aggregate["batches"][worst_batch_index]
+    worst_record = batch_item["batch"]["records"][worst_record_index]
+
+    quality_line = "QUALITY=" + _format_rendered_value(aggregate["quality"])
+    summary_line = "SUMMARY=" + ";".join(
+        f"{key}={_format_rendered_value(value)}" for key, value in summary.items()
+    )
+    worst_line = (
+        "WORST="
+        "path="
+        + json.dumps(
+            batch_item["path"], ensure_ascii=False, separators=(",", ":")
+        )
+        + f";batch_index={_format_rendered_value(worst_batch_index)}"
+        + f";record_index={_format_rendered_value(worst_record_index)}"
+        + f";coverage={_format_rendered_value(worst_record['coverage'])}"
+        + f";score={_format_rendered_value(worst_record['score'])}"
+        + f";quality={_format_rendered_value(worst_record['quality'])}"
+    )
+    return "\n".join((quality_line, summary_line, worst_line))
 
 
 def serialize_pair_gate_score_summary(
