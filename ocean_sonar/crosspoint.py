@@ -27,6 +27,7 @@ __all__ = [
     "pair_gate",
     "pair_gate_report",
     "pair_gate_score",
+    "pair_gate_score_report",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -912,5 +913,62 @@ def pair_gate_score(
         "pair_gate": gated,
         "matching": matching,
         "score": score,
+        "quality": quality,
+    }
+
+
+def pair_gate_score_report(
+    first,
+    second,
+    tolerances,
+    match_tolerance=1.0,
+    min_mean_ratio=1.0,
+    max_rmse_limit=1.0,
+):
+    """Report :func:`pair_gate_score` results with coverage product and margin.
+
+    Calls :func:`pair_gate_score` exactly once with ``first``, ``second``,
+    ``tolerances``, ``match_tolerance``, ``min_mean_ratio`` and
+    ``max_rmse_limit``, so its validation, first-error order, exceptions
+    (propagated unchanged) and index prefixes all apply here as well.
+    Inputs and the :func:`pair_gate_score` result are not modified.
+
+    With ``R`` the dict returned by :func:`pair_gate_score` and
+    ``M = R["matching"]``, returns a dict with keys in the order
+    ``score_report, metrics, quality``. ``score_report`` is ``R`` itself.
+    ``metrics`` is a dict with keys in the order
+    ``coverage_product, score_margin``; ``coverage_product`` is
+    ``round(float(M["first_coverage"] * M["second_coverage"]), 6)`` and
+    ``score_margin`` is ``round(float(100 - R["score"]), 6)``, both floats
+    with negative zero normalized to ``0.0``. ``quality`` is ``"pass"``
+    only when ``R["quality"]`` is ``"pass"`` and ``score_margin`` equals
+    ``0.0``, and ``"fail"`` otherwise.
+    """
+    result = pair_gate_score(
+        first, second, tolerances, match_tolerance, min_mean_ratio, max_rmse_limit
+    )
+    matching = result["matching"]
+
+    coverage_product = round(
+        float(matching["first_coverage"] * matching["second_coverage"]), 6
+    )
+    if coverage_product == 0:
+        coverage_product = 0.0
+    score_margin = round(float(100 - result["score"]), 6)
+    if score_margin == 0:
+        score_margin = 0.0
+
+    metrics = {
+        "coverage_product": coverage_product,
+        "score_margin": score_margin,
+    }
+    quality = (
+        "pass"
+        if result["quality"] == "pass" and score_margin == 0.0
+        else "fail"
+    )
+    return {
+        "score_report": result,
+        "metrics": metrics,
         "quality": quality,
     }
