@@ -20,6 +20,7 @@ __all__ = [
     "profile",
     "aggregate",
     "dashboard",
+    "dashboard_summary",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -395,6 +396,95 @@ def dashboard(crossings, tolerances):
         else "fail"
     )
     return reports, profiled, aggregated, quality
+
+
+def dashboard_summary(crossings, tolerances):
+    """Summarize crosspoint accuracy across several tolerances.
+
+    ``crossings`` is a non-empty list/tuple; each item is a
+    four-element list/tuple ``(x, y, d1, d2)`` whose fields are finite
+    non-bool int/float values, with ``d1, d2 >= 0``. ``tolerances``
+    must be a non-empty list/tuple whose items are finite non-bool
+    int/float values ``> 0``.
+
+    Validation order (first error wins): the ``crossings`` container,
+    its non-emptiness, each item in index order (item container,
+    length, fields), then the ``tolerances`` container, its
+    non-emptiness, then each tolerance in index order (type,
+    finiteness, positivity). Item errors are prefixed with
+    ``"crossings[i]: "`` or ``"tolerances[i]: "``.
+
+    With ``r = d1 - d2`` and ``n`` the number of crosspoints, each
+    tolerance ``t`` yields ``b = fsum(r) / n``,
+    ``e = sqrt(fsum(r**2) / n)``, ``w`` the count of crosspoints with
+    ``abs(r) <= t``, ``q = w / n`` and ``p = (w == n)``.
+
+    Returns a dict with keys in the order
+    ``count, pass_count, fail_count, total_count, mean_bias, max_rmse,
+    mean_ratio, quality``: ``count`` is the number of tolerances,
+    ``pass_count``/``fail_count`` the number of tolerances whose ``p``
+    is true/false, ``total_count`` the sum of the per-tolerance
+    crosspoint counts, ``mean_bias`` the mean of the ``b`` values,
+    ``max_rmse`` the largest ``e``, ``mean_ratio`` the mean of the
+    ``q`` values, and ``quality`` is ``"pass"`` only when every ``p``
+    is true and ``"fail"`` otherwise. The counts are ints and the
+    statistics are floats rounded to 6 decimals (negative zero
+    normalized to ``0.0``). Inputs are not modified.
+    """
+    _validate_crossings(crossings)
+
+    if not isinstance(tolerances, (list, tuple)):
+        raise TypeError("tolerances must be a list or tuple")
+    if len(tolerances) == 0:
+        raise ValueError("tolerances must be non-empty")
+    for i in range(len(tolerances)):
+        tolerance = tolerances[i]
+        prefix = f"tolerances[{i}]: "
+        if not _is_real_number(tolerance):
+            raise TypeError(prefix + "must be a non-bool int or float")
+        if not math.isfinite(tolerance):
+            raise ValueError(prefix + "must be finite")
+        if not tolerance > 0:
+            raise ValueError(prefix + "must be > 0")
+
+    differences = [d1 - d2 for x, y, d1, d2 in crossings]
+    n = len(differences)
+
+    biases = []
+    rmses = []
+    ratios = []
+    passes = []
+    for tolerance in tolerances:
+        biases.append(math.fsum(differences) / n)
+        rmses.append(math.sqrt(math.fsum(r * r for r in differences) / n))
+        within = 0
+        for r in differences:
+            if abs(r) <= tolerance:
+                within += 1
+        ratios.append(within / n)
+        passes.append(within == n)
+
+    m = len(tolerances)
+    pass_count = 0
+    for passed in passes:
+        if passed:
+            pass_count += 1
+
+    result = {
+        "count": int(m),
+        "pass_count": int(pass_count),
+        "fail_count": int(m - pass_count),
+        "total_count": int(n * m),
+    }
+    for name, value in (
+        ("mean_bias", math.fsum(biases) / m),
+        ("max_rmse", max(rmses)),
+        ("mean_ratio", math.fsum(ratios) / m),
+    ):
+        value = round(float(value), 6)
+        result[name] = 0.0 if value == 0 else value
+    result["quality"] = "pass" if pass_count == m else "fail"
+    return result
 
 
 def pair(first, second, tolerance=1.0):
