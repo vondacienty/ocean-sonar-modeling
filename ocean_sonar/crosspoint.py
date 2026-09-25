@@ -34,6 +34,7 @@ __all__ = [
     "pair_gate_quality_report",
     "render_quality_batch",
     "serialize_quality_batch",
+    "load_quality_batch",
     "serialize_pair_gate_score_summary",
     "render_pair_gate_score_summary",
     "load_pair_gate_score_summary",
@@ -1298,21 +1299,23 @@ def serialize_quality_batch(
     ``P = R["report"]["report"]``,
     ``C = P["summary"]["coverage_product"]``,
     ``S = P["score_report"]["score_report"]["score"]`` and
-    ``Q = R["quality"]``, the worst index ``w`` minimizes
-    ``(S, C, i)`` lexicographically, the mean score is
-    ``round(math.fsum(S_i) / n, 6)`` with negative zero normalized to
-    ``0.0`` and the batch quality is ``"pass"`` only when every ``Q`` is
-    ``"pass"``.
+    ``Q = R["quality"]`` (the raw, unrounded report values), the worst
+    index ``w`` minimizes ``(S, C, i)`` lexicographically, the mean
+    score is ``round(math.fsum(S_i) / n, 6)`` over the raw ``S`` values
+    with negative zero normalized to ``0.0`` and the batch quality is
+    ``"pass"`` only when every ``Q`` is ``"pass"``. The written-out
+    values are never used for the mean or the worst index.
 
     The encoded object is compact UTF-8 JSON with top-level keys in the
     order ``records, summary``. ``records`` is an array whose items have
     keys in the order ``index, coverage, score, quality`` with values
     ``i``, ``C``, ``S`` and ``Q``; ``summary`` has keys in the order
     ``count, mean_score, worst_index, quality`` with values ``n``, the
-    mean score, ``w`` and the batch quality. Encoding parameters
+    mean score, ``w`` and the batch quality. ``C`` and ``S`` are rounded
+    with ``round(float(v), 6)`` only when written out, with negative
+    zero normalized to ``0.0``. Encoding parameters
     (``ensure_ascii=False``, ``separators=(",", ":")``,
-    ``allow_nan=False``), six-decimal float rounding with negative zero
-    normalized to ``0.0``, the absence of a trailing newline and the
+    ``allow_nan=False``), the absence of a trailing newline and the
     ``ValueError`` raised on any JSON or UTF-8 encoding failure all
     follow :func:`serialize_pair_gate_score_summary`.
 
@@ -1332,39 +1335,42 @@ def serialize_quality_batch(
 
     items = []
     scores = []
+    coverages = []
     all_pass = True
     for i, (first, second) in enumerate(records):
         result = pair_gate_quality_report(
             first, second, tolerances, 1.0, min_coverage, min_score
         )
         inner = result["report"]["report"]
-        coverage = round(float(inner["summary"]["coverage_product"]), 6)
-        if coverage == 0:
-            coverage = 0.0
-        score = round(
-            float(inner["score_report"]["score_report"]["score"]), 6
-        )
-        if score == 0:
-            score = 0.0
+        coverage = inner["summary"]["coverage_product"]
+        score = inner["score_report"]["score_report"]["score"]
         quality = result["quality"]
-        items.append(
-            {
-                "index": int(i),
-                "coverage": coverage,
-                "score": score,
-                "quality": quality,
-            }
-        )
+        coverages.append(coverage)
         scores.append(score)
         if quality != "pass":
             all_pass = False
+
+        written_coverage = round(float(coverage), 6)
+        if written_coverage == 0:
+            written_coverage = 0.0
+        written_score = round(float(score), 6)
+        if written_score == 0:
+            written_score = 0.0
+        items.append(
+            {
+                "index": int(i),
+                "coverage": written_coverage,
+                "score": written_score,
+                "quality": quality,
+            }
+        )
 
     n = len(records)
     mean_score = round(float(math.fsum(scores) / n), 6)
     if mean_score == 0:
         mean_score = 0.0
     worst_index = min(
-        range(n), key=lambda i: (items[i]["score"], items[i]["coverage"], i)
+        range(n), key=lambda i: (scores[i], coverages[i], i)
     )
 
     document = {
@@ -1709,3 +1715,218 @@ def load_pair_gate_score_summary(path) -> dict:
         )
 
     return summary
+
+
+_QUALITY_BATCH_KEYS = ("records", "summary")
+_QUALITY_BATCH_RECORD_KEYS = ("index", "coverage", "score", "quality")
+_QUALITY_BATCH_SUMMARY_KEYS = ("count", "mean_score", "worst_index", "quality")
+
+
+def _dump_quality_batch(document):
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"quality batch: could not be serialized to JSON: {exc}"
+        ) from exc
+
+
+def _check_quality_batch_record(record, i):
+    prefix = f"quality batch: records[{i}]: "
+    if not isinstance(record, dict):
+        raise TypeError(prefix + "must be a dict")
+    if list(record.keys()) != list(_QUALITY_BATCH_RECORD_KEYS):
+        raise TypeError(
+            prefix + "keys must be in the order index, coverage, score, quality"
+        )
+
+    index = record["index"]
+    if type(index) is not int:
+        raise TypeError(prefix + "index must be a non-bool int")
+    if index != i:
+        raise ValueError(prefix + "index must be consecutive starting from 0")
+
+    coverage = record["coverage"]
+    if type(coverage) is not float:
+        raise TypeError(prefix + "coverage must be a float")
+    if not math.isfinite(coverage):
+        raise ValueError(prefix + "coverage must be finite")
+    if not 0 <= coverage <= 1:
+        raise ValueError(prefix + "coverage must be in [0, 1]")
+    if coverage != round(float(coverage), 6):
+        raise ValueError(
+            prefix + "coverage must equal round(float(coverage), 6)"
+        )
+
+    score = record["score"]
+    if type(score) is not float:
+        raise TypeError(prefix + "score must be a float")
+    if not math.isfinite(score):
+        raise ValueError(prefix + "score must be finite")
+    if not 0 <= score <= 100:
+        raise ValueError(prefix + "score must be in [0, 100]")
+    if score != round(float(score), 6):
+        raise ValueError(prefix + "score must equal round(float(score), 6)")
+
+    quality = record["quality"]
+    if type(quality) is not str:
+        raise TypeError(prefix + "quality must be a str")
+    if quality not in ("pass", "fail"):
+        raise ValueError(prefix + "quality must be 'pass' or 'fail'")
+
+
+def _check_quality_batch(document):
+    prefix = "quality batch: "
+    if not isinstance(document, dict):
+        raise TypeError("quality batch must be a dict")
+    if list(document.keys()) != list(_QUALITY_BATCH_KEYS):
+        raise TypeError(
+            "quality batch keys must be in the order records, summary"
+        )
+
+    records = document["records"]
+    if not isinstance(records, (list, tuple)):
+        raise TypeError(prefix + "records must be a list")
+    if len(records) == 0:
+        raise ValueError(prefix + "records must be non-empty")
+    for i in range(len(records)):
+        _check_quality_batch_record(records[i], i)
+
+    summary = document["summary"]
+    if not isinstance(summary, dict):
+        raise TypeError(prefix + "summary must be a dict")
+    if list(summary.keys()) != list(_QUALITY_BATCH_SUMMARY_KEYS):
+        raise TypeError(
+            prefix + "summary keys must be in the order "
+            "count, mean_score, worst_index, quality"
+        )
+
+    count = summary["count"]
+    if type(count) is not int:
+        raise TypeError(prefix + "summary count must be a non-bool int")
+    if count != len(records):
+        raise ValueError(prefix + "summary count must equal the number of records")
+
+    mean_score = summary["mean_score"]
+    if type(mean_score) is not float:
+        raise TypeError(prefix + "summary mean_score must be a float")
+    if not math.isfinite(mean_score):
+        raise ValueError(prefix + "summary mean_score must be finite")
+    if not 0 <= mean_score <= 100:
+        raise ValueError(prefix + "summary mean_score must be in [0, 100]")
+    if mean_score != round(float(mean_score), 6):
+        raise ValueError(
+            prefix + "summary mean_score must equal "
+            "round(float(mean_score), 6)"
+        )
+
+    worst_index = summary["worst_index"]
+    if type(worst_index) is not int:
+        raise TypeError(prefix + "summary worst_index must be a non-bool int")
+    if not 0 <= worst_index < len(records):
+        raise ValueError(prefix + "summary worst_index must be in range")
+
+    quality = summary["quality"]
+    if type(quality) is not str:
+        raise TypeError(prefix + "summary quality must be a str")
+    if quality not in ("pass", "fail"):
+        raise ValueError(prefix + "summary quality must be 'pass' or 'fail'")
+
+    expected_quality = (
+        "pass"
+        if all(record["quality"] == "pass" for record in records)
+        else "fail"
+    )
+    if quality != expected_quality:
+        raise ValueError(
+            prefix + "summary quality must be 'pass' only when every "
+            "record quality is 'pass', and 'fail' otherwise"
+        )
+
+
+def load_quality_batch(path) -> dict:
+    """Load a :func:`serialize_quality_batch`-produced JSON document.
+
+    ``path`` must be a non-empty ``str``: a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``. The file
+    is opened in binary mode (``"rb"``) and read in full; a missing
+    file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError`` and every other ``OSError`` is propagated
+    unchanged. The file is not modified.
+
+    The bytes must be exactly those produced by
+    :func:`serialize_quality_batch` for the same value: compact UTF-8
+    JSON (``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``) with no BOM and no trailing newline. A BOM, a
+    trailing newline, a UTF-8 decoding failure or a JSON parsing
+    failure raises ``ValueError``; the ``NaN``/``Infinity`` constants
+    and any other non-finite token are rejected.
+
+    The decoded value must be a JSON object with top-level keys exactly
+    in the order ``records, summary`` — duplicated, missing or extra
+    keys are rejected. ``records`` must be a non-empty array whose
+    items have keys exactly in the order ``index, coverage, score,
+    quality``: ``index`` must be a non-bool int, consecutive starting
+    from ``0``; ``coverage`` and ``score`` must be finite non-bool
+    floats in ``[0, 1]`` and ``[0, 100]`` respectively, each equal to
+    ``round(float(v), 6)`` with negative zero normalized to ``0.0``;
+    and ``quality`` must be ``"pass"`` or ``"fail"``. ``summary`` must
+    have keys exactly in the order ``count, mean_score, worst_index,
+    quality``: ``count`` must be a non-bool int equal to the number of
+    records; ``mean_score`` must be a finite non-bool float in
+    ``[0, 100]`` equal to ``round(float(v), 6)``; ``worst_index`` must
+    be a non-bool int in ``range(count)``; and ``quality`` must be
+    ``"pass"`` only when every record quality is ``"pass"``, and
+    ``"fail"`` otherwise. The file bytes must also equal the canonical
+    re-serialization of the decoded value byte for byte; any key-order,
+    type, range, relation, parse or canonical-byte mismatch raises
+    ``ValueError``.
+
+    Returns the document as a dict with the keys in the order above;
+    the file is never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(text, parse_constant=_reject_json_constant)
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    document = _from_jsonable(parsed)
+    try:
+        _check_quality_batch(document)
+        canonical = _dump_quality_batch(document)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid quality batch: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical "
+            "serialize_quality_batch output"
+        )
+
+    return document
