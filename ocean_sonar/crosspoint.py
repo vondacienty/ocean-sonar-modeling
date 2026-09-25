@@ -24,6 +24,7 @@ __all__ = [
     "dashboard_report",
     "gate",
     "gate_report",
+    "pair_gate",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -754,3 +755,36 @@ def pair(first, second, tolerance=1.0):
             item.append(0.0 if rounded == 0 else rounded)
         result.append(tuple(item))
     return tuple(result)
+
+
+def pair_gate(
+    first,
+    second,
+    tolerances,
+    match_tolerance=1.0,
+    min_mean_ratio=1.0,
+    max_rmse_limit=1.0,
+):
+    """Pair points from two surveys and gate the resulting crosspoints.
+
+    Calls :func:`pair` exactly once with ``first``, ``second`` and
+    ``match_tolerance``; with ``P`` the tuple it returns, then calls
+    :func:`gate` exactly once with ``P``, ``tolerances``,
+    ``min_mean_ratio`` and ``max_rmse_limit``. Consequently the full
+    :func:`pair` validation (including both point sequences and
+    ``match_tolerance``) runs before any :func:`gate` validation, and
+    every exception either function raises is propagated unchanged.
+    Inputs are not modified.
+
+    With ``G`` the dict returned by :func:`gate`, returns a dict with
+    keys in the order ``pairs, report, quality``; ``pairs`` is the
+    tuple ``P`` returned by :func:`pair`, ``report`` is ``G`` itself
+    and ``quality`` is ``G["quality"]``.
+    """
+    pairs = pair(first, second, match_tolerance)
+    gated = gate(pairs, tolerances, min_mean_ratio, max_rmse_limit)
+    return {
+        "pairs": pairs,
+        "report": gated,
+        "quality": gated["quality"],
+    }
