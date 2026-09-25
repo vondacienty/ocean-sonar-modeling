@@ -21,6 +21,7 @@ __all__ = [
     "aggregate",
     "dashboard",
     "dashboard_summary",
+    "dashboard_report",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -478,6 +479,79 @@ def dashboard_summary(crossings, tolerances):
         result[name] = 0.0 if value == 0 else value
     result["quality"] = "pass" if pass_count == m else "fail"
     return result
+
+
+def dashboard_report(crossings, tolerances):
+    """Bundle :func:`dashboard` with a cross-tolerance summary.
+
+    Calls :func:`dashboard` exactly once with ``crossings`` and
+    ``tolerances``, so its validation, first-error order, exceptions
+    (propagated unchanged) and index prefixes all apply here as well.
+    Inputs and the :func:`dashboard` result are not modified.
+
+    With ``D`` the four-tuple returned by :func:`dashboard`, ``R`` its
+    first item (the per-tolerance reports) and ``m = len(R)``, the
+    summary is ``count = m``, ``pass_count`` the number of reports with
+    ``quality == "pass"``, ``fail_count = m - pass_count``,
+    ``total_count = sum(x["count"])``,
+    ``mean_bias = fsum(x["bias"]) / m``,
+    ``max_rmse = max(x["rmse"])`` and
+    ``mean_ratio = fsum(x["within_ratio"]) / m``.
+    ``best_tolerance`` is the smallest tolerance whose report passed,
+    or ``None`` when no report passed, and ``quality_score`` is
+    ``100 * (pass_count / m) * mean_ratio``.
+
+    Returns a dict with keys in the order ``dashboard, summary,
+    quality``; ``dashboard`` is ``D`` itself and ``quality`` is
+    ``D[3]``. ``summary`` is a dict with keys in the order ``count,
+    pass_count, fail_count, total_count, mean_bias, max_rmse,
+    mean_ratio, best_tolerance, quality_score``; the counts are ints,
+    ``best_tolerance`` is a float or ``None`` and the remaining
+    statistics are floats rounded to 6 decimals (negative zero
+    normalized to ``0.0``).
+    """
+    result = dashboard(crossings, tolerances)
+    reports = result[0]
+    m = len(reports)
+
+    pass_count = sum(x["quality"] == "pass" for x in reports)
+    fail_count = m - pass_count
+    total_count = sum(x["count"] for x in reports)
+    mean_bias = math.fsum(x["bias"] for x in reports) / m
+    max_rmse = max(x["rmse"] for x in reports)
+    mean_ratio = math.fsum(x["within_ratio"] for x in reports) / m
+
+    passed = [t for t, x in zip(tolerances, reports) if x["quality"] == "pass"]
+    best_tolerance = min(passed) if passed else None
+
+    quality_score = 100 * (pass_count / m) * mean_ratio
+
+    summary = {
+        "count": int(m),
+        "pass_count": int(pass_count),
+        "fail_count": int(fail_count),
+        "total_count": int(total_count),
+    }
+    for name, value in (
+        ("mean_bias", mean_bias),
+        ("max_rmse", max_rmse),
+        ("mean_ratio", mean_ratio),
+    ):
+        value = round(float(value), 6)
+        summary[name] = 0.0 if value == 0 else value
+    if best_tolerance is None:
+        summary["best_tolerance"] = None
+    else:
+        best_tolerance = round(float(best_tolerance), 6)
+        summary["best_tolerance"] = 0.0 if best_tolerance == 0 else best_tolerance
+    quality_score = round(float(quality_score), 6)
+    summary["quality_score"] = 0.0 if quality_score == 0 else quality_score
+
+    return {
+        "dashboard": result,
+        "summary": summary,
+        "quality": result[3],
+    }
 
 
 def pair(first, second, tolerance=1.0):
