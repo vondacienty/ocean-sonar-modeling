@@ -31,6 +31,7 @@ __all__ = [
     "pair_gate_score_report",
     "pair_gate_score_summary",
     "serialize_pair_gate_score_summary",
+    "load_pair_gate_score_summary",
     "render_pair_gate_score_summary",
 ]
 
@@ -1106,6 +1107,189 @@ def serialize_pair_gate_score_summary(
         raise ValueError(
             f"pair gate score summary: could not be serialized to JSON: {exc}"
         ) from exc
+
+
+def _reject_pair_gate_json_constant(name):
+    raise ValueError(f"invalid JSON constant {name!r}")
+
+
+def _pair_gate_object_pairs(pairs):
+    """``object_pairs_hook`` that rejects duplicate JSON object keys."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON object key {key!r}")
+        result[key] = value
+    return result
+
+
+_PAIR_GATE_SCORE_SUMMARY_KEYS = (
+    "coverage_product",
+    "score_margin",
+    "matched",
+    "pair_quality",
+    "quality",
+)
+
+
+def _check_pair_gate_score_summary(value):
+    """Validate a decoded pair gate score summary and normalize it."""
+    if not isinstance(value, dict):
+        raise ValueError("top-level value must be a JSON object")
+    keys = tuple(value)
+    if keys != _PAIR_GATE_SCORE_SUMMARY_KEYS:
+        raise ValueError(
+            "keys must be exactly in the order "
+            "coverage_product, score_margin, matched, pair_quality, quality"
+        )
+
+    coverage_product = value["coverage_product"]
+    score_margin = value["score_margin"]
+    matched = value["matched"]
+    pair_quality = value["pair_quality"]
+    quality = value["quality"]
+
+    if isinstance(coverage_product, bool) or not isinstance(coverage_product, float):
+        raise ValueError("coverage_product must be a float")
+    if not math.isfinite(coverage_product):
+        raise ValueError("coverage_product must be finite")
+    if not 0 <= coverage_product <= 1:
+        raise ValueError("coverage_product must be in [0, 1]")
+    if coverage_product != round(float(coverage_product), 6):
+        raise ValueError("coverage_product must equal round(float(v), 6)")
+    coverage_product = round(float(coverage_product), 6)
+    if coverage_product == 0:
+        coverage_product = 0.0
+
+    if isinstance(score_margin, bool) or not isinstance(score_margin, float):
+        raise ValueError("score_margin must be a float")
+    if not math.isfinite(score_margin):
+        raise ValueError("score_margin must be finite")
+    if not 0 <= score_margin <= 100:
+        raise ValueError("score_margin must be in [0, 100]")
+    if score_margin != round(float(score_margin), 6):
+        raise ValueError("score_margin must equal round(float(v), 6)")
+    score_margin = round(float(score_margin), 6)
+    if score_margin == 0:
+        score_margin = 0.0
+
+    if isinstance(matched, bool) or not isinstance(matched, int):
+        raise ValueError("matched must be a non-bool int")
+    if not matched > 0:
+        raise ValueError("matched must be a positive int")
+
+    if not isinstance(pair_quality, str) or pair_quality not in ("pass", "fail"):
+        raise ValueError("pair_quality must be 'pass' or 'fail'")
+    if not isinstance(quality, str) or quality not in ("pass", "fail"):
+        raise ValueError("quality must be 'pass' or 'fail'")
+
+    margin_ok = pair_quality == "pass" and score_margin == 0.0
+    if quality == "pass":
+        if not margin_ok:
+            raise ValueError(
+                "quality may be 'pass' only when pair_quality is 'pass' "
+                "and score_margin equals 0.0"
+            )
+    elif margin_ok:
+        raise ValueError(
+            "quality must be 'pass' when pair_quality is 'pass' "
+            "and score_margin equals 0.0"
+        )
+
+    return {
+        "coverage_product": coverage_product,
+        "score_margin": score_margin,
+        "matched": matched,
+        "pair_quality": pair_quality,
+        "quality": quality,
+    }
+
+
+def load_pair_gate_score_summary(path) -> dict:
+    """Load a :func:`serialize_pair_gate_score_summary`-produced JSON summary.
+
+    ``path`` must be a non-empty ``str``: a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``. The file
+    is opened in binary mode (``"rb"``) and read in full; a missing
+    file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError`` and every other ``OSError`` is propagated
+    unchanged. The file is not modified.
+
+    The bytes must be exactly those produced by
+    :func:`serialize_pair_gate_score_summary` for the same value:
+    compact UTF-8 JSON (``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``) with no BOM and no
+    trailing newline. A BOM, a trailing newline, a UTF-8 decoding
+    failure, a JSON parsing failure, a ``NaN``/``Infinity`` constant or
+    a duplicate object key raises ``ValueError``.
+
+    The decoded value must be a JSON object with keys exactly in the
+    order ``coverage_product, score_margin, matched, pair_quality,
+    quality``; a missing, extra or reordered key raises
+    ``ValueError``. ``coverage_product`` and ``score_margin`` must be
+    finite non-bool floats, respectively in ``[0, 1]`` and
+    ``[0, 100]`` and equal to ``round(float(v), 6)``; ``matched`` must
+    be a positive non-bool int; ``pair_quality`` and ``quality`` must
+    be the strings ``"pass"`` or ``"fail"``; and ``quality`` may be
+    ``"pass"`` only when ``pair_quality`` is ``"pass"`` and
+    ``score_margin`` equals ``0.0``, and must be ``"fail"`` otherwise.
+
+    Finally the file bytes must equal the canonical re-serialization
+    of the decoded value byte for byte, so any whitespace, escaping,
+    number-format or other normalization mismatch raises
+    ``ValueError``.
+
+    Returns the summary as a dict with the keys in the order above;
+    floats are normalized with ``round(float(v), 6)`` and negative zero
+    becomes ``0.0``. The file is never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_pair_gate_json_constant,
+            object_pairs_hook=_pair_gate_object_pairs,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        summary = _check_pair_gate_score_summary(parsed)
+        canonical = json.dumps(
+            summary,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid pair gate score summary: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical "
+            "serialize_pair_gate_score_summary output"
+        )
+
+    return summary
 
 
 def _format_rendered_value(value):
