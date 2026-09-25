@@ -1080,18 +1080,20 @@ def pair_gate_quality(
         first, second, tolerances, match_tolerance, 1.0, 1.0
     )
 
-    if not _is_real_number(min_coverage):
-        raise TypeError("min_coverage must be a non-bool int or float")
-    if not math.isfinite(min_coverage):
-        raise ValueError("min_coverage must be finite")
-    if not 0 <= min_coverage <= 1:
-        raise ValueError("min_coverage must be in [0, 1]")
-    if not _is_real_number(min_score):
-        raise TypeError("min_score must be a non-bool int or float")
-    if not math.isfinite(min_score):
-        raise ValueError("min_score must be finite")
-    if not 0 <= min_score <= 100:
-        raise ValueError("min_score must be in [0, 100]")
+    def _validate_threshold(name, value, upper):
+        if not _is_real_number(value):
+            raise TypeError(f"{name} must be a non-bool int or float")
+        if isinstance(value, int):
+            in_range = 0 <= value <= upper
+        else:
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite")
+            in_range = 0 <= value <= upper
+        if not in_range:
+            raise ValueError(f"{name} must be in [0, {upper}]")
+
+    _validate_threshold("min_coverage", min_coverage, 1)
+    _validate_threshold("min_score", min_score, 100)
 
     coverage_ok = bool(result["summary"]["coverage_product"] >= min_coverage)
     score_ok = bool(result["score_report"]["score_report"]["score"] >= min_score)
