@@ -31,6 +31,7 @@ __all__ = [
     "pair_gate_score_report",
     "pair_gate_score_summary",
     "pair_gate_quality",
+    "pair_gate_quality_report",
     "serialize_pair_gate_score_summary",
     "render_pair_gate_score_summary",
     "load_pair_gate_score_summary",
@@ -1123,6 +1124,72 @@ def pair_gate_quality(
         "report": result,
         "checks": checks,
         "quality": quality,
+    }
+
+
+def pair_gate_quality_report(
+    first,
+    second,
+    tolerances,
+    match_tolerance=1.0,
+    min_coverage=1.0,
+    min_score=100.0,
+) -> dict:
+    """Report :func:`pair_gate_quality` results with threshold margins.
+
+    Calls :func:`pair_gate_quality` exactly once with ``first``,
+    ``second``, ``tolerances``, ``match_tolerance``, ``min_coverage``
+    and ``min_score``, so its validation, first-error order, exceptions
+    (propagated unchanged) and index prefixes all apply here as well.
+    Inputs and the :func:`pair_gate_quality` result are not modified.
+
+    With ``R`` the dict returned by :func:`pair_gate_quality`, returns
+    a dict with keys in the order ``report, thresholds, margins,
+    quality``. ``report`` is ``R`` itself and ``quality`` is
+    ``R["quality"]``. ``thresholds`` is a dict with keys in the order
+    ``min_coverage, min_score``, whose values are
+    ``round(float(min_coverage), 6)`` and
+    ``round(float(min_score), 6)``, both floats. ``margins`` is a dict
+    with keys in the order ``coverage_margin, score_margin``; the
+    values are
+    ``round(R["report"]["summary"]["coverage_product"] - min_coverage,
+    6)`` and
+    ``round(R["report"]["score_report"]["score_report"]["score"]
+    - min_score, 6)``, both floats with negative zero normalized to
+    ``0.0``.
+    """
+    result = pair_gate_quality(
+        first, second, tolerances, match_tolerance, min_coverage, min_score
+    )
+
+    min_coverage_threshold = round(float(min_coverage), 6)
+    min_score_threshold = round(float(min_score), 6)
+
+    coverage_margin = round(
+        float(result["report"]["summary"]["coverage_product"] - min_coverage), 6
+    )
+    if coverage_margin == 0:
+        coverage_margin = 0.0
+    score_margin = round(
+        float(
+            result["report"]["score_report"]["score_report"]["score"] - min_score
+        ),
+        6,
+    )
+    if score_margin == 0:
+        score_margin = 0.0
+
+    return {
+        "report": result,
+        "thresholds": {
+            "min_coverage": min_coverage_threshold,
+            "min_score": min_score_threshold,
+        },
+        "margins": {
+            "coverage_margin": coverage_margin,
+            "score_margin": score_margin,
+        },
+        "quality": result["quality"],
     }
 
 
