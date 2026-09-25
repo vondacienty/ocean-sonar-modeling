@@ -34,7 +34,7 @@ ocean-sonar-modeling --help     # 打印用法
 交点相关接口位于 `ocean_sonar.crosspoint`，该模块导出：
 `evaluate`、`report`、`pair`、`audit`、`profile`、`aggregate`、
 `dashboard`、`dashboard_summary`、`dashboard_report`、`gate`、
-`gate_report`、`pair_gate`、`pair_gate_report`。
+`gate_report`、`pair_gate`、`pair_gate_report`、`pair_gate_score`。
 
 ### 通用约定
 
@@ -171,3 +171,26 @@ match_tolerance, min_mean_ratio, max_rmse_limit)`，因此其全部校验顺序�
   `round(m / s, 6)`（负零归一化为 `0.0`）；
 - `quality`：仅当 `G["quality"] == "pass"` 且两个覆盖率均为 `1.0`
   时为 `"pass"`，否则为 `"fail"`。
+
+### `pair_gate_score(first, second, tolerances, match_tolerance=1.0, min_mean_ratio=1.0, max_rmse_limit=1.0)`
+
+在 `pair_gate_report` 结果上计算综合配对得分。
+
+执行时**仅调用一次** `pair_gate_report(first, second, tolerances,
+match_tolerance, min_mean_ratio, max_rmse_limit)`，因此其全部容器/类型校验、
+首错顺序、异常（原样向上传播，含容器为空、长度不符、非有限、越界、无匹配等
+`TypeError`/`ValueError` 条件）与下标前缀规则在此同样适用。输入参数与
+`pair_gate_report` 的返回结果均不被修改；除该次调用外不重调其他函数。
+
+记 `R` 为 `pair_gate_report` 返回的原 `dict`，`G = R["pair_gate"]`，
+`M = R["matching"]`，`S = G["report"]["summary"]`。
+
+**返回：** 键序为 `pair_gate, matching, score, quality` 的 `dict`：
+
+- `pair_gate`：即 `G` 本身，保持其对象身份，不做修改；
+- `matching`：即 `M` 本身，保持其对象身份，不做修改；
+- `score`：`float`，为
+  `round(100 * M["first_coverage"] * M["second_coverage"] * S["mean_ratio"], 6)`
+  （负零归一化为 `0.0`）；
+- `quality`：仅当 `R["quality"] == "pass"` 且 `score == 100.0` 时为
+  `"pass"`，否则为 `"fail"`。
