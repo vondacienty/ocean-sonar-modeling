@@ -34,7 +34,8 @@ ocean-sonar-modeling --help     # 打印用法
 交点相关接口位于 `ocean_sonar.crosspoint`，该模块导出：
 `evaluate`、`report`、`pair`、`audit`、`profile`、`aggregate`、
 `dashboard`、`dashboard_summary`、`dashboard_report`、`gate`、
-`gate_report`、`pair_gate`、`pair_gate_report`、`pair_gate_score`。
+`gate_report`、`pair_gate`、`pair_gate_report`、`pair_gate_score`、
+`render_pair_gate_score_summary`。
 
 ### 通用约定
 
@@ -195,3 +196,28 @@ match_tolerance, min_mean_ratio, max_rmse_limit)`，因此其全部校验顺序�
   S["mean_ratio"], 6)`（负零归一化为 `0.0`）；
 - `quality`：仅当 `R["quality"] == "pass"` 且 `score == 100.0` 时为
   `"pass"`，否则为 `"fail"`。
+
+### `render_pair_gate_score_summary(first, second, tolerances, match_tolerance=1.0, min_mean_ratio=1.0, max_rmse_limit=1.0)`
+
+把 `pair_gate_score_summary` 的结果渲染为纯文本。
+
+执行时**仅调用一次** `pair_gate_score_summary(first, second, tolerances,
+match_tolerance, min_mean_ratio, max_rmse_limit)`，因此其全部校验顺序、
+异常（原样向上传播）与下标前缀规则在此同样适用。输入参数与
+`pair_gate_score_summary` 的返回结果均不被修改。
+
+记 `R` 为 `pair_gate_score_summary` 返回的原 `dict`。
+
+**返回：** 一个 `str`，由三行组成，以 `"\n"` 连接、无末尾换行：
+
+- `QUALITY=<R["quality"]>` 行；
+- `SUMMARY=` 行：依次为 `R["summary"]` 的 `coverage_product`、
+  `score_margin`、`matched`、`pair_quality` 四个字段，以分号连接为
+  `key=value` 形式；
+- `REPORT=` 行：依次为
+  `R["score_report"]["score_report"]["matching"]` 的 `first_coverage`、
+  `second_coverage` 字段与 `R["score_report"]["score_report"]` 的
+  `score` 字段，同样以分号连接为 `key=value` 形式。
+
+整数按十进制渲染，字符串原样渲染，浮点数用 `format(v, ".6f")` 渲染
+（负零渲染为 `0.000000`）；各值按返回原样渲染，不做重算、排序或改写。

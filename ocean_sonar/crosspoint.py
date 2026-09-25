@@ -29,6 +29,7 @@ __all__ = [
     "pair_gate_score",
     "pair_gate_score_report",
     "pair_gate_score_summary",
+    "render_pair_gate_score_summary",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -1035,3 +1036,66 @@ def pair_gate_score_summary(
         "summary": summary,
         "quality": quality,
     }
+
+
+def _format_render_value(value):
+    if type(value) is float:
+        return format(0.0 if value == 0 else value, ".6f")
+    return str(value)
+
+
+def render_pair_gate_score_summary(
+    first,
+    second,
+    tolerances,
+    match_tolerance=1.0,
+    min_mean_ratio=1.0,
+    max_rmse_limit=1.0,
+) -> str:
+    """Render a :func:`pair_gate_score_summary` summary as plain text.
+
+    Calls :func:`pair_gate_score_summary` exactly once with ``first``,
+    ``second``, ``tolerances``, ``match_tolerance``,
+    ``min_mean_ratio`` and ``max_rmse_limit``, so its validation,
+    first-error order, exceptions (propagated unchanged) and index
+    prefixes all apply here as well. Inputs and the
+    :func:`pair_gate_score_summary` result are not modified.
+
+    With ``R`` the dict returned by that call, returns a ``str`` of
+    three ``"\\n"``-joined lines with no trailing newline: a
+    ``QUALITY=<R["quality"]>`` line; a ``SUMMARY=`` line with the
+    ``coverage_product``, ``score_margin``, ``matched`` and
+    ``pair_quality`` fields of ``R["summary"]`` as semicolon-joined
+    ``key=value`` fields; and a ``REPORT=`` line with the
+    ``first_coverage`` and ``second_coverage`` fields of
+    ``R["score_report"]["score_report"]["matching"]`` and the
+    ``score`` field of ``R["score_report"]["score_report"]`` in the
+    same form. Ints render in decimal, strings as-is and floats with
+    ``format(v, ".6f")``; negative zero renders as ``0.000000``.
+    Values are rendered as returned, with no recomputation, sorting or
+    rewriting.
+    """
+    result = pair_gate_score_summary(
+        first, second, tolerances, match_tolerance, min_mean_ratio, max_rmse_limit
+    )
+    summary = result["summary"]
+    score_report = result["score_report"]["score_report"]
+    matching = score_report["matching"]
+
+    lines = [
+        f"QUALITY={result['quality']}",
+        "SUMMARY="
+        + ";".join(
+            f"{key}={_format_render_value(summary[key])}"
+            for key in ("coverage_product", "score_margin", "matched", "pair_quality")
+        ),
+        "REPORT="
+        + ";".join(
+            (
+                f"first_coverage={_format_render_value(matching['first_coverage'])}",
+                f"second_coverage={_format_render_value(matching['second_coverage'])}",
+                f"score={_format_render_value(score_report['score'])}",
+            )
+        ),
+    ]
+    return "\n".join(lines)
