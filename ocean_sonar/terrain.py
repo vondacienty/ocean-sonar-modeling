@@ -25,6 +25,7 @@ __all__ = [
     "render_scale_report",
     "scale_dashboard",
     "scale_gate",
+    "scale_gate_report",
     "scale_profile",
     "scale_report",
     "scale_summary",
@@ -857,6 +858,54 @@ def scale_gate(
             "rmse_ok": rmse_ok,
         },
         "quality": quality,
+    }
+
+
+def scale_gate_report(
+    fine, coarse, tolerances, min_within_ratio=1.0, max_rmse_limit=1.0
+) -> dict:
+    """Summarize a :func:`scale_gate` sweep against its two limits.
+
+    ``fine``, ``coarse``, ``tolerances``, ``min_within_ratio`` and
+    ``max_rmse_limit`` have exactly the same constraints, validation
+    order, exception types and prefixes as in :func:`scale_gate`; all
+    validation is carried out by that function. :func:`scale_gate` is
+    called exactly once as ``scale_gate(fine, coarse, tolerances,
+    min_within_ratio, max_rmse_limit)``; its exceptions propagate
+    unchanged and inputs are not modified.
+
+    With ``G`` the dict returned by that call and
+    ``S = G["report"]["summary"]``, returns a dict with keys in the
+    order ``report, summary, quality``: ``report`` is ``G`` as-is and
+    ``quality`` is ``G["quality"]``. ``summary`` has keys in the order
+    ``tolerance_count, pass_count, fail_count, within_ratio, max_rmse,
+    min_within_ratio, max_rmse_limit, within_margin, rmse_margin``: the
+    first five values are copied as-is from ``S``;
+    ``min_within_ratio``/``max_rmse_limit`` are
+    ``round(float(parameter), 6)``; ``within_margin`` is
+    ``round(S["within_ratio"] - min_within_ratio, 6)`` and
+    ``rmse_margin`` is ``round(max_rmse_limit - S["max_rmse"], 6)``.
+    The counts are ints and every other value is a float (negative zero
+    normalized to ``0.0``); nothing is recomputed, sorted or added.
+    """
+    G = scale_gate(fine, coarse, tolerances, min_within_ratio, max_rmse_limit)
+
+    S = G["report"]["summary"]
+
+    return {
+        "report": G,
+        "summary": {
+            "tolerance_count": S["tolerance_count"],
+            "pass_count": S["pass_count"],
+            "fail_count": S["fail_count"],
+            "within_ratio": S["within_ratio"],
+            "max_rmse": S["max_rmse"],
+            "min_within_ratio": _round6(min_within_ratio),
+            "max_rmse_limit": _round6(max_rmse_limit),
+            "within_margin": _round6(S["within_ratio"] - min_within_ratio),
+            "rmse_margin": _round6(max_rmse_limit - S["max_rmse"]),
+        },
+        "quality": G["quality"],
     }
 
 
