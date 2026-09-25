@@ -36,7 +36,7 @@ ocean-sonar-modeling --help     # 打印用法
 `dashboard`、`dashboard_summary`、`dashboard_report`、`gate`、
 `gate_report`、`pair_gate`、`pair_gate_report`、`pair_gate_score`、
 `pair_gate_score_report`、`pair_gate_score_summary`、
-`render_pair_gate_score_summary`。
+`render_pair_gate_score_summary`、`dump_aggregate`、`load_aggregate`。
 
 ### 通用约定
 
@@ -247,3 +247,47 @@ REPORT=first_coverage=<R["score_report"]["score_report"]["matching"]["first_cove
 
 格式化规则：`float` 一律使用 `format(v, ".6f")`（负零渲染为
 `0.000000`），`int` 以十进制输出，`str` 原样插入。
+
+### `dump_aggregate(paths) -> bytes`
+
+把 `aggregate_quality_batches(paths)` 的聚合结果序列化为 JSON 字节。
+
+执行时**仅调用一次** `aggregate_quality_batches(paths)` 得到 `A`，因此其
+全部校验顺序、异常（原样向上传播）与 `paths[i]: ` 下标前缀规则在此同样
+适用；输入参数与 `A` 均不被修改。
+
+**编码规则：** 编码对象与 `A` 键序、取值完全一致，仅把其中的 `tuple`
+递归写成 JSON 数组（`A` 中只有顶层 `batches` 是 `tuple`，故编码后顶层键序
+为 `batches, summary, quality`，`batches` 为键序 `index, path, batch` 的
+对象数组）。JSON 与浮点规范沿 `serialize_quality_batch`：紧凑 UTF-8 JSON
+（`ensure_ascii=False`、`separators=(",", ":")`、`allow_nan=False`）、
+无尾换行；浮点按 `round(float(v), 6)` 写入（负零归一化为 `0.0`）；任何
+JSON 或 UTF-8 编码失败抛出 `ValueError`。
+
+**返回：** JSON 文档的 `bytes`。
+
+### `load_aggregate(path) -> dict`
+
+读取由 `dump_aggregate` 写出的 JSON 聚合文件。
+
+`path` 校验、文件读取与拒绝规则沿 `load_quality_batch`：`path` 必须是非空
+`str`（非 `str` 抛 `TypeError`，空串抛 `ValueError`）；文件以 `"rb"` 打开
+并整体读取，`FileNotFoundError`、`IsADirectoryError` 及其他 `OSError` 原样
+传播；BOM、尾换行、UTF-8 解码失败、JSON 解析失败以及 `NaN`/`Infinity`
+常量均抛 `ValueError`。文件不被修改。
+
+**聚合契约：** 解码值必须是顶层键序恰为 `batches, summary, quality` 的
+对象；`batches` 为非空数组，各项键序恰为 `index, path, batch`，其中
+`index` 为从 `0` 连续的非布尔 `int`，`path` 为非空 `str`，`batch` 符合
+`load_quality_batch` 的返回结构；`summary` 键序恰为 `batch_count,
+record_count, mean_coverage, mean_score, worst_batch_index,
+worst_record_index, quality`。加载时按各 `batch["records"]` 原序重算
+summary 计数、基于 `math.fsum` 的均值、按 `(score, coverage, 批次索引,
+记录 index)` 字典序最小的最差位置以及 quality，并与 `summary` 及顶层
+`quality` 逐项相等；文件字节还须与解码值的规范重编码逐字节相等。任何
+键序、类型、范围、关系、解析或规范字节不匹配均抛 `ValueError`。
+
+**返回：** 键序为 `batches, summary, quality` 的 `dict`；仅顶层
+`batches` 数组还原为 `tuple`，各 `batch["records"]` 保持 `list`，其余容器
+保持 `dict`/`list`。对返回值按 `dump_aggregate` 的编码规范重编码，须与
+文件字节逐字节相等。
