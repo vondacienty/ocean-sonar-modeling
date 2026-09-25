@@ -35,6 +35,7 @@ __all__ = [
     "serialize_pair_gate_score_summary",
     "render_pair_gate_score_summary",
     "load_pair_gate_score_summary",
+    "render_quality_batch",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -1515,3 +1516,80 @@ def load_pair_gate_score_summary(path) -> dict:
         )
 
     return summary
+
+
+def render_quality_batch(
+    records,
+    tolerances,
+    min_coverage=1.0,
+    min_score=100.0,
+) -> str:
+    """Render a one-line quality summary over a batch of survey pairs.
+
+    ``records`` is a non-empty list/tuple; each item is a two-element
+    list/tuple ``(first, second)`` naming the two point sequences of
+    one survey pair.
+
+    Validation order (first error wins): the ``records`` container, its
+    non-emptiness, then each record in index order (item container,
+    length). Container mismatches raise ``TypeError``; every other
+    violation raises ``ValueError``. Item errors are prefixed with
+    ``"records[i]: "``.
+
+    :func:`pair_gate_quality_report` is then called exactly once per
+    record, in input order, with ``first``, ``second``, ``tolerances``,
+    ``1.0``, ``min_coverage`` and ``min_score``; any exception it
+    raises is propagated unchanged. Inputs are not modified.
+
+    With ``R_i`` the dict returned for record ``i``,
+    ``C_i = R_i["report"]["report"]["summary"]["coverage_product"]``,
+    ``S_i = R_i["report"]["report"]["score_report"]["score_report"]
+    ["score"]``, ``n = len(records)`` and ``p`` the number of records
+    whose ``R_i["quality"]`` is ``"pass"``, returns the single line
+    (no trailing newline)::
+
+        count=<n>;mean_score=<s>;worst_index=<w>;quality=<q>
+
+    where ``s`` is ``round(fsum(S_i) / n, 6)`` rendered with
+    ``format(s, ".6f")`` (negative zero normalized to ``0.0``), ``w``
+    is the index of the minimum ``(S_i, C_i, i)`` tuple, ``n`` and
+    ``w`` are formatted in decimal, and ``q`` is ``"pass"`` only when
+    ``p == n`` and ``"fail"`` otherwise.
+    """
+    if not isinstance(records, (list, tuple)):
+        raise TypeError("records must be a list or tuple")
+    if len(records) == 0:
+        raise ValueError("records must be non-empty")
+    for i in range(len(records)):
+        record = records[i]
+        prefix = f"records[{i}]: "
+        if not isinstance(record, (list, tuple)):
+            raise TypeError(prefix + "must be a list or tuple")
+        if len(record) != 2:
+            raise ValueError(prefix + "must have 2 elements")
+
+    n = len(records)
+    scores = []
+    coverages = []
+    pass_count = 0
+    for i in range(n):
+        first, second = records[i]
+        result = pair_gate_quality_report(
+            first, second, tolerances, 1.0, min_coverage, min_score
+        )
+        summary_report = result["report"]["report"]
+        scores.append(summary_report["score_report"]["score_report"]["score"])
+        coverages.append(summary_report["summary"]["coverage_product"])
+        if result["quality"] == "pass":
+            pass_count += 1
+
+    mean_score = round(math.fsum(scores) / n, 6)
+    if mean_score == 0:
+        mean_score = 0.0
+    worst_index = min(range(n), key=lambda i: (scores[i], coverages[i], i))
+    quality = "pass" if pass_count == n else "fail"
+
+    return (
+        f"count={n};mean_score={format(mean_score, '.6f')};"
+        f"worst_index={worst_index};quality={quality}"
+    )
