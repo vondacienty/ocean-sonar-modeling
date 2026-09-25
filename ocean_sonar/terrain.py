@@ -24,6 +24,7 @@ __all__ = [
     "quality",
     "scale_dashboard",
     "scale_profile",
+    "scale_report",
     "stats",
     "trend",
 ]
@@ -592,6 +593,57 @@ def scale_dashboard(records) -> dict:
             "quality_score": quality_score,
         },
         "quality": quality,
+    }
+
+
+def scale_report(fine, coarse, tolerances) -> dict:
+    """Combine :func:`scale_profile` and :func:`scale_dashboard` into one report.
+
+    ``fine``, ``coarse`` and ``tolerances`` have exactly the same
+    constraints, validation order, exception types and
+    ``"fine.cells[i]: "`` / ``"coarse.cells[i]: "`` /
+    ``"tolerances[i]: "`` prefixes as in :func:`scale_profile`; all
+    validation is carried out by that function. Type mismatches
+    (including bool) raise ``TypeError`` and all other constraint
+    errors raise ``ValueError``.
+
+    :func:`scale_profile` is called exactly once as
+    ``scale_profile(fine, coarse, tolerances)``; its exceptions
+    propagate unchanged and inputs are not modified. From its ``curve``
+    a new tuple is built in the same order, one dict per item with keys
+    in the order ``matched, missing, within_tolerance, quality`` and
+    the four values copied as-is; :func:`scale_dashboard` is then
+    called exactly once with that tuple.
+
+    Returns a dict with keys in the order ``profile, dashboard,
+    quality``: ``profile`` and ``dashboard`` are the objects returned
+    by the two calls as-is, and ``quality`` is ``"pass"`` only when
+    both their ``quality`` values are ``"pass"``, and ``"fail"``
+    otherwise.
+    """
+    profile = scale_profile(fine, coarse, tolerances)
+
+    records = tuple(
+        {
+            "matched": item["matched"],
+            "missing": item["missing"],
+            "within_tolerance": item["within_tolerance"],
+            "quality": item["quality"],
+        }
+        for item in profile["curve"]
+    )
+    dashboard = scale_dashboard(records)
+
+    grade = (
+        "pass"
+        if profile["quality"] == "pass" and dashboard["quality"] == "pass"
+        else "fail"
+    )
+
+    return {
+        "profile": profile,
+        "dashboard": dashboard,
+        "quality": grade,
     }
 
 
