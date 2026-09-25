@@ -29,6 +29,7 @@ __all__ = [
     "pair_gate_score",
     "pair_gate_score_report",
     "pair_gate_score_summary",
+    "render_pair_gate_score_summary",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -1035,3 +1036,75 @@ def pair_gate_score_summary(
         "summary": summary,
         "quality": quality,
     }
+
+
+def _format_rendered_value(value):
+    """Format one value for :func:`render_pair_gate_score_summary`."""
+    if isinstance(value, float):
+        return format(0.0 if value == 0 else value, ".6f")
+    if isinstance(value, int):
+        return str(value)
+    return value
+
+
+def render_pair_gate_score_summary(
+    first,
+    second,
+    tolerances,
+    match_tolerance=1.0,
+    min_mean_ratio=1.0,
+    max_rmse_limit=1.0,
+) -> str:
+    """Render :func:`pair_gate_score_summary` results as three text lines.
+
+    Calls :func:`pair_gate_score_summary` exactly once with ``first``,
+    ``second``, ``tolerances``, ``match_tolerance``,
+    ``min_mean_ratio`` and ``max_rmse_limit``, so its validation,
+    first-error order, exceptions (propagated unchanged) and index
+    prefixes all apply here as well. Inputs and the
+    :func:`pair_gate_score_summary` result are not modified.
+
+    With ``R`` the dict returned by :func:`pair_gate_score_summary`,
+    returns three lines joined by ``"\\n"`` with no trailing newline::
+
+        QUALITY=<R.quality>
+        SUMMARY=coverage_product=<...>;score_margin=<...>;matched=<...>;pair_quality=<...>
+        REPORT=first_coverage=<...>;second_coverage=<...>;score=<...>
+
+    where the SUMMARY values are ``R["summary"]["coverage_product"]``,
+    ``R["summary"]["score_margin"]``, ``R["summary"]["matched"]`` and
+    ``R["summary"]["pair_quality"]``, and the REPORT values are
+    ``R["score_report"]["score_report"]["matching"]["first_coverage"]``,
+    ``R["score_report"]["score_report"]["matching"]["second_coverage"]``
+    and ``R["score_report"]["score_report"]["score"]`` (the inner
+    ``score_report`` is the :func:`pair_gate_score` dict). Floats use
+    ``format(v, ".6f")`` (negative zero rendered as ``"0.000000"``),
+    ints are formatted in decimal and strings are copied as-is.
+    """
+    result = pair_gate_score_summary(
+        first, second, tolerances, match_tolerance, min_mean_ratio, max_rmse_limit
+    )
+    summary = result["summary"]
+    score_report = result["score_report"]["score_report"]
+    matching = score_report["matching"]
+
+    quality_line = "QUALITY=" + _format_rendered_value(result["quality"])
+    summary_line = "SUMMARY=" + ";".join(
+        (
+            "coverage_product="
+            + _format_rendered_value(summary["coverage_product"]),
+            "score_margin=" + _format_rendered_value(summary["score_margin"]),
+            "matched=" + _format_rendered_value(summary["matched"]),
+            "pair_quality=" + _format_rendered_value(summary["pair_quality"]),
+        )
+    )
+    report_line = "REPORT=" + ";".join(
+        (
+            "first_coverage="
+            + _format_rendered_value(matching["first_coverage"]),
+            "second_coverage="
+            + _format_rendered_value(matching["second_coverage"]),
+            "score=" + _format_rendered_value(score_report["score"]),
+        )
+    )
+    return "\n".join((quality_line, summary_line, report_line))

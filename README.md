@@ -34,7 +34,9 @@ ocean-sonar-modeling --help     # 打印用法
 交点相关接口位于 `ocean_sonar.crosspoint`，该模块导出：
 `evaluate`、`report`、`pair`、`audit`、`profile`、`aggregate`、
 `dashboard`、`dashboard_summary`、`dashboard_report`、`gate`、
-`gate_report`、`pair_gate`、`pair_gate_report`、`pair_gate_score`。
+`gate_report`、`pair_gate`、`pair_gate_report`、`pair_gate_score`、
+`pair_gate_score_report`、`pair_gate_score_summary`、
+`render_pair_gate_score_summary`。
 
 ### 通用约定
 
@@ -195,3 +197,53 @@ match_tolerance, min_mean_ratio, max_rmse_limit)`，因此其全部校验顺序�
   S["mean_ratio"], 6)`（负零归一化为 `0.0`）；
 - `quality`：仅当 `R["quality"] == "pass"` 且 `score == 100.0` 时为
   `"pass"`，否则为 `"fail"`。
+
+### `pair_gate_score_report(first, second, tolerances, match_tolerance=1.0, min_mean_ratio=1.0, max_rmse_limit=1.0)`
+
+在 `pair_gate_score` 结果上补充覆盖率与得分裕量。仅调用一次
+`pair_gate_score(...)`，校验顺序、异常（原样向上传播）与下标前缀规则
+同样适用，输入与其返回结果均不被修改。
+
+返回键序为 `score_report, metrics, quality` 的 `dict`：`score_report`
+为 `pair_gate_score` 返回的原 `dict`；`metrics` 键序为
+`coverage_product, score_margin`，分别为
+`round(first_coverage * second_coverage, 6)` 与
+`round(100 - score, 6)`（均为负零归一化的 `float`）；`quality` 仅当
+原 `quality == "pass"` 且 `score_margin == 0.0` 时为 `"pass"`。
+
+### `pair_gate_score_summary(first, second, tolerances, match_tolerance=1.0, min_mean_ratio=1.0, max_rmse_limit=1.0)`
+
+把 `pair_gate_score_report` 的结果压成一个扁平汇总。仅调用一次
+`pair_gate_score_report(...)`，校验顺序、异常（原样向上传播）与下标
+前缀规则同样适用，输入与其返回结果均不被修改。
+
+返回键序为 `score_report, summary, quality` 的 `dict`：`score_report`
+为原 `dict`；`summary` 键序为 `coverage_product, score_margin,
+matched, pair_quality`，其中前两个为取自 `metrics` 的 `float`、
+`matched` 为 `int`（匹配对数）、`pair_quality` 为 `str`（内层
+`pair_gate` 的质量），全部原样复制不重算；`quality` 仅当原
+`quality` 与 `pair_quality` 均为 `"pass"` 且 `score_margin == 0.0`
+时为 `"pass"`。
+
+### `render_pair_gate_score_summary(first, second, tolerances, match_tolerance=1.0, min_mean_ratio=1.0, max_rmse_limit=1.0) -> str`
+
+把 `pair_gate_score_summary` 的结果渲染成三行文本。
+
+执行时**仅调用一次** `pair_gate_score_summary(first, second,
+tolerances, match_tolerance, min_mean_ratio, max_rmse_limit)`，因此其
+全部校验顺序、异常（原样向上传播）与下标前缀规则在此同样适用。输入
+参数与其返回结果均不被修改。
+
+记 `R` 为 `pair_gate_score_summary` 返回的 `dict`，返回三行、以
+`\n` 连接且**无尾换行**的 `str`：
+
+```text
+QUALITY=<R["quality"]>
+SUMMARY=coverage_product=<R["summary"]["coverage_product"]>;score_margin=<R["summary"]["score_margin"]>;matched=<R["summary"]["matched"]>;pair_quality=<R["summary"]["pair_quality"]>
+REPORT=first_coverage=<R["score_report"]["score_report"]["matching"]["first_coverage"]>;second_coverage=<R["score_report"]["score_report"]["matching"]["second_coverage"]>;score=<R["score_report"]["score_report"]["score"]>
+```
+
+其中内层 `score_report` 即 `pair_gate_score` 返回的 `dict`。
+
+格式化规则：`float` 一律使用 `format(v, ".6f")`（负零渲染为
+`0.000000`），`int` 以十进制输出，`str` 原样插入。
