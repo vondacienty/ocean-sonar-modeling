@@ -39,7 +39,7 @@ ocean-sonar-modeling --help     # 打印用法
 `pair_gate_quality`、`pair_gate_quality_report`、
 `render_quality_batch`、`serialize_quality_batch`、
 `load_quality_batch`、`aggregate_quality_batches`、
-`dump_aggregate`、`load_aggregate`、
+`dump_aggregate`、`load_aggregate`、`trend`、
 `serialize_pair_gate_score_summary`、`render_pair_gate_score_summary`、
 `load_pair_gate_score_summary`。
 
@@ -299,3 +299,33 @@ worst_batch_index, worst_record_index, quality`。按各 batch 的
 
 返回保持原键序的 `dict`：仅顶层 `batches` 数组还原为 tuple，各
 `batch["records"]` 保持 list，其余容器保持 dict/list。文件不被修改。
+
+### `trend(paths) -> dict`
+
+沿同一组批次的多份聚合快照逐份比较变化趋势。
+
+`paths` 必须为至少含 2 项的 list/tuple；各项按下标顺序校验为非空
+`str`。校验顺序（先报错者胜出）：`paths` 容器、项数、再逐项（类型、
+非空）。容器非 list/tuple 或某项非 `str` 抛 `TypeError`；少于 2 项或
+空串抛 `ValueError`。项错误前缀为 `paths[i]: `。
+
+随后按输入顺序对每个 path **仅调用一次** `load_aggregate`；其异常原样
+传播。输入与文件均不被修改。
+
+各份聚合结果必须与首份批次数相同，且对应批次 `b` 的 `path` 与
+`records` 条数相同，否则抛 `ValueError`。
+
+对 `i = 1..n-1`、批次 `b`、记录 `r`，以原始 float 计算
+`dc = coverage_i - coverage_(i-1)`、
+`ds = score_i - score_(i-1)`；`dc < 0`、`ds < 0` 或 quality 由
+`pass` 变 `fail` 即视为退化。记 `K` 为比较总数，`w` 为按**未舍入**
+元组 `(ds, dc, i, b, r)` 字典序最小的比较；不排序、不复制、不增补。
+
+返回键序为
+`count, changes, degraded, coverage_delta, score_delta, worst, quality`
+的 `dict`：`count` 为快照数 `n`，`changes` 为 `K`，`degraded` 为退化
+比较数，三者均为 `int`；两个 delta 分别为全部 `dc`/`ds` 经
+`math.fsum` 求和后除以 `K` 的 float；`worst` 为
+`(i, b, r, dc, ds)`，前三项为 `int`、后两项为 float；所有 float 均经
+`round(float(v), 6)` 且负零归一化为 `0.0`。`quality` 仅在无退化时为
+`pass`，否则为 `fail`。

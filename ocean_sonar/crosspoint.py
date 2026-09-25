@@ -42,6 +42,7 @@ __all__ = [
     "serialize_pair_gate_score_summary",
     "render_pair_gate_score_summary",
     "load_pair_gate_score_summary",
+    "trend",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -2110,6 +2111,155 @@ def render_aggregate(path) -> str:
         + f";quality={_format_rendered_value(worst_record['quality'])}"
     )
     return "\n".join((quality_line, summary_line, worst_line))
+
+
+def trend(paths) -> dict:
+    """Compare successive :func:`load_aggregate` snapshots along one path set.
+
+    ``paths`` must be a list/tuple of at least two items; each item,
+    checked in index order, must be a non-empty ``str``. Validation
+    order (first error wins): the ``paths`` container, its length, then
+    each item in index order (type, then emptiness). A non-list/tuple
+    container or a non-str item raises ``TypeError``; fewer than two
+    items or an empty ``str`` raises ``ValueError``. Item errors are
+    prefixed with ``"paths[i]: "``.
+
+    :func:`load_aggregate` is then called exactly once per path, in
+    input order; any exception it raises is propagated unchanged.
+    Inputs and the loaded files are not modified.
+
+    Every loaded aggregate must have the same number of batches as the
+    first one and, for each corresponding batch ``b``, the same
+    ``path`` and the same number of ``records``; otherwise a
+    ``ValueError`` is raised.
+
+    For each snapshot pair ``i = 1..n-1``, batch ``b`` and record ``r``,
+    the unrounded deltas are ``dc = coverage_i - coverage_(i-1)`` and
+    ``ds = score_i - score_(i-1)``; a comparison is degraded when
+    ``dc < 0``, ``ds < 0`` or its quality changes from ``"pass"`` to
+    ``"fail"``. With ``K`` the total number of comparisons, the worst
+    comparison ``w`` minimizes the *unrounded* tuple
+    ``(ds, dc, i, b, r)`` lexicographically, and
+    ``coverage_delta``/``score_delta`` are the ``math.fsum`` of all
+    ``dc``/``ds`` values divided by ``K``. Comparisons are not sorted,
+    deduplicated or augmented.
+
+    Returns a dict with keys in the order
+    ``count, changes, degraded, coverage_delta, score_delta, worst,
+    quality``: ``count`` is the snapshot count ``n`` and
+    ``changes``/``degraded`` are ``K`` and the number of degraded
+    comparisons, all ints; the two deltas are
+    ``round(float(fsum / K), 6)`` floats and ``worst`` is the tuple
+    ``(i, b, r, dc, ds)`` whose first three items are ints and last two
+    the rounded delta floats; every float is
+    ``round(float(v), 6)`` with negative zero normalized to ``0.0``.
+    ``quality`` is ``"pass"`` only when no comparison is degraded and
+    ``"fail"`` otherwise.
+    """
+    if not isinstance(paths, (list, tuple)):
+        raise TypeError("paths must be a list or tuple")
+    if len(paths) < 2:
+        raise ValueError("paths must contain at least 2 items")
+    for i in range(len(paths)):
+        prefix = f"paths[{i}]: "
+        if not isinstance(paths[i], str):
+            raise TypeError(prefix + "must be a str")
+        if paths[i] == "":
+            raise ValueError(prefix + "must not be empty")
+
+    aggregates = [load_aggregate(path) for path in paths]
+
+    first_batches = aggregates[0]["batches"]
+    batch_count = len(first_batches)
+    for i in range(1, len(aggregates)):
+        batches = aggregates[i]["batches"]
+        if len(batches) != batch_count:
+            raise ValueError(
+                f"aggregate at paths[{i}] has {len(batches)} batches, "
+                f"expected {batch_count}"
+            )
+        for b in range(batch_count):
+            if batches[b]["path"] != first_batches[b]["path"]:
+                raise ValueError(
+                    f"aggregate at paths[{i}] batch {b} path "
+                    f"{batches[b]['path']!r} does not match "
+                    f"{first_batches[b]['path']!r}"
+                )
+            first_records = first_batches[b]["batch"]["records"]
+            records = batches[b]["batch"]["records"]
+            if len(records) != len(first_records):
+                raise ValueError(
+                    f"aggregate at paths[{i}] batch {b} has "
+                    f"{len(records)} records, expected "
+                    f"{len(first_records)}"
+                )
+
+    coverage_deltas = []
+    score_deltas = []
+    worst_position = None
+    worst_dc = None
+    worst_ds = None
+    degraded = 0
+    for i in range(1, len(aggregates)):
+        previous = aggregates[i - 1]["batches"]
+        current = aggregates[i]["batches"]
+        for b in range(batch_count):
+            previous_records = previous[b]["batch"]["records"]
+            current_records = current[b]["batch"]["records"]
+            for r in range(len(current_records)):
+                dc = (
+                    current_records[r]["coverage"]
+                    - previous_records[r]["coverage"]
+                )
+                ds = current_records[r]["score"] - previous_records[r]["score"]
+                coverage_deltas.append(dc)
+                score_deltas.append(ds)
+                if (
+                    dc < 0
+                    or ds < 0
+                    or (
+                        previous_records[r]["quality"] == "pass"
+                        and current_records[r]["quality"] == "fail"
+                    )
+                ):
+                    degraded += 1
+                position = (ds, dc, i, b, r)
+                if worst_position is None or position < worst_position:
+                    worst_position = position
+                    worst_dc = dc
+                    worst_ds = ds
+
+    changes = len(coverage_deltas)
+    coverage_delta = round(float(math.fsum(coverage_deltas) / changes), 6)
+    if coverage_delta == 0:
+        coverage_delta = 0.0
+    score_delta = round(float(math.fsum(score_deltas) / changes), 6)
+    if score_delta == 0:
+        score_delta = 0.0
+
+    worst_dc = round(float(worst_dc), 6)
+    if worst_dc == 0:
+        worst_dc = 0.0
+    worst_ds = round(float(worst_ds), 6)
+    if worst_ds == 0:
+        worst_ds = 0.0
+    worst = (
+        int(worst_position[2]),
+        int(worst_position[3]),
+        int(worst_position[4]),
+        worst_dc,
+        worst_ds,
+    )
+
+    return {
+        "count": int(len(aggregates)),
+        "changes": int(changes),
+        "degraded": int(degraded),
+        "coverage_delta": coverage_delta,
+        "score_delta": score_delta,
+        "worst": worst,
+        "quality": "pass" if degraded == 0 else "fail",
+    }
 
 
 def serialize_pair_gate_score_summary(
