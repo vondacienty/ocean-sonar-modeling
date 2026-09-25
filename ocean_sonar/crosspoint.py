@@ -26,6 +26,7 @@ __all__ = [
     "gate_report",
     "pair_gate",
     "pair_gate_report",
+    "pair_gate_score",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -852,5 +853,64 @@ def pair_gate_report(
     return {
         "pair_gate": result,
         "matching": matching,
+        "quality": quality,
+    }
+
+
+def pair_gate_score(
+    first,
+    second,
+    tolerances,
+    match_tolerance=1.0,
+    min_mean_ratio=1.0,
+    max_rmse_limit=1.0,
+):
+    """Score :func:`pair_gate_report` results from coverage and mean ratio.
+
+    Calls :func:`pair_gate_report` exactly once with ``first``,
+    ``second``, ``tolerances``, ``match_tolerance``,
+    ``min_mean_ratio`` and ``max_rmse_limit``, so its validation,
+    first-error order, exceptions (propagated unchanged) and index
+    prefixes all apply here as well. Inputs and the
+    :func:`pair_gate_report` result are not modified.
+
+    With ``R`` the dict returned by :func:`pair_gate_report`,
+    ``G = R["pair_gate"]``, ``M = R["matching"]`` and
+    ``S = G["report"]["report"]["summary"]`` (the dashboard-report
+    summary nested inside the :func:`gate` result), the score is
+    ``round(100 * M["first_coverage"] * M["second_coverage"]
+    * S["mean_ratio"], 6)``, a float with negative zero normalized to
+    ``0.0``.
+
+    Returns a dict with keys in the order
+    ``pair_gate, matching, score, quality``; ``pair_gate`` is ``G``
+    itself and ``matching`` is ``M`` itself. ``quality`` is
+    ``"pass"`` only when ``R["quality"]`` is ``"pass"`` and the
+    score equals ``100.0``, and ``"fail"`` otherwise.
+    """
+    result = pair_gate_report(
+        first, second, tolerances, match_tolerance, min_mean_ratio, max_rmse_limit
+    )
+    gated = result["pair_gate"]
+    matching = result["matching"]
+    summary = gated["report"]["report"]["summary"]
+
+    score = round(
+        float(
+            100
+            * matching["first_coverage"]
+            * matching["second_coverage"]
+            * summary["mean_ratio"]
+        ),
+        6,
+    )
+    if score == 0:
+        score = 0.0
+
+    quality = "pass" if result["quality"] == "pass" and score == 100.0 else "fail"
+    return {
+        "pair_gate": gated,
+        "matching": matching,
+        "score": score,
         "quality": quality,
     }
