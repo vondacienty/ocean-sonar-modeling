@@ -33,6 +33,7 @@ __all__ = [
     "pair_gate_quality",
     "pair_gate_quality_report",
     "render_quality_batch",
+    "serialize_quality_batch",
     "serialize_pair_gate_score_summary",
     "render_pair_gate_score_summary",
     "load_pair_gate_score_summary",
@@ -1272,6 +1273,119 @@ def render_quality_batch(
         f"worst_index={worst_index};"
         f"quality={quality}"
     )
+
+
+def serialize_quality_batch(
+    records,
+    tolerances,
+    min_coverage=1.0,
+    min_score=100.0,
+) -> bytes:
+    """Serialize a batch of :func:`pair_gate_quality_report` runs as JSON bytes.
+
+    ``records`` is validated exactly as in :func:`render_quality_batch`
+    (container, non-emptiness and each two-element record, with
+    ``"records[i]: "`` prefixes), and :func:`pair_gate_quality_report`
+    is called exactly once per record, in input order, with ``first``,
+    ``second``, ``tolerances``, ``1.0``, ``min_coverage`` and
+    ``min_score``; any exception it raises is propagated unchanged.
+    Inputs are not modified.
+
+    With ``R_i`` the dict returned for record ``i``, ``n`` the number
+    of records, ``P_i = R_i.report.report``,
+    ``C_i = P_i.summary.coverage_product``,
+    ``S_i = P_i.score_report.score_report.score``,
+    ``Q_i = R_i.quality`` and ``w`` the smallest index minimizing
+    ``(S_i, C_i, i)`` lexicographically, the encoded object has
+    top-level keys exactly in the order ``records, summary``.
+    ``records`` is an array of ``n`` objects, one per record in input
+    order, each with keys exactly in the order
+    ``index, coverage, score, quality`` and values ``i``, ``C_i``,
+    ``S_i`` and ``Q_i``. ``summary`` is an object with keys exactly in
+    the order ``count, mean_score, worst_index, quality`` and values
+    ``n``, ``round(math.fsum(S_i) / n, 6)``, ``w`` and ``"pass"`` only
+    when every ``Q_i`` is ``"pass"`` (``"fail"`` otherwise).
+
+    The object is encoded as UTF-8 JSON with ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation and
+    no trailing newline. Floats are first rounded with
+    ``round(float(v), 6)`` and negative zero is normalized to ``0.0``;
+    ints are written in decimal and strings are copied as-is. Any JSON
+    or UTF-8 encoding failure raises ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    if not isinstance(records, (list, tuple)):
+        raise TypeError("records must be a list or tuple")
+    if len(records) == 0:
+        raise ValueError("records must be non-empty")
+    for i in range(len(records)):
+        record = records[i]
+        prefix = f"records[{i}]: "
+        if not isinstance(record, (list, tuple)):
+            raise TypeError(prefix + "must be a list or tuple")
+        if len(record) != 2:
+            raise ValueError(prefix + "must have 2 elements")
+
+    items = []
+    scores = []
+    coverages = []
+    pass_count = 0
+    for i, (first, second) in enumerate(records):
+        result = pair_gate_quality_report(
+            first, second, tolerances, 1.0, min_coverage, min_score
+        )
+        inner = result["report"]["report"]
+        coverage = round(float(inner["summary"]["coverage_product"]), 6)
+        if coverage == 0:
+            coverage = 0.0
+        score = round(float(inner["score_report"]["score_report"]["score"]), 6)
+        if score == 0:
+            score = 0.0
+        quality = result["quality"]
+        items.append(
+            {
+                "index": int(i),
+                "coverage": coverage,
+                "score": score,
+                "quality": quality,
+            }
+        )
+        coverages.append(coverage)
+        scores.append(score)
+        if quality == "pass":
+            pass_count += 1
+
+    n = len(records)
+    mean_score = round(float(math.fsum(scores) / n), 6)
+    if mean_score == 0:
+        mean_score = 0.0
+    worst_index = min(
+        range(n), key=lambda i: (scores[i], coverages[i], i)
+    )
+    quality = "pass" if pass_count == n else "fail"
+
+    document = {
+        "records": items,
+        "summary": {
+            "count": int(n),
+            "mean_score": mean_score,
+            "worst_index": int(worst_index),
+            "quality": quality,
+        },
+    }
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"quality batch: could not be serialized to JSON: {exc}"
+        ) from exc
 
 
 def serialize_pair_gate_score_summary(
