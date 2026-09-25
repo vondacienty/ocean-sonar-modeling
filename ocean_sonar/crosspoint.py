@@ -30,6 +30,7 @@ __all__ = [
     "pair_gate_score",
     "pair_gate_score_report",
     "pair_gate_score_summary",
+    "pair_gate_quality",
     "serialize_pair_gate_score_summary",
     "render_pair_gate_score_summary",
     "load_pair_gate_score_summary",
@@ -1037,6 +1038,76 @@ def pair_gate_score_summary(
     return {
         "score_report": result,
         "summary": summary,
+        "quality": quality,
+    }
+
+
+def pair_gate_quality(
+    first,
+    second,
+    tolerances,
+    match_tolerance=1.0,
+    min_coverage=1.0,
+    min_score=100.0,
+) -> dict:
+    """Gate :func:`pair_gate_score_summary` results against thresholds.
+
+    Calls :func:`pair_gate_score_summary` exactly once with ``first``,
+    ``second``, ``tolerances``, ``match_tolerance``, ``1.0`` and
+    ``1.0``, so its validation, first-error order, exceptions
+    (propagated unchanged) and index prefixes all apply here as well.
+    Inputs and the :func:`pair_gate_score_summary` result are not
+    modified.
+
+    The thresholds are then validated in order: first
+    ``min_coverage``, then ``min_score``. Each must be a finite
+    non-bool int/float; ``min_coverage`` must lie in ``[0, 1]`` and
+    ``min_score`` must lie in ``[0, 100]``. Type mismatches raise
+    ``TypeError``; non-finite or out-of-range values raise
+    ``ValueError``.
+
+    With ``R`` the dict returned by :func:`pair_gate_score_summary`,
+    returns a dict with keys in the order ``report, checks, quality``.
+    ``report`` is ``R`` itself. ``checks`` is a dict with keys in the
+    order ``coverage_ok, score_ok``; the bools
+    ``R["summary"]["coverage_product"] >= min_coverage`` and
+    ``R["score_report"]["score_report"]["score"] >= min_score``.
+    ``quality`` is ``"pass"`` only when
+    ``R["summary"]["pair_quality"]`` is ``"pass"`` and both checks are
+    true, and ``"fail"`` otherwise.
+    """
+    result = pair_gate_score_summary(
+        first, second, tolerances, match_tolerance, 1.0, 1.0
+    )
+
+    if not _is_real_number(min_coverage):
+        raise TypeError("min_coverage must be a non-bool int or float")
+    if not math.isfinite(min_coverage):
+        raise ValueError("min_coverage must be finite")
+    if not 0 <= min_coverage <= 1:
+        raise ValueError("min_coverage must be in [0, 1]")
+    if not _is_real_number(min_score):
+        raise TypeError("min_score must be a non-bool int or float")
+    if not math.isfinite(min_score):
+        raise ValueError("min_score must be finite")
+    if not 0 <= min_score <= 100:
+        raise ValueError("min_score must be in [0, 100]")
+
+    coverage_ok = bool(result["summary"]["coverage_product"] >= min_coverage)
+    score_ok = bool(result["score_report"]["score_report"]["score"] >= min_score)
+
+    checks = {
+        "coverage_ok": coverage_ok,
+        "score_ok": score_ok,
+    }
+    quality = (
+        "pass"
+        if result["summary"]["pair_quality"] == "pass" and coverage_ok and score_ok
+        else "fail"
+    )
+    return {
+        "report": result,
+        "checks": checks,
         "quality": quality,
     }
 
