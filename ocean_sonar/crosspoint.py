@@ -22,6 +22,7 @@ __all__ = [
     "dashboard",
     "dashboard_summary",
     "dashboard_report",
+    "gate",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -551,6 +552,69 @@ def dashboard_report(crossings, tolerances):
         "dashboard": result,
         "summary": summary,
         "quality": result[3],
+    }
+
+
+def gate(crossings, tolerances, min_mean_ratio=1.0, max_rmse_limit=1.0):
+    """Apply pass/fail gates to a :func:`dashboard_report` result.
+
+    Calls :func:`dashboard_report` exactly once with ``crossings`` and
+    ``tolerances``, so its validation, first-error order, exceptions
+    (propagated unchanged), index prefixes and rounding all apply here
+    as well. Inputs are not modified.
+
+    ``min_mean_ratio`` and ``max_rmse_limit`` are then validated in
+    that order: each must be a finite non-bool int/float, with
+    ``min_mean_ratio`` in ``[0, 1]`` and ``max_rmse_limit >= 0``. A
+    type mismatch raises ``TypeError``; a non-finite or out-of-range
+    value raises ``ValueError``.
+
+    With ``D`` the dict returned by :func:`dashboard_report` and
+    ``S = D["summary"]``, returns a dict with keys in the order
+    ``report, checks, quality``; ``report`` is ``D`` itself. ``checks``
+    is a dict with keys in the order
+    ``mean_ratio, max_rmse, within_ok, rmse_ok``; ``mean_ratio`` and
+    ``max_rmse`` are copied unchanged from ``S`` and ``within_ok`` and
+    ``rmse_ok`` are the bools ``S["mean_ratio"] >= min_mean_ratio`` and
+    ``S["max_rmse"] <= max_rmse_limit``. ``quality`` is ``"pass"`` only
+    when ``D["quality"]`` is ``"pass"`` and both checks are true, and
+    ``"fail"`` otherwise. Nothing is recomputed, sorted, rounded,
+    copied (beyond the two stated summary floats) or added.
+    """
+    dashboard = dashboard_report(crossings, tolerances)
+
+    if not _is_real_number(min_mean_ratio):
+        raise TypeError("min_mean_ratio must be a non-bool int or float")
+    if not math.isfinite(min_mean_ratio):
+        raise ValueError("min_mean_ratio must be finite")
+    if not 0 <= min_mean_ratio <= 1:
+        raise ValueError("min_mean_ratio must be in [0, 1]")
+
+    if not _is_real_number(max_rmse_limit):
+        raise TypeError("max_rmse_limit must be a non-bool int or float")
+    if not math.isfinite(max_rmse_limit):
+        raise ValueError("max_rmse_limit must be finite")
+    if not max_rmse_limit >= 0:
+        raise ValueError("max_rmse_limit must be >= 0")
+
+    summary = dashboard["summary"]
+    within_ok = summary["mean_ratio"] >= min_mean_ratio
+    rmse_ok = summary["max_rmse"] <= max_rmse_limit
+    quality = (
+        "pass"
+        if dashboard["quality"] == "pass" and within_ok and rmse_ok
+        else "fail"
+    )
+
+    return {
+        "report": dashboard,
+        "checks": {
+            "mean_ratio": summary["mean_ratio"],
+            "max_rmse": summary["max_rmse"],
+            "within_ok": bool(within_ok),
+            "rmse_ok": bool(rmse_ok),
+        },
+        "quality": quality,
     }
 
 
