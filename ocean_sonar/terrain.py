@@ -22,10 +22,13 @@ __all__ = [
     "dashboard",
     "metrics",
     "quality",
+    "scale_dashboard",
     "scale_profile",
     "stats",
     "trend",
 ]
+
+_SCALE_RECORD_KEYS = ("matched", "missing", "within_tolerance", "quality")
 
 
 def _round6(value):
@@ -475,6 +478,121 @@ def scale_profile(fine, coarse, tolerances):
         "first_pass_tolerance": first_pass_tolerance,
         "area": area,
         "quality": grade,
+    }
+
+
+def scale_dashboard(records):
+    """Aggregate per-scale :func:`cross_scale`-style records into one report.
+
+    ``records`` must be a non-empty ``tuple``; each item ``i`` must be a
+    dict with keys exactly in the order
+    ``matched, missing, within_tolerance, quality``. The first three
+    fields are non-bool non-negative ints with
+    ``within_tolerance <= matched``, and ``quality`` must be the string
+    ``"pass"`` or ``"fail"``.
+
+    Validation order, stopping at the first error: the outer container,
+    non-emptiness, then each record in index order — its container, key
+    order, and then each field in key order. Container, key-order and
+    field-type mismatches (including bool) raise ``TypeError``;
+    emptiness, range, relation and enum errors raise ``ValueError``.
+    Per-record errors are prefixed with ``"records[i]: "``. The input is
+    not modified.
+
+    With ``m`` the number of records, ``p`` the number whose
+    ``quality`` is ``"pass"`` and ``M``/``N``/``W`` the respective sums
+    of ``matched``/``missing``/``within_tolerance``, ``R`` is
+    ``W / M`` when ``M > 0`` and ``0.0`` otherwise.
+
+    Returns a dict with keys in the order ``summary, quality``;
+    ``summary`` is a dict with keys in the order
+    ``tolerance_count, pass_count, fail_count, matched_total,
+    missing_total, within_total, within_ratio, quality_score``: the
+    first six values are ints (``m``, ``p``, ``m - p``, ``M``, ``N``
+    and ``W``) and the last two are ``round(R, 6)`` and
+    ``round(100 * R * (1 if p == m else 0), 6)`` as floats (negative
+    zero normalized to ``0.0``). ``quality`` is ``"pass"`` only when
+    ``p == m``, ``N == 0`` and ``W == M``, and ``"fail"`` otherwise.
+    """
+    if type(records) is not tuple:
+        raise TypeError("records must be a tuple")
+    if len(records) == 0:
+        raise ValueError("records must be non-empty")
+
+    m = len(records)
+    p = 0
+    matched_total = 0
+    missing_total = 0
+    within_total = 0
+
+    for i in range(m):
+        prefix = f"records[{i}]: "
+        record = records[i]
+        if type(record) is not dict:
+            raise TypeError(prefix + "must be a dict")
+        if list(record.keys()) != list(_SCALE_RECORD_KEYS):
+            raise TypeError(
+                prefix
+                + "keys must be in the order "
+                "matched, missing, within_tolerance, quality"
+            )
+
+        matched = record["matched"]
+        if type(matched) is not int:
+            raise TypeError(prefix + "matched must be a non-bool int")
+        if matched < 0:
+            raise ValueError(prefix + "matched must be >= 0")
+
+        missing = record["missing"]
+        if type(missing) is not int:
+            raise TypeError(prefix + "missing must be a non-bool int")
+        if missing < 0:
+            raise ValueError(prefix + "missing must be >= 0")
+
+        within = record["within_tolerance"]
+        if type(within) is not int:
+            raise TypeError(prefix + "within_tolerance must be a non-bool int")
+        if within < 0:
+            raise ValueError(prefix + "within_tolerance must be >= 0")
+        if within > matched:
+            raise ValueError(
+                prefix + "within_tolerance must be <= matched"
+            )
+
+        grade = record["quality"]
+        if type(grade) is not str:
+            raise TypeError(prefix + "quality must be a str")
+        if grade not in ("pass", "fail"):
+            raise ValueError(prefix + "quality must be 'pass' or 'fail'")
+
+        if grade == "pass":
+            p += 1
+        matched_total += matched
+        missing_total += missing
+        within_total += within
+
+    ratio = within_total / matched_total if matched_total > 0 else 0.0
+    within_ratio = _round6(ratio)
+    quality_score = _round6(100 * ratio * (1 if p == m else 0))
+
+    quality = (
+        "pass"
+        if p == m and missing_total == 0 and within_total == matched_total
+        else "fail"
+    )
+
+    return {
+        "summary": {
+            "tolerance_count": int(m),
+            "pass_count": int(p),
+            "fail_count": int(m - p),
+            "matched_total": int(matched_total),
+            "missing_total": int(missing_total),
+            "within_total": int(within_total),
+            "within_ratio": within_ratio,
+            "quality_score": quality_score,
+        },
+        "quality": quality,
     }
 
 
