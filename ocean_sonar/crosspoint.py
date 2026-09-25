@@ -35,6 +35,7 @@ __all__ = [
     "render_quality_batch",
     "serialize_quality_batch",
     "load_quality_batch",
+    "aggregate_quality_batches",
     "serialize_pair_gate_score_summary",
     "render_pair_gate_score_summary",
     "load_pair_gate_score_summary",
@@ -1622,6 +1623,104 @@ def load_quality_batch(path) -> dict:
         )
 
     return batch
+
+
+def aggregate_quality_batches(paths) -> dict:
+    """Aggregate several :func:`load_quality_batch` files into one summary.
+
+    ``paths`` must be a non-empty list/tuple whose items are non-empty
+    ``str`` values. Validation order (first error wins): the ``paths``
+    container, its non-emptiness, then each item in index order (type,
+    then emptiness). A non-list/tuple container or a non-str item
+    raises ``TypeError``; an empty container or an empty item raises
+    ``ValueError``. Item errors are prefixed with ``"paths[i]: "``.
+
+    :func:`load_quality_batch` is then called exactly once per path, in
+    input order; any exception it raises is propagated unchanged. The
+    inputs and the files are not modified.
+
+    With ``B_i`` the batch loaded from ``paths[i]``, the records of all
+    batches are expanded in batch order, preserving each batch's record
+    order; writing ``C``/``S``/``Q`` for a record's
+    ``coverage``/``score``/``quality`` and ``N`` for the total record
+    count, all statistics are recomputed from the records (the batch
+    ``summary`` dicts are never consulted).
+
+    Returns a dict with keys in the order ``batches, summary,
+    quality``. ``batches`` is a tuple with one item per path, each a
+    dict with keys in the order ``index, path, batch`` and values
+    ``i``, the original ``paths[i]`` and the ``B_i`` object itself.
+    ``summary`` is a dict with keys in the order ``batch_count,
+    record_count, mean_coverage, mean_score, worst_batch_index,
+    worst_record_index, quality``: ``batch_count`` is the number of
+    paths and ``record_count`` is ``N``, both ints; ``mean_coverage``
+    and ``mean_score`` are ``round(float(fsum(C) / N), 6)`` and
+    ``round(float(fsum(S) / N), 6)``, floats with negative zero
+    normalized to ``0.0``; ``worst_batch_index`` and
+    ``worst_record_index`` are the ints ``i`` and record index of the
+    record minimizing ``(S, C, i, record index)`` lexicographically.
+    Both ``quality`` values are identical: ``"pass"`` only when every
+    record's ``Q`` is ``"pass"``, and ``"fail"`` otherwise. Nothing is
+    sorted, copied or augmented with extra keys.
+    """
+    if not isinstance(paths, (list, tuple)):
+        raise TypeError("paths must be a list or tuple")
+    if len(paths) == 0:
+        raise ValueError("paths must be non-empty")
+    for i in range(len(paths)):
+        path = paths[i]
+        prefix = f"paths[{i}]: "
+        if not isinstance(path, str):
+            raise TypeError(prefix + "must be a str")
+        if path == "":
+            raise ValueError(prefix + "must not be empty")
+
+    batches = []
+    coverages = []
+    scores = []
+    positions = []
+    all_pass = True
+    for i in range(len(paths)):
+        batch = load_quality_batch(paths[i])
+        batches.append(
+            {
+                "index": int(i),
+                "path": paths[i],
+                "batch": batch,
+            }
+        )
+        for j in range(len(batch["records"])):
+            record = batch["records"][j]
+            coverages.append(record["coverage"])
+            scores.append(record["score"])
+            positions.append((record["score"], record["coverage"], i, j))
+            if record["quality"] != "pass":
+                all_pass = False
+
+    n = len(scores)
+    mean_coverage = round(float(math.fsum(coverages) / n), 6)
+    if mean_coverage == 0:
+        mean_coverage = 0.0
+    mean_score = round(float(math.fsum(scores) / n), 6)
+    if mean_score == 0:
+        mean_score = 0.0
+    worst = min(positions)
+    quality = "pass" if all_pass else "fail"
+
+    summary = {
+        "batch_count": int(len(paths)),
+        "record_count": int(n),
+        "mean_coverage": mean_coverage,
+        "mean_score": mean_score,
+        "worst_batch_index": int(worst[2]),
+        "worst_record_index": int(worst[3]),
+        "quality": quality,
+    }
+    return {
+        "batches": tuple(batches),
+        "summary": summary,
+        "quality": quality,
+    }
 
 
 def serialize_pair_gate_score_summary(
