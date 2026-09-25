@@ -18,6 +18,7 @@ __all__ = [
     "analyze_layers",
     "breakdown",
     "compare_layers",
+    "cross_scale",
     "dashboard",
     "metrics",
     "quality",
@@ -81,6 +82,66 @@ def _validated_means(r, nx, ny, cells):
                 raise ValueError(prefix + "mean must be >= 0")
 
     return [cell[1] if cell[0] > 0 else None for cell in cells]
+
+
+def _validate_scale_grid(name, grid):
+    """Validate a four-element ``(r, nx, ny, cells)`` grid.
+
+    Cell errors are prefixed with ``"<name>.cells[j]: "``. Returns
+    ``(r, nx, ny, means)`` where ``means`` has one entry per cell, the
+    cell mean for non-empty cells and ``None`` for empty ones.
+    """
+    if not isinstance(grid, (list, tuple)):
+        raise TypeError(f"{name} must be a list or tuple")
+    if len(grid) != 4:
+        raise ValueError(f"{name} must have 4 elements")
+    r, nx, ny, cells = grid
+
+    if not _is_real_number(r):
+        raise TypeError(f"{name}.r must be a non-bool int or float")
+    if not math.isfinite(r):
+        raise ValueError(f"{name}.r must be finite")
+    if not r > 0:
+        raise ValueError(f"{name}.r must be > 0")
+
+    for axis, value in (("nx", nx), ("ny", ny)):
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise TypeError(f"{name}.{axis} must be a non-bool int")
+        if not value > 0:
+            raise ValueError(f"{name}.{axis} must be > 0")
+
+    if not isinstance(cells, (list, tuple)):
+        raise TypeError(f"{name}.cells must be a list or tuple")
+    if len(cells) != nx * ny:
+        raise ValueError(f"{name}.cells must have nx * ny elements")
+
+    means = []
+    for j in range(len(cells)):
+        prefix = f"{name}.cells[{j}]: "
+        cell = cells[j]
+        if not isinstance(cell, (list, tuple)):
+            raise TypeError(prefix + "must be a list or tuple")
+        if len(cell) != 2:
+            raise ValueError(prefix + "must have 2 elements")
+        count, mean = cell
+        if not isinstance(count, int) or isinstance(count, bool):
+            raise TypeError(prefix + "count must be a non-bool int")
+        if not count >= 0:
+            raise ValueError(prefix + "count must be >= 0")
+        if count == 0:
+            if mean is not None:
+                raise ValueError(prefix + "mean must be None when count is 0")
+            means.append(None)
+        else:
+            if not _is_real_number(mean):
+                raise TypeError(prefix + "mean must be a non-bool int or float")
+            if not math.isfinite(mean):
+                raise ValueError(prefix + "mean must be finite")
+            if not mean >= 0:
+                raise ValueError(prefix + "mean must be >= 0")
+            means.append(mean)
+
+    return r, nx, ny, means
 
 
 def analyze(r, nx, ny, cells):
@@ -157,6 +218,126 @@ def analyze(r, nx, ny, cells):
                 )
             result.append((slope, roughness))
     return tuple(result)
+
+
+def cross_scale(fine, coarse, tolerance=0.5):
+    """Compare a fine depth grid against a coarser one block by block.
+
+    ``fine`` and ``coarse`` are each a four-element list/tuple
+    ``(r, nx, ny, cells)`` with the same constraints as the parameters
+    of :func:`analyze`; cell errors are prefixed with
+    ``"fine.cells[i]: "`` and ``"coarse.cells[i]: "``.
+
+    Validation follows the order ``fine``, ``coarse``, ``tolerance``
+    and then the scale relations, stopping at the first error: the
+    fine resolution must be strictly less than the coarse one,
+    ``q = coarse.r / fine.r`` must be positive with ``q.is_integer()``,
+    and the fine dimensions must be exactly ``int(q)`` times the coarse
+    dimensions (``fine.nx == int(q) * coarse.nx`` and likewise for
+    ``ny``). ``tolerance`` is a finite non-bool int/float ``> 0``.
+    Type mismatches (including bool) raise ``TypeError`` and all other
+    constraint errors raise ``ValueError``.
+
+    Each non-empty coarse cell is compared with the ``q`` x ``q`` block
+    of fine cells that maps onto it; the block mean is
+    ``math.fsum`` of the non-empty fine means divided by their number.
+    A coarse cell with a mean and at least one non-empty fine cell is
+    ``matched``; a non-empty coarse cell whose block has no fine means
+    is ``missing``; empty coarse cells are ignored.
+
+    For each matched block, ``R = coarse_mean - block_mean`` and
+    ``k = len(R)``. When ``k > 0``, ``bias = fsum(R) / k``,
+    ``rmse = sqrt(fsum(r * r for r in R) / k)`` and
+    ``max_abs = max(abs(r) for r in R)``; when ``k == 0`` all three are
+    ``0.0``. ``within_tolerance`` counts the residuals with
+    ``abs(R) <= tolerance``.
+
+    Returns a dict with keys in the order ``matched, missing, bias,
+    rmse, max_abs, within_tolerance, quality``: the counts are ints and
+    every float is rounded with ``round(float(v), 6)`` (negative zero
+    normalized to ``0.0``). ``quality`` is ``"pass"`` only when
+    ``missing == 0``, ``matched > 0`` and every residual is within
+    tolerance, and ``"fail"`` otherwise. Computation uses the unrounded
+    means; inputs are not modified.
+    """
+    fine_r, fine_nx, fine_ny, fine_means = _validate_scale_grid("fine", fine)
+    coarse_r, coarse_nx, coarse_ny, coarse_means = _validate_scale_grid(
+        "coarse", coarse
+    )
+
+    if not _is_real_number(tolerance):
+        raise TypeError("tolerance must be a non-bool int or float")
+    if not math.isfinite(tolerance):
+        raise ValueError("tolerance must be finite")
+    if not tolerance > 0:
+        raise ValueError("tolerance must be > 0")
+
+    if not fine_r < coarse_r:
+        raise ValueError("coarse.r must be strictly greater than fine.r")
+
+    q = coarse_r / fine_r
+    if not q > 0 or not float(q).is_integer():
+        raise ValueError("coarse.r / fine.r must be a positive integer")
+    q = int(q)
+
+    if fine_nx != q * coarse_nx or fine_ny != q * coarse_ny:
+        raise ValueError(
+            "fine dimensions must be q times the coarse dimensions"
+        )
+
+    matched = 0
+    missing = 0
+    residuals = []
+    for cy in range(coarse_ny):
+        for cx in range(coarse_nx):
+            coarse_mean = coarse_means[cy * coarse_nx + cx]
+            if coarse_mean is None:
+                continue
+
+            block_values = []
+            for by in range(q):
+                fy = cy * q + by
+                for bx in range(q):
+                    fx = cx * q + bx
+                    value = fine_means[fy * fine_nx + fx]
+                    if value is not None:
+                        block_values.append(value)
+
+            if not block_values:
+                missing += 1
+                continue
+
+            block_mean = math.fsum(block_values) / len(block_values)
+            matched += 1
+            residuals.append(coarse_mean - block_mean)
+
+    k = len(residuals)
+    if k > 0:
+        bias = _round6(math.fsum(residuals) / k)
+        rmse = _round6(
+            math.sqrt(math.fsum(r * r for r in residuals) / k)
+        )
+        max_abs = _round6(max(abs(r) for r in residuals))
+        within = sum(1 for r in residuals if abs(r) <= tolerance)
+    else:
+        bias = rmse = max_abs = 0.0
+        within = 0
+
+    quality = (
+        "pass"
+        if missing == 0 and matched > 0 and within == matched
+        else "fail"
+    )
+
+    return {
+        "matched": int(matched),
+        "missing": int(missing),
+        "bias": bias,
+        "rmse": rmse,
+        "max_abs": max_abs,
+        "within_tolerance": int(within),
+        "quality": quality,
+    }
 
 
 def metrics(r, nx, ny, cells):
