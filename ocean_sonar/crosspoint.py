@@ -23,6 +23,7 @@ __all__ = [
     "dashboard_summary",
     "dashboard_report",
     "gate",
+    "gate_report",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -613,6 +614,48 @@ def gate(crossings, tolerances, min_mean_ratio=1.0, max_rmse_limit=1.0):
         "report": result,
         "checks": checks,
         "quality": quality,
+    }
+
+
+def gate_report(crossings, tolerances, min_mean_ratio=1.0, max_rmse_limit=1.0):
+    """Re-present a :func:`gate` result with threshold margins.
+
+    Calls :func:`gate` exactly once with ``crossings``, ``tolerances``,
+    ``min_mean_ratio`` and ``max_rmse_limit``, so its validation,
+    first-error order, exceptions (propagated unchanged) and index
+    prefixes all apply here as well. Inputs and the :func:`gate` result
+    are not modified.
+
+    With ``G`` the dict returned by :func:`gate` and
+    ``S = G["report"]["summary"]``, returns a dict with keys in the
+    order ``report, metrics, quality``. ``report`` is ``G`` itself and
+    ``quality`` is ``G["quality"]``. ``metrics`` is a dict with keys in
+    the order ``mean_ratio, max_rmse, within_margin, rmse_margin``; the
+    first two are the floats ``S["mean_ratio"]`` and ``S["max_rmse"]``,
+    taken unchanged, and the last two are
+    ``round(S["mean_ratio"] - min_mean_ratio, 6)`` and
+    ``round(max_rmse_limit - S["max_rmse"], 6)``, floats with negative
+    zero normalized to ``0.0``.
+    """
+    gated = gate(crossings, tolerances, min_mean_ratio, max_rmse_limit)
+    summary = gated["report"]["summary"]
+
+    within_margin = round(float(summary["mean_ratio"] - min_mean_ratio), 6)
+    rmse_margin = round(float(max_rmse_limit - summary["max_rmse"]), 6)
+    if within_margin == 0:
+        within_margin = 0.0
+    if rmse_margin == 0:
+        rmse_margin = 0.0
+
+    return {
+        "report": gated,
+        "metrics": {
+            "mean_ratio": summary["mean_ratio"],
+            "max_rmse": summary["max_rmse"],
+            "within_margin": within_margin,
+            "rmse_margin": rmse_margin,
+        },
+        "quality": gated["quality"],
     }
 
 
