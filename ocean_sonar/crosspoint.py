@@ -1149,7 +1149,8 @@ def pair_gate_quality_report(
     ``R["quality"]``. ``thresholds`` is a dict with keys in the order
     ``min_coverage, min_score``; the floats
     ``round(float(min_coverage), 6)`` and ``round(float(min_score),
-    6)``. ``margins`` is a dict with keys in the order
+    6)`` with negative zero normalized to ``0.0``. ``margins`` is a
+    dict with keys in the order
     ``coverage_margin, score_margin``; the floats
     ``round(R["report"]["summary"]["coverage_product"] - min_coverage,
     6)`` and ``round(R["report"]["score_report"]["score_report"]
@@ -1160,9 +1161,15 @@ def pair_gate_quality_report(
         first, second, tolerances, match_tolerance, min_coverage, min_score
     )
 
+    min_coverage_threshold = round(float(min_coverage), 6)
+    if min_coverage_threshold == 0:
+        min_coverage_threshold = 0.0
+    min_score_threshold = round(float(min_score), 6)
+    if min_score_threshold == 0:
+        min_score_threshold = 0.0
     thresholds = {
-        "min_coverage": round(float(min_coverage), 6),
-        "min_score": round(float(min_score), 6),
+        "min_coverage": min_coverage_threshold,
+        "min_score": min_score_threshold,
     }
 
     coverage_margin = round(
