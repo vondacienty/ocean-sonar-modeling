@@ -36,7 +36,12 @@ ocean-sonar-modeling --help     # 打印用法
 `dashboard`、`dashboard_summary`、`dashboard_report`、`gate`、
 `gate_report`、`pair_gate`、`pair_gate_report`、`pair_gate_score`、
 `pair_gate_score_report`、`pair_gate_score_summary`、
-`render_pair_gate_score_summary`。
+`pair_gate_quality`、`pair_gate_quality_report`、
+`render_quality_batch`、`serialize_quality_batch`、
+`load_quality_batch`、`aggregate_quality_batches`、
+`dump_aggregate`、`load_aggregate`、
+`serialize_pair_gate_score_summary`、`render_pair_gate_score_summary`、
+`load_pair_gate_score_summary`。
 
 ### 通用约定
 
@@ -247,3 +252,50 @@ REPORT=first_coverage=<R["score_report"]["score_report"]["matching"]["first_cove
 
 格式化规则：`float` 一律使用 `format(v, ".6f")`（负零渲染为
 `0.000000`），`int` 以十进制输出，`str` 原样插入。
+
+### `dump_aggregate(paths) -> bytes`
+
+把 `aggregate_quality_batches` 的聚合结果编码为 JSON 字节串。
+
+执行时**仅调用一次** `aggregate_quality_batches(paths)`，因此其全部
+校验顺序、异常（原样向上传播）与下标前缀规则在此同样适用；输入不被
+修改。
+
+记 `A` 为其返回的 `dict`，编码对象即 `A` 本身：顶层键序保持
+`batches, summary, quality`，所有值原样保留；唯一的结构转换是把
+tuple（顶层 `batches`）递归编码为 JSON 数组，各
+`batch["records"]` 仍为数组，其余容器仍为对象或数组。
+
+编码规范与 `serialize_quality_batch` 一致：UTF-8 JSON，
+`ensure_ascii=False`、`separators=(",", ":")`、`allow_nan=False`，
+无缩进、无尾换行；聚合结果中的浮点数均已按
+`round(float(v), 6)` 保留 6 位小数并将负零归一化为 `0.0`。任何
+JSON 或 UTF-8 编码失败抛出 `ValueError`。返回 `bytes`。
+
+### `load_aggregate(path) -> dict`
+
+从文件读回 `dump_aggregate` 生成的 JSON 聚合结果。
+
+`path` 必须为非空 `str`：非 `str` 抛 `TypeError`，空串抛
+`ValueError`。文件以二进制模式（`"rb"`）打开并整体读出；文件不存在
+抛 `FileNotFoundError`，路径为目录抛 `IsADirectoryError`，其余
+`OSError` 原样传播。文件不被修改。
+
+字节必须与 `dump_aggregate` 对同一值的输出完全一致：紧凑 UTF-8
+JSON，无 BOM、无尾换行；BOM、尾换行、UTF-8 解码失败或 JSON 解析
+失败均抛 `ValueError`，`NaN`/`Infinity` 等非常量 token 一律拒绝。
+
+解码值必须是顶层键序恰为 `batches, summary, quality` 的对象：
+`batches` 为非空数组，各项键序恰为 `index, path, batch`，其中
+`index` 为从 0 连续的非布尔 `int`，`path` 为非空 `str`，`batch`
+满足 `load_quality_batch` 返回结构的全部规则；`summary` 键序恰为
+`batch_count, record_count, mean_coverage, mean_score,
+worst_batch_index, worst_record_index, quality`。按各 batch 的
+`records` 原序重算：批次与记录计数、`fsum` 均值（6 位小数舍入、负零
+归一化）、按 `(score, coverage, 批次索引, 记录 index)` 字典序最小的
+最差位置，以及质量判定，并与 `summary` 及顶层 `quality` 逐项相等。
+文件字节还必须与解码值的规范重编码逐字节相等；任何键序、类型、范围、
+关系、解析或规范字节不匹配均抛 `ValueError`。
+
+返回保持原键序的 `dict`：仅顶层 `batches` 数组还原为 tuple，各
+`batch["records"]` 保持 list，其余容器保持 dict/list。文件不被修改。

@@ -36,6 +36,8 @@ __all__ = [
     "serialize_quality_batch",
     "load_quality_batch",
     "aggregate_quality_batches",
+    "dump_aggregate",
+    "load_aggregate",
     "serialize_pair_gate_score_summary",
     "render_pair_gate_score_summary",
     "load_pair_gate_score_summary",
@@ -1728,6 +1730,331 @@ def aggregate_quality_batches(paths) -> dict:
         "summary": summary,
         "quality": quality,
     }
+
+
+_AGGREGATE_KEYS = ("batches", "summary", "quality")
+_AGGREGATE_BATCH_KEYS = ("index", "path", "batch")
+_AGGREGATE_SUMMARY_KEYS = (
+    "batch_count",
+    "record_count",
+    "mean_coverage",
+    "mean_score",
+    "worst_batch_index",
+    "worst_record_index",
+    "quality",
+)
+
+
+def _aggregate_to_jsonable(value):
+    """Recursively convert tuples to JSON arrays, preserving everything else."""
+    if isinstance(value, (list, tuple)):
+        return [_aggregate_to_jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _aggregate_to_jsonable(item) for key, item in value.items()}
+    return value
+
+
+def _dump_aggregate(aggregate):
+    try:
+        text = json.dumps(
+            _aggregate_to_jsonable(aggregate),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"aggregate: could not be serialized to JSON: {exc}"
+        ) from exc
+
+
+def dump_aggregate(paths) -> bytes:
+    """Serialize an :func:`aggregate_quality_batches` result as JSON bytes.
+
+    Calls :func:`aggregate_quality_batches` exactly once with ``paths``
+    — and no other combining function — so its validation, first-error
+    order, exception messages and index prefixes all apply unchanged;
+    every exception from that call is propagated unchanged and the
+    input is neither modified nor reordered.
+
+    With ``A`` the dict returned by :func:`aggregate_quality_batches`,
+    the encoded object is ``A`` itself: keys stay in the order
+    ``batches, summary, quality`` and every value is kept unchanged;
+    the only structural conversion is that tuples (the top-level
+    ``batches`` tuple) are recursively encoded as JSON arrays, while
+    each ``batch["records"]`` remains an array and every other
+    container remains an object or array.
+
+    The object is encoded as UTF-8 JSON with ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation and
+    no trailing newline, exactly as in
+    :func:`serialize_quality_batch`; all floats produced by
+    :func:`aggregate_quality_batches` are already rounded with
+    ``round(float(v), 6)`` with negative zero normalized to ``0.0``.
+    Any JSON or UTF-8 encoding failure raises ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    aggregate = aggregate_quality_batches(paths)
+    return _dump_aggregate(aggregate)
+
+
+def _check_aggregate(aggregate):
+    prefix = "aggregate: "
+    if not isinstance(aggregate, dict):
+        raise TypeError("aggregate must be a dict")
+    if list(aggregate.keys()) != list(_AGGREGATE_KEYS):
+        raise TypeError(
+            "aggregate keys must be in the order batches, summary, quality"
+        )
+
+    batches = aggregate["batches"]
+    if not isinstance(batches, list):
+        raise TypeError(prefix + "batches must be a list")
+    if len(batches) == 0:
+        raise ValueError(prefix + "batches must be non-empty")
+
+    coverages = []
+    scores = []
+    all_pass = True
+    worst_position = None
+    for i in range(len(batches)):
+        item = batches[i]
+        item_prefix = f"{prefix}batches[{i}]: "
+        if not isinstance(item, dict):
+            raise TypeError(item_prefix + "must be an object")
+        if list(item.keys()) != list(_AGGREGATE_BATCH_KEYS):
+            raise TypeError(
+                item_prefix + "keys must be in the order index, path, batch"
+            )
+
+        index = item["index"]
+        if type(index) is not int:
+            raise TypeError(item_prefix + "index must be a non-bool int")
+        if index != i:
+            raise ValueError(
+                item_prefix + f"index must be {i} (consecutive from 0)"
+            )
+
+        path = item["path"]
+        if not isinstance(path, str):
+            raise TypeError(item_prefix + "path must be a str")
+        if path == "":
+            raise ValueError(item_prefix + "path must not be empty")
+
+        try:
+            _check_quality_batch(item["batch"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                item_prefix + f"batch is not a valid quality batch: {exc}"
+            ) from exc
+
+        for record in item["batch"]["records"]:
+            coverages.append(record["coverage"])
+            scores.append(record["score"])
+            if record["quality"] != "pass":
+                all_pass = False
+            position = (
+                record["score"],
+                record["coverage"],
+                i,
+                record["index"],
+            )
+            if worst_position is None or position < worst_position:
+                worst_position = position
+
+    n_batches = len(batches)
+    n_records = len(coverages)
+
+    mean_coverage = round(float(math.fsum(coverages) / n_records), 6)
+    if mean_coverage == 0:
+        mean_coverage = 0.0
+    mean_score = round(float(math.fsum(scores) / n_records), 6)
+    if mean_score == 0:
+        mean_score = 0.0
+    expected_quality = "pass" if all_pass else "fail"
+
+    summary = aggregate["summary"]
+    summary_prefix = prefix + "summary: "
+    if not isinstance(summary, dict):
+        raise TypeError(summary_prefix + "must be an object")
+    if list(summary.keys()) != list(_AGGREGATE_SUMMARY_KEYS):
+        raise TypeError(
+            summary_prefix
+            + "keys must be in the order batch_count, record_count, "
+            "mean_coverage, mean_score, worst_batch_index, "
+            "worst_record_index, quality"
+        )
+
+    batch_count = summary["batch_count"]
+    if type(batch_count) is not int:
+        raise TypeError(summary_prefix + "batch_count must be a non-bool int")
+    if batch_count != n_batches:
+        raise ValueError(
+            summary_prefix + "batch_count must equal the number of batches"
+        )
+
+    record_count = summary["record_count"]
+    if type(record_count) is not int:
+        raise TypeError(summary_prefix + "record_count must be a non-bool int")
+    if record_count != n_records:
+        raise ValueError(
+            summary_prefix + "record_count must equal the total record count"
+        )
+
+    _check_quality_batch_unit_float(
+        summary["mean_coverage"], "mean_coverage", 0, 1, summary_prefix
+    )
+    if summary["mean_coverage"] != mean_coverage:
+        raise ValueError(
+            summary_prefix
+            + "mean_coverage must equal the mean of the record coverages"
+        )
+    _check_quality_batch_unit_float(
+        summary["mean_score"], "mean_score", 0, 100, summary_prefix
+    )
+    if summary["mean_score"] != mean_score:
+        raise ValueError(
+            summary_prefix + "mean_score must equal the mean of the record scores"
+        )
+
+    worst_batch_index = summary["worst_batch_index"]
+    if type(worst_batch_index) is not int:
+        raise TypeError(summary_prefix + "worst_batch_index must be a non-bool int")
+    if not 0 <= worst_batch_index < n_batches:
+        raise ValueError(
+            summary_prefix + f"worst_batch_index must be in [0, {n_batches})"
+        )
+    if worst_batch_index != worst_position[2]:
+        raise ValueError(
+            summary_prefix
+            + "worst_batch_index must be the batch index of the worst record"
+        )
+
+    worst_record_index = summary["worst_record_index"]
+    if type(worst_record_index) is not int:
+        raise TypeError(
+            summary_prefix + "worst_record_index must be a non-bool int"
+        )
+    if worst_record_index != worst_position[3]:
+        raise ValueError(
+            summary_prefix
+            + "worst_record_index must be the record index of the worst record"
+        )
+
+    quality = summary["quality"]
+    if type(quality) is not str:
+        raise TypeError(summary_prefix + "quality must be a str")
+    if quality not in ("pass", "fail"):
+        raise ValueError(summary_prefix + "quality must be 'pass' or 'fail'")
+    if quality != expected_quality:
+        raise ValueError(
+            summary_prefix
+            + "quality must be 'pass' if and only if every record quality "
+            "is 'pass'"
+        )
+
+    top_quality = aggregate["quality"]
+    if type(top_quality) is not str:
+        raise TypeError(prefix + "quality must be a str")
+    if top_quality not in ("pass", "fail"):
+        raise ValueError(prefix + "quality must be 'pass' or 'fail'")
+    if top_quality != expected_quality:
+        raise ValueError(prefix + "quality must equal the summary quality")
+
+
+def load_aggregate(path) -> dict:
+    """Load a :func:`dump_aggregate`-produced JSON aggregate.
+
+    ``path`` must be a non-empty ``str``: a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``. The file
+    is opened in binary mode (``"rb"``) and read in full; a missing
+    file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError`` and every other ``OSError`` is propagated
+    unchanged. The file is not modified.
+
+    The bytes must be exactly those produced by :func:`dump_aggregate`
+    for the same value: compact UTF-8 JSON (``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``) with no BOM and no
+    trailing newline. A BOM, a trailing newline, a UTF-8 decoding
+    failure or a JSON parsing failure raises ``ValueError``; the
+    ``NaN``/``Infinity`` constants and any other non-finite token are
+    rejected.
+
+    The decoded value must be a JSON object with top-level keys exactly
+    in the order ``batches, summary, quality``. ``batches`` must be a
+    non-empty array of objects whose keys are exactly in the order
+    ``index, path, batch``: ``index`` must be a non-bool int equal to
+    the array position (consecutive from ``0``); ``path`` must be a
+    non-empty ``str``; and ``batch`` must satisfy the full
+    :func:`load_quality_batch` return structure (keys ``records,
+    summary`` with all of its per-record and per-summary rules).
+    ``summary`` must have keys exactly in the order ``batch_count,
+    record_count, mean_coverage, mean_score, worst_batch_index,
+    worst_record_index, quality`` and, recomputed from the batches'
+    ``records`` in their original order, ``batch_count`` must equal the
+    number of batches, ``record_count`` the total number of records,
+    ``mean_coverage``/``mean_score`` the floats
+    ``round(float(fsum(C) / N), 6)`` and
+    ``round(float(fsum(S) / N), 6)`` (negative zero normalized to
+    ``0.0``), ``worst_batch_index``/``worst_record_index`` the ints
+    locating the record minimizing ``(score, coverage, batch index,
+    record index)`` lexicographically, and ``quality`` — like the
+    top-level ``quality`` — ``"pass"`` if and only if every record
+    quality is ``"pass"``. The file bytes must also equal the canonical
+    re-serialization of the decoded value byte for byte; any key-order,
+    type, range, relation, parse or canonical-byte mismatch raises
+    ``ValueError``.
+
+    Returns the aggregate as a dict with the keys in the order above;
+    only the top-level ``batches`` array is restored to a tuple, each
+    ``batch["records"]`` stays a list and every other container stays a
+    dict or list. The file is never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(text, parse_constant=_reject_json_constant)
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    normalized = _normalize_quality_batch_jsonable(parsed)
+    try:
+        _check_aggregate(normalized)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid aggregate: {exc}"
+        ) from exc
+
+    aggregate = {
+        "batches": tuple(normalized["batches"]),
+        "summary": normalized["summary"],
+        "quality": normalized["quality"],
+    }
+    canonical = _dump_aggregate(aggregate)
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical dump_aggregate output"
+        )
+
+    return aggregate
 
 
 def serialize_pair_gate_score_summary(
