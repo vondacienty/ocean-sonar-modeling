@@ -8,6 +8,7 @@ tolerance are counted.
 
 from __future__ import annotations
 
+import json
 import math
 
 from .svp import _is_real_number
@@ -29,6 +30,7 @@ __all__ = [
     "pair_gate_score",
     "pair_gate_score_report",
     "pair_gate_score_summary",
+    "serialize_pair_gate_score_summary",
     "render_pair_gate_score_summary",
 ]
 
@@ -1036,6 +1038,74 @@ def pair_gate_score_summary(
         "summary": summary,
         "quality": quality,
     }
+
+
+def serialize_pair_gate_score_summary(
+    first,
+    second,
+    tolerances,
+    match_tolerance=1.0,
+    min_mean_ratio=1.0,
+    max_rmse_limit=1.0,
+) -> bytes:
+    """Serialize :func:`pair_gate_score_summary` results as UTF-8 JSON bytes.
+
+    Calls :func:`pair_gate_score_summary` exactly once with ``first``,
+    ``second``, ``tolerances``, ``match_tolerance``,
+    ``min_mean_ratio`` and ``max_rmse_limit``, so its validation,
+    first-error order, exceptions (propagated unchanged) and index
+    prefixes all apply here as well. Inputs and the
+    :func:`pair_gate_score_summary` result are not modified.
+
+    With ``R`` the dict returned by :func:`pair_gate_score_summary`,
+    the encoded object has keys exactly in the order
+    ``coverage_product, score_margin, matched, pair_quality,
+    quality``: the first four values are taken as-is from
+    ``R["summary"]`` (``coverage_product`` and ``score_margin`` are
+    floats, ``matched`` is an int and ``pair_quality`` is a string)
+    and ``quality`` is ``R["quality"]``, with no recomputation,
+    reordering or additional keys.
+
+    The object is encoded as UTF-8 JSON with ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation and
+    no trailing newline. Floats are first rounded with
+    ``round(float(v), 6)`` and negative zero is normalized to ``0.0``;
+    ints are written in decimal and strings are copied as-is. Any JSON
+    or UTF-8 encoding failure raises ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    result = pair_gate_score_summary(
+        first, second, tolerances, match_tolerance, min_mean_ratio, max_rmse_limit
+    )
+    summary = result["summary"]
+
+    coverage_product = round(float(summary["coverage_product"]), 6)
+    if coverage_product == 0:
+        coverage_product = 0.0
+    score_margin = round(float(summary["score_margin"]), 6)
+    if score_margin == 0:
+        score_margin = 0.0
+
+    document = {
+        "coverage_product": coverage_product,
+        "score_margin": score_margin,
+        "matched": int(summary["matched"]),
+        "pair_quality": summary["pair_quality"],
+        "quality": result["quality"],
+    }
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"pair gate score summary: could not be serialized to JSON: {exc}"
+        ) from exc
 
 
 def _format_rendered_value(value):
