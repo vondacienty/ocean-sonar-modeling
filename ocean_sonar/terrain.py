@@ -24,6 +24,7 @@ __all__ = [
     "quality",
     "render_scale_report",
     "scale_dashboard",
+    "scale_gate",
     "scale_profile",
     "scale_report",
     "scale_summary",
@@ -787,6 +788,74 @@ def scale_summary(fine, coarse, tolerances) -> dict:
             "quality": R["quality"],
         },
         "quality": R["quality"],
+    }
+
+
+def scale_gate(fine, coarse, tolerances, min_within_ratio=1.0, max_rmse_limit=1.0) -> dict:
+    """Gate a :func:`scale_summary` sweep on within-ratio and RMSE limits.
+
+    ``fine``, ``coarse`` and ``tolerances`` have exactly the same
+    constraints, validation order, exception types and
+    ``"fine.cells[i]: "`` / ``"coarse.cells[i]: "`` /
+    ``"tolerances[i]: "`` prefixes as in :func:`scale_summary`; all
+    their validation is carried out by that function.
+    :func:`scale_summary` is called exactly once as
+    ``scale_summary(fine, coarse, tolerances)``; its exceptions
+    propagate unchanged and inputs are not modified.
+
+    After that call, ``min_within_ratio`` and ``max_rmse_limit`` are
+    validated in that order: both must be finite non-bool ints/floats,
+    ``min_within_ratio`` must lie in ``[0, 1]`` and ``max_rmse_limit``
+    must be ``>= 0``. Type mismatches (including bool) raise
+    ``TypeError`` and non-finite or range errors raise ``ValueError``.
+
+    With ``R`` the dict returned by :func:`scale_summary` and
+    ``S = R["summary"]``, returns a dict with keys in the order
+    ``report, checks, quality``: ``report`` is ``R`` as-is. ``checks``
+    has keys in the order ``within_ratio, max_rmse, within_ok,
+    rmse_ok``: the first two are the floats ``S["within_ratio"]`` and
+    ``S["max_rmse"]`` copied as-is, ``within_ok`` is the bool
+    ``S["within_ratio"] >= min_within_ratio`` and ``rmse_ok`` is the
+    bool ``S["max_rmse"] <= max_rmse_limit``. ``quality`` is ``"pass"``
+    only when ``R["quality"]`` is ``"pass"`` and both checks are true,
+    and ``"fail"`` otherwise. Values are copied as returned, with no
+    recomputation, rounding, sorting or extra keys.
+    """
+    R = scale_summary(fine, coarse, tolerances)
+
+    if not _is_real_number(min_within_ratio):
+        raise TypeError("min_within_ratio must be a non-bool int or float")
+    if not math.isfinite(min_within_ratio):
+        raise ValueError("min_within_ratio must be finite")
+    if not 0 <= min_within_ratio <= 1:
+        raise ValueError("min_within_ratio must be in [0, 1]")
+
+    if not _is_real_number(max_rmse_limit):
+        raise TypeError("max_rmse_limit must be a non-bool int or float")
+    if not math.isfinite(max_rmse_limit):
+        raise ValueError("max_rmse_limit must be finite")
+    if not max_rmse_limit >= 0:
+        raise ValueError("max_rmse_limit must be >= 0")
+
+    S = R["summary"]
+    within_ok = bool(S["within_ratio"] >= min_within_ratio)
+    rmse_ok = bool(S["max_rmse"] <= max_rmse_limit)
+
+    grade = (
+        "pass"
+        if R["quality"] == "pass" and within_ok and rmse_ok
+        else "fail"
+    )
+
+    return {
+        "report": R,
+        "checks": {
+            "within_ratio": float(S["within_ratio"]),
+            "max_rmse": float(S["max_rmse"]),
+            "within_ok": within_ok,
+            "rmse_ok": rmse_ok,
+        },
+        "quality": grade,
     }
 
 
