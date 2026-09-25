@@ -26,6 +26,7 @@ __all__ = [
     "scale_dashboard",
     "scale_profile",
     "scale_report",
+    "scale_summary",
     "stats",
     "trend",
 ]
@@ -729,6 +730,64 @@ def render_scale_report(fine, coarse, tolerances) -> str:
         )
     )
     return "\n".join(lines)
+
+
+def scale_summary(fine, coarse, tolerances) -> dict:
+    """Summarize a :func:`scale_report` sweep in one flat summary.
+
+    ``fine``, ``coarse`` and ``tolerances`` have exactly the same
+    constraints, validation order, exception types and
+    ``"fine.cells[i]: "`` / ``"coarse.cells[i]: "`` /
+    ``"tolerances[i]: "`` prefixes as in :func:`scale_report`; all
+    validation is carried out by that function. :func:`scale_report`
+    is called exactly once as ``scale_report(fine, coarse,
+    tolerances)``; its exceptions propagate unchanged and inputs are
+    not modified.
+
+    With ``R`` the dict returned by that call, ``C`` the curve of
+    ``R["profile"]`` and ``m = len(C)``, let ``p`` be the number of
+    curve items whose ``quality`` is ``"pass"`` and ``M``/``N``/``W``
+    the respective sums of the items' ``matched``, ``missing`` and
+    ``within_tolerance``.
+
+    Returns a dict with keys in the order ``report, summary,
+    quality``: ``report`` is ``R`` as-is and ``quality`` is
+    ``R["quality"]``. ``summary`` has keys in the order
+    ``tolerance_count, pass_count, fail_count, matched_total,
+    missing_total, within_ratio, max_rmse, quality``: the first five
+    are the ints ``m``, ``p``, ``m - p``, ``M`` and ``N``;
+    ``within_ratio`` is ``round(W / M, 6)`` when ``M > 0`` and ``0.0``
+    otherwise; ``max_rmse`` is ``round(max(rmse), 6)`` over the curve
+    items; and ``quality`` is ``R["quality"]``. The counts are ints
+    and the statistics are floats (negative zero normalized to
+    ``0.0``).
+    """
+    R = scale_report(fine, coarse, tolerances)
+
+    curve = R["profile"]["curve"]
+    m = len(curve)
+    p = sum(1 for item in curve if item["quality"] == "pass")
+    M = sum(item["matched"] for item in curve)
+    N = sum(item["missing"] for item in curve)
+    W = sum(item["within_tolerance"] for item in curve)
+
+    within_ratio = _round6(W / M) if M > 0 else 0.0
+    max_rmse = _round6(max(item["rmse"] for item in curve))
+
+    return {
+        "report": R,
+        "summary": {
+            "tolerance_count": int(m),
+            "pass_count": int(p),
+            "fail_count": int(m - p),
+            "matched_total": int(M),
+            "missing_total": int(N),
+            "within_ratio": within_ratio,
+            "max_rmse": max_rmse,
+            "quality": R["quality"],
+        },
+        "quality": R["quality"],
+    }
 
 
 def metrics(r, nx, ny, cells):
