@@ -25,6 +25,7 @@ __all__ = [
     "gate",
     "gate_report",
     "pair_gate",
+    "pair_gate_report",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -787,4 +788,69 @@ def pair_gate(
         "pairs": pairs,
         "report": gated,
         "quality": gated["quality"],
+    }
+
+
+def pair_gate_report(
+    first,
+    second,
+    tolerances,
+    match_tolerance=1.0,
+    min_mean_ratio=1.0,
+    max_rmse_limit=1.0,
+):
+    """Report :func:`pair_gate` results with matching coverage.
+
+    Calls :func:`pair_gate` exactly once with ``first``, ``second``,
+    ``tolerances``, ``match_tolerance``, ``min_mean_ratio`` and
+    ``max_rmse_limit``, so its validation, first-error order,
+    exceptions (propagated unchanged) and index prefixes all apply
+    here as well. Inputs and the :func:`pair_gate` result are not
+    modified.
+
+    With ``G`` the dict returned by :func:`pair_gate`, ``P`` the tuple
+    ``G["pairs"]``, ``m = len(P)``, ``f = len(first)`` and
+    ``s = len(second)``, returns a dict with keys in the order
+    ``pair_gate, matching, quality``. ``pair_gate`` is ``G`` itself.
+    ``matching`` is a dict with keys in the order ``matched,
+    first_total, second_total, first_coverage, second_coverage``; the
+    first three are the ints ``m``, ``f`` and ``s``, and the last two
+    are the floats ``round(m / f, 6)`` and ``round(m / s, 6)`` with
+    negative zero normalized to ``0.0``. ``quality`` is ``"pass"``
+    only when ``G["quality"]`` is ``"pass"`` and both coverages are
+    ``1.0``, and ``"fail"`` otherwise.
+    """
+    result = pair_gate(
+        first, second, tolerances, match_tolerance, min_mean_ratio, max_rmse_limit
+    )
+    pairs = result["pairs"]
+    matched = len(pairs)
+    first_total = len(first)
+    second_total = len(second)
+
+    first_coverage = round(float(matched / first_total), 6)
+    if first_coverage == 0:
+        first_coverage = 0.0
+    second_coverage = round(float(matched / second_total), 6)
+    if second_coverage == 0:
+        second_coverage = 0.0
+
+    matching = {
+        "matched": int(matched),
+        "first_total": int(first_total),
+        "second_total": int(second_total),
+        "first_coverage": first_coverage,
+        "second_coverage": second_coverage,
+    }
+    quality = (
+        "pass"
+        if result["quality"] == "pass"
+        and first_coverage == 1.0
+        and second_coverage == 1.0
+        else "fail"
+    )
+    return {
+        "pair_gate": result,
+        "matching": matching,
+        "quality": quality,
     }

@@ -34,7 +34,7 @@ ocean-sonar-modeling --help     # 打印用法
 交点相关接口位于 `ocean_sonar.crosspoint`，该模块导出：
 `evaluate`、`report`、`pair`、`audit`、`profile`、`aggregate`、
 `dashboard`、`dashboard_summary`、`dashboard_report`、`gate`、
-`gate_report`、`pair_gate`。
+`gate_report`、`pair_gate`、`pair_gate_report`。
 
 ### 通用约定
 
@@ -149,3 +149,25 @@ ocean-sonar-modeling --help     # 打印用法
 - `pairs`：`pair` 返回的原 `tuple` `P`（即 `G` 所评估的交点）；
 - `report`：`gate` 返回的原 `dict` `G`；
 - `quality`：即 `G["quality"]`，取值 `"pass"` 或 `"fail"`。
+
+### `pair_gate_report(first, second, tolerances, match_tolerance=1.0, min_mean_ratio=1.0, max_rmse_limit=1.0)`
+
+在 `pair_gate` 结果上补充配对覆盖率汇总。
+
+执行时**仅调用一次** `pair_gate(first, second, tolerances,
+match_tolerance, min_mean_ratio, max_rmse_limit)`，因此其全部校验顺序、
+异常（原样向上传播）与下标前缀规则在此同样适用。输入参数与
+`pair_gate` 的返回结果均不被修改。
+
+记 `G` 为 `pair_gate` 返回的原 `dict`，`P = G["pairs"]`，
+`m = len(P)`，`f = len(first)`，`s = len(second)`。
+
+**返回：** 键序为 `pair_gate, matching, quality` 的 `dict`：
+
+- `pair_gate`：`pair_gate` 返回的原 `dict` `G`，不做修改；
+- `matching`：键序为 `matched, first_total, second_total,
+  first_coverage, second_coverage` 的 `dict`。前三项为 `int`，分别是
+  `m`、`f`、`s`；后两项为 `float`，分别是 `round(m / f, 6)` 和
+  `round(m / s, 6)`（负零归一化为 `0.0`）；
+- `quality`：仅当 `G["quality"] == "pass"` 且两个覆盖率均为 `1.0`
+  时为 `"pass"`，否则为 `"fail"`。
