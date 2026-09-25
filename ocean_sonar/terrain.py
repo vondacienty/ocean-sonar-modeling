@@ -22,6 +22,7 @@ __all__ = [
     "dashboard",
     "metrics",
     "quality",
+    "render_scale_report",
     "scale_dashboard",
     "scale_profile",
     "scale_report",
@@ -646,6 +647,88 @@ def scale_report(fine, coarse, tolerances) -> dict:
         "dashboard": dashboard,
         "quality": grade,
     }
+
+
+def _format_scale_value(value):
+    if type(value) is float:
+        return format(value, ".6f")
+    if value is None:
+        return "None"
+    return str(value)
+
+
+_SCALE_PROFILE_KEYS = ("monotonic", "first_pass_tolerance", "area", "quality")
+_SCALE_CURVE_KEYS = (
+    "tolerance",
+    "matched",
+    "missing",
+    "bias",
+    "rmse",
+    "max_abs",
+    "within_tolerance",
+    "quality",
+)
+
+
+def render_scale_report(fine, coarse, tolerances) -> str:
+    """Render a :func:`scale_report` report as plain text.
+
+    ``fine``, ``coarse`` and ``tolerances`` have exactly the same
+    constraints as in :func:`scale_report`. :func:`scale_report` is
+    called exactly once as ``scale_report(fine, coarse, tolerances)``;
+    its exceptions propagate unchanged and inputs are not modified.
+
+    With ``R`` the dict returned by that call, returns a ``str`` of
+    ``"\\n"``-joined lines with no trailing newline: a
+    ``QUALITY=<R["quality"]>`` line; a ``PROFILE=`` line with the
+    ``monotonic``, ``first_pass_tolerance``, ``area`` and ``quality``
+    fields of ``R["profile"]`` as semicolon-joined ``key=value``
+    fields; one ``CURVE[i]=`` line per item of the profile ``curve``
+    (``i`` from ``0``) with the ``tolerance``, ``matched``, ``missing``,
+    ``bias``, ``rmse``, ``max_abs``, ``within_tolerance`` and
+    ``quality`` fields in the same form; a
+    ``DASHBOARD=quality=<quality>`` line with the quality of
+    ``R["dashboard"]``; and a ``SUMMARY=`` line with the
+    ``tolerance_count``, ``pass_count``, ``fail_count``,
+    ``matched_total``, ``missing_total``, ``within_total``,
+    ``within_ratio`` and ``quality_score`` fields of the dashboard
+    ``summary``. Ints render in decimal, bools as ``True``/``False``,
+    ``None`` as ``None`` and floats with ``format(v, ".6f")`` (negative
+    zero included); values are rendered as returned, with no
+    recomputation, sorting or rewriting.
+    """
+    R = scale_report(fine, coarse, tolerances)
+
+    profile = R["profile"]
+    dashboard = R["dashboard"]
+    summary = dashboard["summary"]
+
+    lines = [f"QUALITY={R['quality']}"]
+    lines.append(
+        "PROFILE="
+        + ";".join(
+            f"{key}={_format_scale_value(profile[key])}"
+            for key in _SCALE_PROFILE_KEYS
+        )
+    )
+    for i in range(len(profile["curve"])):
+        item = profile["curve"][i]
+        lines.append(
+            f"CURVE[{i}]="
+            + ";".join(
+                f"{key}={_format_scale_value(item[key])}"
+                for key in _SCALE_CURVE_KEYS
+            )
+        )
+    lines.append(f"DASHBOARD=quality={dashboard['quality']}")
+    lines.append(
+        "SUMMARY="
+        + ";".join(
+            f"{key}={_format_scale_value(summary[key])}"
+            for key in _SCALE_DASHBOARD_SUMMARY_KEYS
+        )
+    )
+    return "\n".join(lines)
 
 
 def metrics(r, nx, ny, cells):
