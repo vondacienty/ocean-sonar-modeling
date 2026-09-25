@@ -22,6 +22,7 @@ __all__ = [
     "dashboard",
     "metrics",
     "quality",
+    "render_scale_report",
     "scale_dashboard",
     "scale_profile",
     "scale_report",
@@ -646,6 +647,89 @@ def scale_report(fine, coarse, tolerances) -> dict:
         "dashboard": dashboard,
         "quality": grade,
     }
+
+
+def _format_scale_value(value):
+    if type(value) is float:
+        return format(value, ".6f")
+    if value is None:
+        return "None"
+    return str(value)
+
+
+def render_scale_report(fine, coarse, tolerances) -> str:
+    """Render a :func:`scale_report` report as plain text.
+
+    ``fine``, ``coarse`` and ``tolerances`` have exactly the same
+    constraints as in :func:`scale_report`; all validation is carried
+    out by that function, which is called exactly once as
+    ``scale_report(fine, coarse, tolerances)``. Its exceptions
+    propagate unchanged and inputs are not modified.
+
+    With ``R`` the dict returned by that call, the result is a ``str``
+    of ``"\\n"``-joined lines with no trailing newline, built from
+    ``R`` as-is (no recomputation, sorting or rewriting):
+
+    - ``QUALITY=<R["quality"]>``;
+    - ``PROFILE=monotonic=<monotonic>;first_pass_tolerance=<fpt>;``
+      ``area=<area>;quality=<quality>`` from ``R["profile"]``;
+    - one ``CURVE[i]=tolerance=<t>;matched=<m>;missing=<n>;bias=<b>;``
+      ``rmse=<r>;max_abs=<a>;within_tolerance=<w>;quality=<q>`` line
+      per item of ``R["profile"]["curve"]``, in curve order with
+      ``i`` starting at ``0``;
+    - ``DASHBOARD=quality=<quality>`` from ``R["dashboard"]``;
+    - ``SUMMARY=tolerance_count=<m>;pass_count=<p>;fail_count=<f>;``
+      ``matched_total=<M>;missing_total=<N>;within_total=<W>;``
+      ``within_ratio=<r>;quality_score=<s>`` from
+      ``R["dashboard"]["summary"]``.
+
+    Ints render in decimal, bools as ``True``/``False``, ``None`` as
+    ``None`` and floats with ``format(v, ".6f")`` (negative zero
+    included); strings render as-is.
+    """
+    report = scale_report(fine, coarse, tolerances)
+
+    profile = report["profile"]
+    dashboard = report["dashboard"]
+    summary = dashboard["summary"]
+
+    profile_fields = ";".join(
+        f"{key}={_format_scale_value(profile[key])}"
+        for key in ("monotonic", "first_pass_tolerance", "area", "quality")
+    )
+
+    lines = [
+        f"QUALITY={_format_scale_value(report['quality'])}",
+        f"PROFILE={profile_fields}",
+    ]
+
+    curve_keys = (
+        "tolerance",
+        "matched",
+        "missing",
+        "bias",
+        "rmse",
+        "max_abs",
+        "within_tolerance",
+        "quality",
+    )
+    for i, item in enumerate(profile["curve"]):
+        fields = ";".join(
+            f"{key}={_format_scale_value(item[key])}" for key in curve_keys
+        )
+        lines.append(f"CURVE[{i}]={fields}")
+
+    lines.append(
+        f"DASHBOARD=quality={_format_scale_value(dashboard['quality'])}"
+    )
+
+    summary_fields = ";".join(
+        f"{key}={_format_scale_value(summary[key])}"
+        for key in _SCALE_DASHBOARD_SUMMARY_KEYS
+    )
+    lines.append(f"SUMMARY={summary_fields}")
+
+    return "\n".join(lines)
 
 
 def metrics(r, nx, ny, cells):
