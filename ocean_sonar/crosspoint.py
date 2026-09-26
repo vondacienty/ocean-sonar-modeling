@@ -49,6 +49,7 @@ __all__ = [
     "aggregate_trends",
     "dump_trends",
     "load_trends",
+    "render_trends",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -2945,6 +2946,112 @@ def load_trends(path) -> dict:
         )
 
     return result
+
+
+def render_trends(paths) -> str:
+    """Render an :func:`aggregate_trends` result plus per-file weights as three lines.
+
+    Calls :func:`aggregate_trends` exactly once with ``paths`` to get
+    ``A`` and :func:`load_trend` exactly once per path, in input order,
+    to get the per-file trends ``T_j``; no other combining or loading
+    function is called. Path validation therefore follows
+    :func:`aggregate_trends` exactly (container, length, then each item
+    in index order), and every exception either call raises is
+    propagated unchanged. Inputs and the loaded files are not modified.
+
+    With ``K = A["changes"]`` and, for each file ``j`` and each
+    ``x`` in ``("coverage_delta", "score_delta")``, the unrounded
+    change-weighted share is
+    ``p(j, x) = T_j[x] * T_j["changes"] / K`` and the change-weighted
+    spread is
+    ``u(x) = sqrt(fsum(T_j["changes"] * (T_j[x] - A[x]) ** 2) / K)``;
+    note the spread uses the aggregate values ``A[x]`` as returned
+    (already six-decimal floats). Every ``p`` and ``u`` is rounded with
+    ``round(float(v), 6)`` and negative zero is normalized to ``0.0``.
+    The worst-file index ``w`` minimizes the *unrounded* tuple
+    ``(p(j, "score_delta"), p(j, "coverage_delta"), j)`` lexicographically.
+
+    Returns three lines joined by ``"\\n"`` with no trailing newline::
+
+        TRENDS=<file_count>,<changes>,<degraded>,<coverage_delta>,<score_delta>,<quality>
+        FILES=<j>:<p coverage>:<p score>|...;RMSE=<u coverage>,<u score>;WORST_FILE=<w>
+        WORST=<j>,<i>,<b>,<r>,<dc>,<ds>
+
+    The TRENDS values and the six WORST values (the latter taken from
+    ``A["worst"]``) are copied with no recomputation; the FILES items
+    are joined by ``"|"`` in file-index order, the per-file shares are
+    the rounded coverage share then the rounded score share, and the
+    RMSE pair lists the coverage spread then the score spread. Ints are
+    formatted in decimal, strings are copied as-is and floats use
+    ``format(v, ".6f")`` (negative zero rendered as ``"0.000000"``).
+    """
+    aggregate = aggregate_trends(paths)
+    trends = [load_trend(path) for path in paths]
+
+    changes_total = aggregate["changes"]
+    aggregate_coverage = aggregate["coverage_delta"]
+    aggregate_score = aggregate["score_delta"]
+
+    raw_coverage_weights = []
+    raw_score_weights = []
+    coverage_variance_terms = []
+    score_variance_terms = []
+    for result in trends:
+        file_changes = result["changes"]
+        coverage_delta = result["coverage_delta"]
+        score_delta = result["score_delta"]
+        raw_coverage_weights.append(
+            coverage_delta * file_changes / changes_total
+        )
+        raw_score_weights.append(score_delta * file_changes / changes_total)
+        coverage_variance_terms.append(
+            file_changes * (coverage_delta - aggregate_coverage) ** 2
+        )
+        score_variance_terms.append(
+            file_changes * (score_delta - aggregate_score) ** 2
+        )
+
+    def rounded_six(value):
+        value = round(float(value), 6)
+        return 0.0 if value == 0 else value
+
+    coverage_weights = [rounded_six(v) for v in raw_coverage_weights]
+    score_weights = [rounded_six(v) for v in raw_score_weights]
+    coverage_rmse = rounded_six(
+        math.sqrt(math.fsum(coverage_variance_terms) / changes_total)
+    )
+    score_rmse = rounded_six(
+        math.sqrt(math.fsum(score_variance_terms) / changes_total)
+    )
+
+    worst_file = min(
+        range(len(trends)),
+        key=lambda j: (raw_score_weights[j], raw_coverage_weights[j], j),
+    )
+
+    trends_line = ",".join(
+        (
+            _format_rendered_value(aggregate["file_count"]),
+            _format_rendered_value(aggregate["changes"]),
+            _format_rendered_value(aggregate["degraded"]),
+            _format_rendered_value(aggregate["coverage_delta"]),
+            _format_rendered_value(aggregate["score_delta"]),
+            _format_rendered_value(aggregate["quality"]),
+        )
+    )
+    files_line = "FILES=" + "|".join(
+        f"{j}:{_format_rendered_value(coverage_weights[j])}:"
+        f"{_format_rendered_value(score_weights[j])}"
+        for j in range(len(trends))
+    ) + (
+        f";RMSE={_format_rendered_value(coverage_rmse)},"
+        f"{_format_rendered_value(score_rmse)}"
+        f";WORST_FILE={_format_rendered_value(worst_file)}"
+    )
+    worst_line = "WORST=" + ",".join(
+        _format_rendered_value(value) for value in aggregate["worst"]
+    )
+    return "\n".join(("TRENDS=" + trends_line, files_line, worst_line))
 
 
 def serialize_pair_gate_score_summary(

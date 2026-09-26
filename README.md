@@ -41,7 +41,7 @@ ocean-sonar-modeling --help     # 打印用法
 `load_quality_batch`、`aggregate_quality_batches`、
 `dump_aggregate`、`load_aggregate`、`trend`、
 `serialize_trend`、`render_trend`、`load_trend`、
-`load_trends`、
+`load_trends`、`render_trends`、
 `serialize_pair_gate_score_summary`、`render_pair_gate_score_summary`、
 `load_pair_gate_score_summary`。
 
@@ -426,3 +426,41 @@ quality` 的对象，重复、缺失、额外键或键序错误均抛 `ValueErro
 
 返回保持原键序的 `dict`：仅 `worst` 数组还原为 tuple，其余值原样
 返回。文件不被修改。
+
+### `render_trends(paths) -> str`
+
+把多文件趋势汇总结果连同逐文件贡献渲染为三行文本。
+
+执行时**仅调用一次** `aggregate_trends(paths)` 得到 `A`，并按输入
+顺序对每个 path **仅调用一次** `load_trend(path)` 得到 `T_j`，不调
+用其他组合或读取函数；因此路径校验与异常（原样向上传播）和
+`aggregate_trends` 完全一致，`paths[i]: ` 前缀规则同样适用。输入与
+文件均不被修改。
+
+记 `K = A["changes"]`，对每个文件 `j` 及
+`x ∈ {coverage_delta, score_delta}`，以原始 float 计算变化量加权占比
+
+```
+p(j, x) = T_j[x] * T_j["changes"] / K
+u(x)    = sqrt(fsum(T_j["changes"] * (T_j[x] - A[x]) ** 2) / K)
+```
+
+（离散度中的均值即 `A[x]` 本身。）每个 `p`、`u` 经
+`round(float(v), 6)` 舍入，负零归一化为 `0.0`。最差文件下标 `w`
+取使**未舍入**三元组
+`(p(j, score_delta), p(j, coverage_delta), j)` 字典序最小者。
+
+返回以 `\n` 连接、无尾换行的三行：
+
+```
+TRENDS=<file_count>,<changes>,<degraded>,<coverage_delta>,<score_delta>,<quality>
+FILES=<j>:<覆盖p>:<得分p>|...;RMSE=<覆盖u>,<得分u>;WORST_FILE=<w>
+WORST=<j>,<i>,<b>,<r>,<dc>,<ds>
+```
+
+TRENDS 行各值直接取自 `A`；FILES 行按 `j` 顺序以 `|` 连接各
+`<j>:<覆盖p>:<得分p>`（占比为已舍入值），随后追加
+`;RMSE=<覆盖u>,<得分u>;WORST_FILE=<w>`；WORST 行六项直接取自
+`A["worst"]`，不重算、不排序。格式化规则：`int` 以十进制输出，
+`str` 原样插入，`float` 使用 `format(v, ".6f")`（负零渲染为
+`0.000000`）。
