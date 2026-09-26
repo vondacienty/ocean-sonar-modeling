@@ -40,6 +40,7 @@ ocean-sonar-modeling --help     # 打印用法
 `render_quality_batch`、`serialize_quality_batch`、
 `load_quality_batch`、`aggregate_quality_batches`、
 `dump_aggregate`、`load_aggregate`、`trend`、
+`serialize_trend`、`render_trend`、
 `serialize_pair_gate_score_summary`、`render_pair_gate_score_summary`、
 `load_pair_gate_score_summary`。
 
@@ -329,3 +330,44 @@ worst_batch_index, worst_record_index, quality`。按各 batch 的
 `(i, b, r, dc, ds)`，前三项为 `int`、后两项为 float；所有 float 均经
 `round(float(v), 6)` 且负零归一化为 `0.0`。`quality` 仅在无退化时为
 `pass`，否则为 `fail`。
+
+### `serialize_trend(paths) -> bytes`
+
+把 `trend` 的结果编码为 JSON 字节串。
+
+执行时**仅调用一次** `trend(paths)`，因此其全部校验顺序、异常（原样
+向上传播）与 `paths[i]: ` 前缀规则在此同样适用；输入与文件均不被
+修改。
+
+记 `T` 为 `trend(paths)` 的返回值，编码对象键序恰为
+`count, changes, degraded, coverage_delta, score_delta, worst,
+quality`：前三项取 `T` 中对应的 `int`，两个 delta 取对应的 float，
+`worst` 元组编码为五项 JSON 数组 `[i, b, r, dc, ds]`，`quality` 原样
+取值；不重算、不排序、不增加键。
+
+编码为 UTF-8 JSON，`ensure_ascii=False`、
+`separators=(",", ":")`、`allow_nan=False`，无 BOM、无尾换行；float
+先经 `round(float(v), 6)` 并将负零归一化为 `0.0`，`int` 以十进制
+输出，`str` 原样插入。任何 JSON 或 UTF-8 编码失败抛出 `ValueError`。
+返回 `bytes`。
+
+### `render_trend(paths) -> str`
+
+把 `trend` 结果渲染为两行文本。
+
+执行时**仅调用一次** `trend(paths)`，因此其全部校验顺序、异常（原样
+向上传播）与 `paths[i]: ` 前缀规则在此同样适用；输入与文件均不被
+修改。
+
+记 `T` 为 `trend(paths)` 的返回值、
+`(i, b, r, dc, ds) = T["worst"]`，返回以 `\n` 连接、无尾换行的两
+行：
+
+```
+TREND=<count>,<changes>,<degraded>,<coverage_delta>,<score_delta>,<quality>
+WORST=<i>,<b>,<r>,<dc>,<ds>
+```
+
+各值依次直接取自 `T` 与 `T["worst"]`，不重算、不排序：`int` 以十
+进制输出，`str` 原样插入，float 使用 `format(v, ".6f")`（负零渲染
+为 `0.000000`）。

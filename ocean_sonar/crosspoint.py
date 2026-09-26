@@ -43,6 +43,8 @@ __all__ = [
     "render_pair_gate_score_summary",
     "load_pair_gate_score_summary",
     "trend",
+    "serialize_trend",
+    "render_trend",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -2260,6 +2262,111 @@ def trend(paths) -> dict:
         "worst": worst,
         "quality": "pass" if degraded == 0 else "fail",
     }
+
+
+def serialize_trend(paths) -> bytes:
+    """Serialize a :func:`trend` result as UTF-8 JSON bytes.
+
+    Calls :func:`trend` exactly once with ``paths`` — and no other
+    combining function — so its validation, first-error order,
+    exceptions (propagated unchanged) and ``"paths[i]: "`` index
+    prefixes all apply here as well. Inputs and the loaded files are not
+    modified.
+
+    With ``T`` the dict returned by :func:`trend`, the encoded object
+    has keys exactly in the order
+    ``count, changes, degraded, coverage_delta, score_delta, worst,
+    quality``: the first three values are the ints ``T["count"]``,
+    ``T["changes"]`` and ``T["degraded"]``, the next two are the floats
+    ``T["coverage_delta"]`` and ``T["score_delta"]``, ``worst`` is the
+    five-item JSON array ``[i, b, r, dc, ds]`` derived from
+    ``T["worst"]`` and ``quality`` is ``T["quality"]``, all taken
+    directly from ``T`` with no recomputation, sorting or additional
+    keys.
+
+    The object is encoded as UTF-8 JSON with ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation, no
+    BOM and no trailing newline. Floats are first rounded with
+    ``round(float(v), 6)`` and negative zero is normalized to ``0.0``;
+    ints are written in decimal and strings are copied as-is. Any JSON
+    or UTF-8 encoding failure raises ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    result = trend(paths)
+    worst = result["worst"]
+
+    def rounded_float(value):
+        value = round(float(value), 6)
+        return 0.0 if value == 0 else value
+
+    document = {
+        "count": int(result["count"]),
+        "changes": int(result["changes"]),
+        "degraded": int(result["degraded"]),
+        "coverage_delta": rounded_float(result["coverage_delta"]),
+        "score_delta": rounded_float(result["score_delta"]),
+        "worst": [
+            int(worst[0]),
+            int(worst[1]),
+            int(worst[2]),
+            rounded_float(worst[3]),
+            rounded_float(worst[4]),
+        ],
+        "quality": result["quality"],
+    }
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(f"trend: could not be serialized to JSON: {exc}") from exc
+
+
+def render_trend(paths) -> str:
+    """Render a :func:`trend` result as two text lines.
+
+    Calls :func:`trend` exactly once with ``paths`` — and no other
+    combining function — so its validation, first-error order,
+    exceptions (propagated unchanged) and ``"paths[i]: "`` index
+    prefixes all apply here as well. Inputs and the loaded files are not
+    modified.
+
+    With ``T`` the dict returned by :func:`trend` and
+    ``(i, b, r, dc, ds) = T["worst"]``, returns two lines joined by
+    ``"\\n"`` with no trailing newline::
+
+        TREND=<count>,<changes>,<degraded>,<coverage_delta>,<score_delta>,<quality>
+        WORST=<i>,<b>,<r>,<dc>,<ds>
+
+    The values are taken directly from ``T`` and ``T["worst"]`` with no
+    recomputation or sorting: ``count``, ``changes`` and ``degraded``
+    (and ``i``, ``b``, ``r``) are ints formatted in decimal,
+    ``coverage_delta``, ``score_delta``, ``dc`` and ``ds`` are floats
+    formatted with ``format(v, ".6f")`` (negative zero rendered as
+    ``"0.000000"``) and ``quality`` is copied as-is.
+    """
+    result = trend(paths)
+    worst = result["worst"]
+
+    trend_line = ",".join(
+        (
+            _format_rendered_value(result["count"]),
+            _format_rendered_value(result["changes"]),
+            _format_rendered_value(result["degraded"]),
+            _format_rendered_value(result["coverage_delta"]),
+            _format_rendered_value(result["score_delta"]),
+            _format_rendered_value(result["quality"]),
+        )
+    )
+    worst_line = "WORST=" + ",".join(
+        _format_rendered_value(value) for value in worst
+    )
+    return "\n".join(("TREND=" + trend_line, worst_line))
 
 
 def serialize_pair_gate_score_summary(

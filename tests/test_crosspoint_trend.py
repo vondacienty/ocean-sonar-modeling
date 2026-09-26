@@ -7,6 +7,7 @@ import pytest
 
 import ocean_sonar.crosspoint as crosspoint_mod
 from ocean_sonar.crosspoint import dump_aggregate, trend
+from ocean_sonar.crosspoint import render_trend, serialize_trend
 
 
 def _q6(value):
@@ -354,3 +355,175 @@ def test_trend_exported():
     assert hasattr(crosspoint_mod, "trend")
     assert "trend" in crosspoint_mod.__all__
     assert dump_aggregate  # sibling API untouched
+
+
+def test_serialize_trend_document(snapshot_paths):
+    data = serialize_trend(list(snapshot_paths))
+
+    assert isinstance(data, bytes)
+    assert not data.startswith(b"\xef\xbb\xbf")
+    assert not data.endswith(b"\n")
+
+    document = json.loads(data)
+    assert list(document.keys()) == EXPECTED_KEYS
+    assert document["count"] == 3
+    assert document["changes"] == 6
+    assert document["degraded"] == 3
+    assert document["coverage_delta"] == -0.008333
+    assert document["score_delta"] == 0.0
+    assert math.copysign(1.0, document["score_delta"]) == 1.0
+    assert document["worst"] == [2, 1, 0, -0.05, -1.0]
+    assert document["quality"] == "fail"
+
+    # Compact canonical JSON, non-ASCII preserved.
+    assert data == json.dumps(
+        document, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+
+
+def test_serialize_trend_matches_trend(snapshot_paths):
+    result = trend(tuple(snapshot_paths))
+    document = json.loads(serialize_trend(snapshot_paths))
+
+    assert document["count"] == result["count"]
+    assert document["changes"] == result["changes"]
+    assert document["degraded"] == result["degraded"]
+    assert document["coverage_delta"] == result["coverage_delta"]
+    assert document["score_delta"] == result["score_delta"]
+    assert document["worst"] == list(result["worst"])
+    assert document["quality"] == result["quality"]
+
+
+def test_serialize_trend_pass_identical(tmp_path):
+    batches = [("p0", [(0.5, 50.0, "pass")])]
+    first = write_aggregate(tmp_path / "a.json", batches)
+    second = write_aggregate(tmp_path / "b.json", batches)
+
+    data = serialize_trend([str(first), str(second)])
+    document = json.loads(data)
+    assert document == {
+        "count": 2,
+        "changes": 1,
+        "degraded": 0,
+        "coverage_delta": 0.0,
+        "score_delta": 0.0,
+        "worst": [1, 0, 0, 0.0, 0.0],
+        "quality": "pass",
+    }
+    # Negative zero is normalized; zero renders without a sign.
+    assert b'"coverage_delta":0.0' in data
+    assert b'"worst":[1,0,0,0.0,0.0]' in data
+
+
+def test_serialize_trend_calls_trend_once(monkeypatch, snapshot_paths):
+    calls = []
+    original = crosspoint_mod.trend
+
+    def counting(paths):
+        calls.append(list(paths))
+        return original(paths)
+
+    monkeypatch.setattr(crosspoint_mod, "trend", counting)
+    paths = list(snapshot_paths)
+    serialize_trend(paths)
+    assert calls == [paths]
+
+
+def test_serialize_trend_validation_passthrough():
+    with pytest.raises(TypeError, match="^paths must be a list or tuple$"):
+        serialize_trend({})
+    with pytest.raises(ValueError, match="at least 2 items"):
+        serialize_trend(["only"])
+    with pytest.raises(TypeError, match=r"^paths\[0\]: must be a str$"):
+        serialize_trend([None, "b"])
+
+
+def test_serialize_trend_load_exception_passthrough(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        serialize_trend(
+            [str(tmp_path / "nope1.json"), str(tmp_path / "nope2.json")]
+        )
+
+
+def test_serialize_trend_does_not_modify_inputs_or_files(snapshot_paths):
+    paths = list(snapshot_paths)
+    before = [open(p, "rb").read() for p in paths]
+    serialize_trend(paths)
+    assert paths == snapshot_paths
+    assert [open(p, "rb").read() for p in paths] == before
+
+
+def test_render_trend_lines(snapshot_paths):
+    text = render_trend(list(snapshot_paths))
+
+    assert isinstance(text, str)
+    assert not text.endswith("\n")
+    lines = text.split("\n")
+    assert lines == [
+        "TREND=3,6,3,-0.008333,0.000000,fail",
+        "WORST=2,1,0,-0.050000,-1.000000",
+    ]
+
+
+def test_render_trend_pass_identical(tmp_path):
+    batches = [("p0", [(0.5, 50.0, "pass")])]
+    first = write_aggregate(tmp_path / "a.json", batches)
+    second = write_aggregate(tmp_path / "b.json", batches)
+
+    text = render_trend([str(first), str(second)])
+    assert text == (
+        "TREND=2,1,0,0.000000,0.000000,pass\n"
+        "WORST=1,0,0,0.000000,0.000000"
+    )
+
+
+def test_render_trend_positive_deltas(tmp_path):
+    first = write_aggregate(
+        tmp_path / "a.json", [("p0", [(0.5, 50.0, "fail")])]
+    )
+    second = write_aggregate(
+        tmp_path / "b.json", [("p0", [(0.6, 51.0, "pass")])]
+    )
+    text = render_trend([str(first), str(second)])
+    assert text == (
+        "TREND=2,1,0,0.100000,1.000000,pass\n"
+        "WORST=1,0,0,0.100000,1.000000"
+    )
+
+
+def test_render_trend_calls_trend_once(monkeypatch, snapshot_paths):
+    calls = []
+    original = crosspoint_mod.trend
+
+    def counting(paths):
+        calls.append(list(paths))
+        return original(paths)
+
+    monkeypatch.setattr(crosspoint_mod, "trend", counting)
+    paths = list(snapshot_paths)
+    render_trend(paths)
+    assert calls == [paths]
+
+
+def test_render_trend_validation_passthrough():
+    with pytest.raises(TypeError, match="^paths must be a list or tuple$"):
+        render_trend({})
+    with pytest.raises(ValueError, match="at least 2 items"):
+        render_trend(["only"])
+    with pytest.raises(TypeError, match=r"^paths\[1\]: must be a str$"):
+        render_trend(["a", 5])
+
+
+def test_render_trend_does_not_modify_inputs_or_files(snapshot_paths):
+    paths = list(snapshot_paths)
+    before = [open(p, "rb").read() for p in paths]
+    render_trend(paths)
+    assert paths == snapshot_paths
+    assert [open(p, "rb").read() for p in paths] == before
+
+
+def test_trend_render_serialize_exported():
+    assert hasattr(crosspoint_mod, "serialize_trend")
+    assert hasattr(crosspoint_mod, "render_trend")
+    assert "serialize_trend" in crosspoint_mod.__all__
+    assert "render_trend" in crosspoint_mod.__all__
