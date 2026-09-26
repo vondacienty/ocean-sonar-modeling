@@ -9,6 +9,7 @@ boundary-clipped 3x3 neighbourhood.
 
 from __future__ import annotations
 
+import json
 import math
 
 from .svp import _is_real_number
@@ -16,6 +17,7 @@ from .svp import _is_real_number
 __all__ = [
     "analyze",
     "analyze_layers",
+    "batch",
     "breakdown",
     "compare_layers",
     "cross_scale",
@@ -225,6 +227,98 @@ def analyze(r, nx, ny, cells):
                 )
             result.append((slope, roughness))
     return tuple(result)
+
+
+def batch(r, nx, ny, cells, slope_limit=5.0, roughness_limit=1.0) -> bytes:
+    """Analyze one depth grid and serialize the per-cell gate as JSON bytes.
+
+    Calls :func:`analyze` exactly once as ``analyze(r, nx, ny, cells)``
+    — its validation and exceptions (including the ``"cells[i]: "``
+    prefixes) apply unchanged and the inputs are not modified.
+    ``slope_limit`` and ``roughness_limit`` are validated after that
+    call, in that order: each must be a finite non-bool int/float with
+    ``value > 0``. A bool or non-number raises ``TypeError``; a
+    non-finite value or a value ``<= 0`` raises ``ValueError``.
+
+    With ``A`` the tuple returned by :func:`analyze`, the returned
+    document has top-level keys exactly in the order ``results,
+    summary``. ``results`` is an array in grid cell order; each item is
+    a ``[slope, roughness, within]`` array where ``slope`` and
+    ``roughness`` are copied from the corresponding entry of ``A``
+    (``None`` encoded as ``null``), and ``within`` is ``true`` only
+    when both values are not ``None`` and ``slope <= slope_limit`` and
+    ``roughness <= roughness_limit``, and ``false`` otherwise.
+
+    ``summary`` has keys exactly in the order ``count, valid,
+    pass_count, quality``: ``count`` is the number of cells, ``valid``
+    the number of cells whose slope and roughness are both not
+    ``None``, and ``pass_count`` the number of cells whose ``within``
+    is true. The first three values are ints and ``quality`` is
+    ``"pass"`` only when ``valid > 0`` and ``pass_count == valid``,
+    and ``"fail"`` otherwise.
+
+    The object is encoded as UTF-8 JSON with ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation, no
+    BOM and no trailing newline, as in ``grid.batch``; values are
+    copied from ``A`` as returned (already rounded to 6 decimals with
+    negative zero normalized to ``0.0``). Any JSON or UTF-8 encoding
+    failure raises ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    analysis = analyze(r, nx, ny, cells)
+
+    for name, value in (
+        ("slope_limit", slope_limit),
+        ("roughness_limit", roughness_limit),
+    ):
+        if not _is_real_number(value):
+            raise TypeError(f"{name} must be a non-bool int or float")
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite")
+        if not value > 0:
+            raise ValueError(f"{name} must be > 0")
+
+    results = []
+    count = len(analysis)
+    valid = 0
+    pass_count = 0
+    for slope, roughness in analysis:
+        within = (
+            slope is not None
+            and roughness is not None
+            and slope <= slope_limit
+            and roughness <= roughness_limit
+        )
+        if slope is not None and roughness is not None:
+            valid += 1
+        if within:
+            pass_count += 1
+        results.append([slope, roughness, within])
+
+    document = {
+        "results": results,
+        "summary": {
+            "count": int(count),
+            "valid": int(valid),
+            "pass_count": int(pass_count),
+            "quality": (
+                "pass"
+                if valid > 0 and pass_count == valid
+                else "fail"
+            ),
+        },
+    }
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(f"batch: could not be serialized to JSON: {exc}") from exc
 
 
 def cross_scale(fine, coarse, tolerance=0.5):
