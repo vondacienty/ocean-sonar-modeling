@@ -414,6 +414,50 @@ stdout 输出其返回的两行文本（首行
 ocean-sonar-modeling render-substrate-trend trend.json
 ```
 
+### `export-substrate-report AGGREGATE --output OUTPUT`
+
+把一份 `substrate.dump_aggregate` 生成的底质聚合 JSON 序列化为报告
+JSON 并原子写盘。等价于**仅调用一次**
+`ocean_sonar.substrate.serialize_aggregate_report(AGGREGATE)` 得到字节
+串 `B`：其读取校验、异常、JSON 键序与字节规范（UTF-8、
+`ensure_ascii=False`、`separators=(",", ":")`、`allow_nan=False`、无
+BOM、无尾换行）完全沿用且先于 `output` 生效，不预读、不排序、不修改
+输入。成功时静默（stdout、stderr 均为空），退出码 0，并以临时文件加
+`flush()`、`os.fsync()`、`os.replace` 原子覆写 `--output` 指定的
+文件；OUTPUT 不得与 AGGREGATE 指向同一文件（双方都存在时用
+`os.path.samefile` 识别软/硬链接，否则比较
+`os.path.normcase(os.path.realpath(os.path.abspath(path)))` 规范化路
+径），重合抛 `ValueError`；替换前发生失败会清除临时文件且既有 OUTPUT
+逐字节不变，`OSError` 原样传播；文件不存在、内容损坏等错误时 stdout
+为空，stderr 严格输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码
+1；缺少 AGGREGATE、缺少 `--output` 或参数多余属于参数解析错误，退出
+码 2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling export-substrate-report aggregate.json --output report.json
+```
+
+### `build-substrate-report-trend REPORT REPORT [REPORT ...] --output OUTPUT`
+
+把两份及以上 `substrate.serialize_aggregate_report` 生成的底质聚合报告
+JSON 按原序序列化为一份趋势 JSON 并原子写盘。等价于**仅调用一次**
+`ocean_sonar.substrate.serialize_aggregate_report_trend(paths)`（paths
+按命令行原序）得到字节串 `B`：其校验、异常、JSON 键序与字节规范完全
+沿用且先于 `output` 生效，不预读、不排序、不修改输入。成功时静默
+（stdout、stderr 均为空），退出码 0，并以临时文件加 `flush()`、
+`os.fsync()`、`os.replace` 原子覆写 `--output` 指定的文件；OUTPUT
+不得与任一 REPORT 指向同一文件（双方都存在时用 `os.path.samefile`
+识别软/硬链接，否则比较规范化路径），重合抛 `ValueError`；替换前发生
+失败会清除临时文件且既有 OUTPUT 逐字节不变，`OSError` 原样传播；文件
+不存在、内容损坏等错误时 stdout 为空，stderr 严格输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；REPORT 不足两份、
+缺少 `--output` 或参数多余属于参数解析错误，退出码 2 且不调用业务函
+数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling build-substrate-report-trend report1.json report2.json --output trend.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
