@@ -586,5 +586,6 @@ def test_insufficient_matches_one():
 
 
 def test_exported():
-    assert strip.__all__ == ["merge"]
+    assert strip.__all__ == ["merge", "batch"]
     assert callable(strip.merge)
+    assert callable(strip.batch)
