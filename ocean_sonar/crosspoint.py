@@ -57,6 +57,7 @@ __all__ = [
     "render_comparison",
     "load_comparison",
     "audit_comparisons",
+    "serialize_audit",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -3680,6 +3681,73 @@ def audit_comparisons(paths) -> dict:
         "worst": worst_item,
         "quality": "pass" if failed == 0 else "fail",
     }
+
+
+def serialize_audit(paths) -> bytes:
+    """Serialize an :func:`audit_comparisons` result as UTF-8 JSON bytes.
+
+    Calls :func:`audit_comparisons` exactly once with ``paths`` — and no
+    other combining or loading function, with no pre-reading, sorting or
+    reloading of the files — so its complete ``paths`` validation,
+    first-error order, exceptions (propagated unchanged) and
+    ``"paths[i]: "`` index prefixes all apply here as well. Inputs and
+    the loaded files are not modified.
+
+    With ``A`` the dict returned by :func:`audit_comparisons`, the
+    encoded object is ``A`` itself with top-level keys in the strict
+    order ``files, changes, failed, worst, quality`` and no recomputed
+    or additional keys. ``files``, ``changes`` and ``failed`` are ints
+    written in decimal. ``worst`` is the six-item tuple in its original
+    order, encoded as the JSON array
+    ``[file index, index, degraded_delta, coverage_delta, score_delta,
+    quality]``; its first three items are ints and its last item is the
+    quality string copied as-is. The two floats are rounded only when
+    written, with ``round(float(v), 6)`` and negative zero normalized to
+    ``0.0``.
+
+    The object is encoded as UTF-8 JSON with ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation, no
+    BOM and no trailing newline. Any JSON or UTF-8 encoding failure
+    raises ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    audit = audit_comparisons(paths)
+    worst = audit["worst"]
+
+    coverage_delta = round(float(worst[3]), 6)
+    if coverage_delta == 0:
+        coverage_delta = 0.0
+    score_delta = round(float(worst[4]), 6)
+    if score_delta == 0:
+        score_delta = 0.0
+
+    document = {
+        "files": int(audit["files"]),
+        "changes": int(audit["changes"]),
+        "failed": int(audit["failed"]),
+        "worst": [
+            int(worst[0]),
+            int(worst[1]),
+            int(worst[2]),
+            coverage_delta,
+            score_delta,
+            worst[5],
+        ],
+        "quality": audit["quality"],
+    }
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"audit: could not be serialized to JSON: {exc}"
+        ) from exc
 
 
 def render_trends(paths) -> str:
