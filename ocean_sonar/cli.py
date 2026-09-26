@@ -3,11 +3,75 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import tempfile
 
 from . import __version__
-from .crosspoint import export_trends, render_trends
+from .crosspoint import (
+    export_trends,
+    render_comparison,
+    render_trends,
+    serialize_comparison,
+)
 from .report import rank_files
+
+
+def _resolved_path(path):
+    """Normalized absolute path with symlinks resolved, for non-existing files."""
+    return os.path.normcase(os.path.realpath(os.path.abspath(path)))
+
+
+def _reject_output_overlap(output, paths):
+    """Reject ``output`` naming the same file as any of ``paths``.
+
+    Existing files are compared with ``os.path.samefile`` so soft and hard
+    links are recognized; when either side does not exist, the normalized
+    ``realpath`` strings are compared instead.
+    """
+    output_exists = os.path.exists(output)
+    output_resolved = _resolved_path(output)
+    for path in paths:
+        if output_exists and os.path.exists(path):
+            same = os.path.samefile(output, path)
+        else:
+            same = output_resolved == _resolved_path(path)
+        if same:
+            raise ValueError(
+                f"output must not be the same file as a report: "
+                f"{output!r} and {path!r}"
+            )
+
+
+def _atomic_write_bytes(output, data):
+    """Write ``data`` to ``output`` via a fsynced temp file and ``os.replace``.
+
+    The temporary file lives in ``output``'s directory. On any failure before
+    the replacement the temporary file is removed and an existing ``output``
+    is left untouched.
+    """
+    directory = os.path.dirname(os.path.abspath(output)) or "."
+    fd, tmp_path = tempfile.mkstemp(
+        dir=directory, prefix="." + os.path.basename(output) + ".", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, output)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _export_comparison_file(paths, output):
+    data = serialize_comparison(paths)
+    _reject_output_overlap(output, paths)
+    _atomic_write_bytes(output, data)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -26,6 +90,15 @@ def main(argv: list[str] | None = None) -> int:
     export_parser.add_argument("trend_second", metavar="TREND", help="second trend JSON file")
     export_parser.add_argument("trend_rest", nargs="*", metavar="TREND", help="additional trend JSON files")
     export_parser.add_argument("--output", required=True, help="output file overwritten with the trend report JSON")
+    compare_parser = sub.add_parser("compare-reports", help="compare successive trend report snapshots as text lines")
+    compare_parser.add_argument("compare_first", metavar="REPORT", help="first trend report JSON file")
+    compare_parser.add_argument("compare_second", metavar="REPORT", help="second trend report JSON file")
+    compare_parser.add_argument("compare_rest", nargs="*", metavar="REPORT", help="additional trend report JSON files")
+    export_comparison_parser = sub.add_parser("export-comparison", help="compare successive trend report snapshots and write one JSON file")
+    export_comparison_parser.add_argument("compare_first", metavar="REPORT", help="first trend report JSON file")
+    export_comparison_parser.add_argument("compare_second", metavar="REPORT", help="second trend report JSON file")
+    export_comparison_parser.add_argument("compare_rest", nargs="*", metavar="REPORT", help="additional trend report JSON files")
+    export_comparison_parser.add_argument("--output", required=True, help="output file atomically overwritten with the comparison JSON")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -54,6 +127,25 @@ def main(argv: list[str] | None = None) -> int:
         paths = [args.trend_first, args.trend_second, *args.trend_rest]
         try:
             export_trends(paths, args.output)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        return 0
+
+    if args.command == "compare-reports":
+        paths = [args.compare_first, args.compare_second, *args.compare_rest]
+        try:
+            text = render_comparison(paths)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "export-comparison":
+        paths = [args.compare_first, args.compare_second, *args.compare_rest]
+        try:
+            _export_comparison_file(paths, args.output)
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
