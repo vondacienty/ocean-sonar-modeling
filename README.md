@@ -405,10 +405,10 @@ ocean-sonar-modeling render-aggregate aggregate.json
 `classify`、`batch`、`load`、`aggregate`、`dump_aggregate`、
 `load_aggregate`、`export`、`render`、`export_aggregate`、
 `render_aggregate`、`serialize_aggregate_report`、
-`serialize_aggregate_report_trend`。其中 `export`、
+`serialize_aggregate_report_trend`、`load_aggregate_report_trend`。其中 `export`、
 `render`、`export_aggregate`、`render_aggregate`、
-`serialize_aggregate_report`、`serialize_aggregate_report_trend`
-的契约如下。
+`serialize_aggregate_report`、`serialize_aggregate_report_trend`、
+`load_aggregate_report_trend` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
 
@@ -610,6 +610,30 @@ unknown_delta, unknown_ratio_delta, worst, quality`。前四项为 int；
 `worst` 的 `dr` 项）仅在写出时取 `round(float(v), 6)` 并将负零归一
 化为 `0.0`，整数按十进制写出。任何 JSON 或 UTF-8 编码失败抛
 `ValueError`。返回 `bytes`。
+
+### `substrate.load_aggregate_report_trend(path) -> dict`
+
+读取一份 `serialize_aggregate_report_trend` 产出的趋势 JSON 文件。
+
+`path` 校验、`rb` 读取、系统异常（缺文件抛 `FileNotFoundError`、目
+录抛 `IsADirectoryError`、其余 `OSError` 原样传播）、BOM 与尾换行
+拒绝、UTF-8/JSON 解码、`NaN`/`Infinity` 与重复键拒绝、规范重编码
+逐字节核对及文件不变性均沿用 `load_aggregate`；文档不合约均抛
+`ValueError`。
+
+解码值必须是顶层键序恰为 `count, changes, regressed, unknown_delta,
+unknown_ratio_delta, worst, quality` 的对象——重复、缺失或多余键均
+被拒绝。前四项须为非 `bool` int，且 `count >= 2`、
+`changes == count - 1`、`0 <= regressed <= changes`；
+`unknown_ratio_delta` 须为 `[-1, 1]` 内有限 float、等于
+`round(float(v), 6)` 且禁负零。`worst` 须为四元数组
+`[i, du, dr, q]`：`i`、`du` 为非 `bool` int 且 `1 <= i < count`；
+`dr` 为 `[-1, 1]` 内六位有限 float 且禁负零；`q` 仅取
+`"pass"`/`"fail"`。顶层 `quality` 仅取 `"pass"`/`"fail"`，且当且仅
+当 `regressed == 0` 时为 `"pass"`。任一键序、类型、范围或关系不符
+均抛 `ValueError`。
+
+返回保持原键序的 dict，仅 `worst` 还原为 tuple；文件不被修改。
 
 ### 通用约定
 
