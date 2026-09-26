@@ -135,6 +135,23 @@ stderr 严格输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码
 ocean-sonar-modeling render-audit audit.json
 ```
 
+### `export-audit-report AUDIT --output OUTPUT`
+
+把一份 `serialize_audit`/`export-audit` 生成的审计 JSON 转成带模式版本的
+审计报告 JSON 并原子写盘。等价于**仅调用一次**
+`ocean_sonar.crosspoint.export_audit_report(audit_path, output)`：成功时静默
+（stdout、stderr 均为空），退出码 0，并以临时文件加 `os.replace`
+原子覆写 `--output` 指定的文件；`--output` 不得与 AUDIT 指向同一文件
+（双方都存在时用 `os.path.samefile` 识别软/硬链接，否则比较规范化路径），
+重合时抛 `ValueError`；文件不存在、内容损坏等错误时 stdout 为空，stderr
+严格输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码 1；缺少 AUDIT、
+缺少 `--output` 或多余参数属于参数解析错误，退出码 2 且不调用业务函数。
+输入审计文件不会被修改。
+
+```bash
+ocean-sonar-modeling export-audit-report audit.json --output audit_report.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -153,7 +170,7 @@ ocean-sonar-modeling render-audit audit.json
 `load_trend_report`、
 `serialize_comparison`、`render_comparison`、`load_comparison`、
 `audit_comparisons`、`export_audit`、`render_audit`、
-`serialize_audit_report`、`load_audit_report`、
+`serialize_audit_report`、`load_audit_report`、`export_audit_report`、
 `serialize_pair_gate_score_summary`、`render_pair_gate_score_summary`、
 `load_pair_gate_score_summary`。
 
@@ -836,3 +853,29 @@ WORST=<file_index>,<index>,<degraded_delta>,<coverage_delta>,<score_delta>,<qual
 
 返回保持原键序的 dict（`source`、`summary`、`worst` 亦保持其存储键序），
 各值原样返回，文件始终不被修改。
+
+### `export_audit_report(audit_path, output) -> bytes`
+
+把一份审计 JSON 序列化为审计报告并原子写盘，返回所写字节。
+
+执行时**先且仅调用一次** `serialize_audit_report(audit_path)` 得到字节串
+`B`，在此之前不做任何其他工作、之后也不再调用第二次；因此 `audit_path`
+的校验契约与异常（非 `str` 抛 `TypeError`，空串抛 `ValueError`，文件缺失
+抛 `FileNotFoundError`，目录抛 `IsADirectoryError`，其余 `OSError` 原样传
+播，解析、结构或规范字节非法抛 `ValueError`）完全沿用
+`serialize_audit_report`，且 `audit_path` 的错误先于 `output` 报出。
+`audit_path` 不会被修改。
+
+随后才校验 `output`：必须为非空 `str`——非 `str` 抛 `TypeError`
+（`output must be a str`），空串抛 `ValueError`
+（`output must not be empty`）。
+
+`output` 不得与 `audit_path` 指向同一文件：双方都存在时用
+`os.path.samefile` 识别软/硬链接，任一方不存在时比较
+`os.path.normcase(os.path.realpath(os.path.abspath(path)))`；重合时抛
+`ValueError`。
+
+非重合时在 `output` 同目录创建临时文件，以二进制写入 `B`，`flush()`、
+`os.fsync()` 后用 `os.replace` 原子替换 `output`。替换前发生失败会清除
+临时文件且既有 `output` 逐字节不变；`OSError` 原样传播。返回值与写入
+文件的字节为同一份 `bytes`。

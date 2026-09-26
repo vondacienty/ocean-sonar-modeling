@@ -12,6 +12,7 @@ from . import __version__
 from .crosspoint import (
     audit_comparisons,
     export_audit,
+    export_audit_report,
     export_trends,
     render_audit,
     render_comparison,
@@ -114,6 +115,9 @@ def main(argv: list[str] | None = None) -> int:
     export_audit_parser.add_argument("--output", required=True, help="output file atomically overwritten with the audit JSON")
     render_audit_parser = sub.add_parser("render-audit", help="render one audit JSON file as two summary lines")
     render_audit_parser.add_argument("audit", metavar="AUDIT", help="audit JSON file")
+    export_audit_report_parser = sub.add_parser("export-audit-report", help="build an audit report JSON file from one audit JSON file")
+    export_audit_report_parser.add_argument("audit_report_audit", metavar="AUDIT", help="audit JSON file")
+    export_audit_report_parser.add_argument("--output", required=True, help="output file atomically overwritten with the audit report JSON")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -198,6 +202,14 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
         sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "export-audit-report":
+        try:
+            export_audit_report(args.audit_report_audit, args.output)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
         return 0
 
     parser.print_help()
