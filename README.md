@@ -155,6 +155,20 @@ JSON 并写盘。等价于**仅调用一次**
 ocean-sonar-modeling export-audit-report audit.json --output audit_report.json
 ```
 
+### `render-audit-report REPORT`
+
+把一份 `serialize_audit_report`/`export-audit-report` 生成的审计报告 JSON
+渲染为三行汇总文本。等价于**仅调用一次**
+`ocean_sonar.crosspoint.render_audit_report(path)`：成功时 stdout 输出其
+返回的三行文本（`REPORT=...`、`SUMMARY=...`、`WORST=...`）加一个换行，
+stderr 为空，退出码 0；文件不存在、内容损坏等错误时 stdout 为空，stderr
+严格输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数缺失或多余
+属于参数解析错误，退出码 2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling render-audit-report audit_report.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -174,7 +188,7 @@ ocean-sonar-modeling export-audit-report audit.json --output audit_report.json
 `serialize_comparison`、`render_comparison`、`load_comparison`、
 `audit_comparisons`、`export_audit`、`render_audit`、
 `serialize_audit_report`、`load_audit_report`、
-`export_audit_report`、
+`export_audit_report`、`render_audit_report`、
 `serialize_pair_gate_score_summary`、`render_pair_gate_score_summary`、
 `load_pair_gate_score_summary`。
 
@@ -881,3 +895,28 @@ WORST=<file_index>,<index>,<degraded_delta>,<coverage_delta>,<score_delta>,<qual
 `os.fsync()` 后用 `os.replace` 原子替换 `output`。替换前发生失败会清除
 临时文件且既有 `output` 逐字节不变；`OSError` 原样传播。返回值与写入文件
 的字节为同一份 `bytes`，`audit_path` 指向的文件不被修改。
+
+### `render_audit_report(path) -> str`
+
+把一份审计报告 JSON 渲染为三行汇总文本。
+
+执行时**仅调用一次** `load_audit_report(path)` 得到 `R`，不调用任何其他
+加载或汇总函数；因此 `path` 的校验契约与异常完全沿用
+`load_audit_report`：非 `str` 抛 `TypeError`，空串抛 `ValueError`，文件
+缺失抛 `FileNotFoundError`，目录抛 `IsADirectoryError`，其余 `OSError`
+原样传播，解析、结构或规范字节非法抛 `ValueError`。输入文件不会被修改。
+
+返回以 `\n` 连接、无尾换行的三行：
+
+```
+REPORT=<schema_version>,<source.path>,<source.kind>,<quality>
+SUMMARY=<files>,<changes>,<failed>,<passed>,<pass_ratio>
+WORST=<file_index>,<index>,<degraded_delta>,<coverage_delta>,<score_delta>,<quality>
+```
+
+`REPORT` 行的四个值依次为 `R["schema_version"]`、`R["source"]["path"]`、
+`R["source"]["kind"]`、`R["quality"]`；`SUMMARY` 行的五个值按
+`R["summary"]` 的键序，`WORST` 行的六个值按 `R["worst"]` 的键序。所有值
+直接取自 `R`，不重算、不重新排序：`int` 按十进制渲染，`str` 原样，
+`float` 用 `format(v, ".6f")`（负零渲染为 `0.000000`）；`source.path`
+用 `json.dumps(v, ensure_ascii=False, separators=(",", ":"))` 渲染。
