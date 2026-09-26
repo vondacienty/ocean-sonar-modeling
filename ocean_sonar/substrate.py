@@ -13,9 +13,10 @@ import math
 
 from .svp import _is_real_number
 
-__all__ = ["batch", "classify"]
+__all__ = ["batch", "classify", "load"]
 
 _CLASSES = ("mud", "sand", "gravel", "rock")
+_ALL_CLASSES = ("unknown",) + _CLASSES
 
 
 def _round6(value):
@@ -233,7 +234,7 @@ def batch(analysis, intensities) -> bytes:
     if not isinstance(intensities, (list, tuple)):
         raise TypeError("intensities must be a list or tuple")
     if len(intensities) != len(analysis):
-        raise ValueError("analysis and intensities must have equal length")
+        raise ValueError("intensities must have the same length as analysis")
 
     for i in range(len(intensities)):
         prefix = f"intensities[{i}]: "
@@ -278,3 +279,188 @@ def batch(analysis, intensities) -> bytes:
         return text.encode("utf-8")
     except (TypeError, ValueError, UnicodeError) as exc:
         raise ValueError(f"batch: could not be serialized to JSON: {exc}") from exc
+
+
+_BATCH_KEYS = ("results", "summary")
+_BATCH_SUMMARY_KEYS = ("count", "unknown", "quality")
+
+
+def _reject_json_constant(name):
+    raise ValueError(f"invalid JSON constant {name!r}")
+
+
+def _dump_batch(document):
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"substrate batch: could not be serialized to JSON: {exc}"
+        ) from exc
+
+
+def _check_batch(document):
+    prefix = "substrate batch: "
+    if not isinstance(document, dict):
+        raise TypeError("substrate batch must be a dict")
+    if list(document.keys()) != list(_BATCH_KEYS):
+        raise TypeError(
+            "substrate batch keys must be in the order results, summary"
+        )
+
+    results = document["results"]
+    if not isinstance(results, list):
+        raise TypeError(prefix + "results must be a list")
+    if len(results) == 0:
+        raise ValueError(prefix + "results must be non-empty")
+
+    unknown = 0
+    for i in range(len(results)):
+        item = results[i]
+        item_prefix = f"{prefix}results[{i}]: "
+        if not isinstance(item, list):
+            raise TypeError(item_prefix + "must be a list")
+        if len(item) != 2:
+            raise ValueError(item_prefix + "must have 2 elements")
+        name, confidence = item
+        if type(name) is not str:
+            raise TypeError(item_prefix + "class must be a str")
+        if name not in _ALL_CLASSES:
+            raise ValueError(
+                item_prefix
+                + "class must be one of unknown, mud, sand, gravel, rock"
+            )
+        if type(confidence) is not float:
+            raise TypeError(item_prefix + "confidence must be a float")
+        if not math.isfinite(confidence):
+            raise ValueError(item_prefix + "confidence must be finite")
+        if confidence == 0 and math.copysign(1.0, confidence) < 0:
+            raise ValueError(
+                item_prefix + "confidence must not be negative zero"
+            )
+        expected = 0.0 if name == "unknown" else 1.0
+        if confidence != expected:
+            raise ValueError(
+                item_prefix
+                + f"confidence must be {expected} for class {name!r}"
+            )
+        if name == "unknown":
+            unknown += 1
+
+    n = len(results)
+    summary = document["summary"]
+    summary_prefix = prefix + "summary: "
+    if not isinstance(summary, dict):
+        raise TypeError(summary_prefix + "must be an object")
+    if list(summary.keys()) != list(_BATCH_SUMMARY_KEYS):
+        raise TypeError(
+            summary_prefix
+            + "keys must be in the order count, unknown, quality"
+        )
+
+    count = summary["count"]
+    if type(count) is not int:
+        raise TypeError(summary_prefix + "count must be a non-bool int")
+    if count != n:
+        raise ValueError(summary_prefix + "count must equal the result count")
+
+    unknown_count = summary["unknown"]
+    if type(unknown_count) is not int:
+        raise TypeError(summary_prefix + "unknown must be a non-bool int")
+    if unknown_count != unknown:
+        raise ValueError(
+            summary_prefix + "unknown must equal the number of unknown results"
+        )
+
+    quality = summary["quality"]
+    if type(quality) is not str:
+        raise TypeError(summary_prefix + "quality must be a str")
+    if quality not in ("pass", "fail"):
+        raise ValueError(summary_prefix + "quality must be 'pass' or 'fail'")
+    expected_quality = "pass" if unknown == 0 else "fail"
+    if quality != expected_quality:
+        raise ValueError(
+            summary_prefix
+            + "quality must be 'pass' if and only if unknown is 0"
+        )
+
+
+def load(path) -> dict:
+    """Load a :func:`batch`-produced JSON document.
+
+    ``path`` must be a non-empty ``str``: a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``. The file
+    is opened in binary mode (``"rb"``) and read in full; a missing
+    file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError`` and every other ``OSError`` is propagated
+    unchanged. The file is not modified.
+
+    The bytes must be exactly those produced by :func:`batch` for the
+    same value: compact UTF-8 JSON (``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``) with no BOM and no
+    trailing newline. A BOM, a trailing newline, a UTF-8 decoding
+    failure or a JSON parsing failure raises ``ValueError``; the
+    ``NaN``/``Infinity`` constants and any other non-finite token are
+    rejected.
+
+    The decoded value must be a JSON object with top-level keys exactly
+    in the order ``results, summary``. ``results`` must be a non-empty
+    array of two-element arrays ``[class, confidence]``: ``class`` must
+    be one of ``unknown``, ``mud``, ``sand``, ``gravel``, ``rock`` and
+    ``confidence`` must be a finite float, exactly ``0.0`` for
+    ``unknown`` and ``1.0`` for every other class (negative zero is
+    rejected). Writing ``n`` for the result count and ``u`` for the
+    number of ``unknown`` results, ``summary`` must have keys exactly
+    in the order ``count, unknown, quality``: ``count`` and ``unknown``
+    must be non-bool ints equal to ``n`` and ``u`` respectively, and
+    ``quality`` must be ``"pass"`` if and only if ``u`` is ``0`` and
+    ``"fail"`` otherwise. The file bytes must also equal the canonical
+    re-serialization of the decoded value byte for byte; any key-order,
+    type, enum, relation, parse or canonical-byte mismatch raises
+    ``ValueError``.
+
+    Returns the document as a dict with the keys in the order above;
+    the file is never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        document = json.loads(text, parse_constant=_reject_json_constant)
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        _check_batch(document)
+        canonical = _dump_batch(document)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid substrate batch: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical substrate.batch output"
+        )
+
+    return document
