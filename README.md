@@ -71,6 +71,7 @@ ocean-sonar-modeling export-trends trend_a.json trend_b.json [trend_c.json ...] 
 `serialize_trend`、`render_trend`、`load_trend`、
 `load_trends`、`render_trends`、`export_trends`、
 `load_trend_report`、
+`serialize_comparison`、`render_comparison`、
 `serialize_pair_gate_score_summary`、`render_pair_gate_score_summary`、
 `load_pair_gate_score_summary`。
 
@@ -541,3 +542,44 @@ quality` 及其类型、范围、关系与规范字节规则），并且其
 返回保持 `sources, summary` 键序的 `dict`：`sources` 为按存储顺序
 排列的路径字符串 list，`summary` 中仅 `worst` 还原为 tuple（与
 `load_trends` 一致），其余值原样返回。文件不被修改。
+
+### `serialize_comparison(paths) -> bytes`
+
+把 `compare_reports` 的比较结果编码为 JSON 字节串。
+
+执行时**仅调用一次** `compare_reports(paths)`，因此其全部校验顺序、
+异常（原样向上传播）与 `paths[i]: ` 前缀规则在此同样适用；输入与
+文件均不被修改。
+
+记 `C` 为其返回的 `dict`，编码对象保持 `C` 的原键序与原值：顶层键序
+为 `changes, worst, quality`；唯一的结构转换是把 `changes` 元组编码为
+JSON 数组，各变化项与 `worst` 仍保持
+`index, degraded_delta, coverage_delta, score_delta, quality` 键序。
+
+编码规范与 `dump_trends` 一致：UTF-8 JSON，`ensure_ascii=False`、
+`separators=(",", ":")`、`allow_nan=False`，无缩进、无 BOM、无尾
+换行；float 先经 `round(float(v), 6)` 并将负零归一化为 `0.0`，`int`
+以十进制输出，`str` 原样插入。任何 JSON 或 UTF-8 编码失败抛出
+`ValueError`。返回 `bytes`。
+
+### `render_comparison(paths) -> str`
+
+把 `compare_reports` 的比较结果渲染为多行文本。
+
+执行时**仅调用一次** `compare_reports(paths)`，因此其全部校验顺序、
+异常（原样向上传播）与 `paths[i]: ` 前缀规则在此同样适用；输入与
+文件均不被修改。
+
+记 `C` 为其返回的 `dict`、`n = len(C["changes"])`，返回以 `\n` 连接、
+无尾换行的文本：
+
+```
+QUALITY=<quality>;COUNT=<n>;WORST_INDEX=<index>
+CHANGE[<index>]=<degraded_delta>,<coverage_delta>,<score_delta>,<quality>
+...
+```
+
+首行各值依次取 `C["quality"]`、`n` 与 `C["worst"]["index"]`；其后按
+`C["changes"]` 原序逐项输出一行 `CHANGE[...]`，各值直接取自对应的
+变化项，不重算、不排序。格式化规则：`int` 以十进制输出，`str` 原样
+插入，`float` 使用 `format(v, ".6f")`（负零渲染为 `0.000000`）。
