@@ -200,6 +200,43 @@ ocean-sonar-modeling export-audit-report-trend audit_report_a.json audit_report_
 ocean-sonar-modeling render-audit-report-trend audit_report_trend.json
 ```
 
+### `export-substrate INPUT --output OUTPUT`
+
+把一份 `ocean_sonar.substrate.batch`/`load` 生成的底质分类 JSON 按原键序
+重新编码后原子写盘。等价于**仅调用一次**
+`ocean_sonar.substrate.export(path, output)`：先且仅调用一次
+`load(path)` 得到 `D`，其校验、异常与文件不变性完全沿用且先于 `output`
+生效；再按 `D` 的原键序以 `batch` 的 JSON 规范（UTF-8、
+`ensure_ascii=False`、`separators=(",", ":")`、`allow_nan=False`，无
+BOM、无尾换行）编码为字节串 `B`；成功时静默（stdout、stderr 均为空），
+退出码 0，并以临时文件加 `os.replace` 原子覆写 `--output` 指定的文件；
+`--output` 必须为非空字符串且不得与 INPUT 指向同一文件（双方都存在时用
+`os.path.samefile` 识别软/硬链接，否则比较规范化路径），非 `str`/空串
+分别抛 `TypeError`/`ValueError`，重合抛 `ValueError`；替换前发生失败会
+清除临时文件且既有 OUTPUT 逐字节不变；文件不存在、内容损坏等错误时
+stdout 为空，stderr 严格输出 `ERROR <异常类名>: <异常消息>` 加换行，退
+出码 1；缺少 INPUT、缺少 `--output` 或参数多余属于参数解析错误，退出码
+2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling export-substrate substrate.json --output substrate_out.json
+```
+
+### `render-substrate INPUT`
+
+把一份 `ocean_sonar.substrate.batch`/`load` 生成的底质分类 JSON 渲染为
+汇总文本。等价于**仅调用一次** `ocean_sonar.substrate.render(path)`：
+成功时 stdout 输出其返回文本（首行 `SUBSTRATE=<count>,<unknown>,
+<quality>`，随后按 `results` 原序逐行 `RESULT[i]=<class>,<confidence>`）
+加一个换行，stderr 为空，退出码 0；文件不存在、内容损坏等错误时 stdout
+为空，stderr 严格输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码 1；
+参数缺失或多余属于参数解析错误，退出码 2 且不调用业务函数。输入文件不
+会被修改。
+
+```bash
+ocean-sonar-modeling render-substrate substrate.json
+```
+
 ### `svp-batch REQUEST`
 
 读取一份批量声线追踪请求 JSON 文件并**仅调用一次**
@@ -321,6 +358,9 @@ ocean-sonar-modeling terrain-batch request.json
 
 声速剖面（SVP）声线追踪接口位于 `ocean_sonar.svp`，该模块导出：
 `trace`、`batch`。
+
+海底底质分类接口位于 `ocean_sonar.substrate`，该模块导出：
+`classify`、`batch`、`load`、`export`、`render`。
 
 ### 通用约定
 

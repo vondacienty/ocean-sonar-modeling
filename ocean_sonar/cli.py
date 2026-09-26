@@ -28,6 +28,8 @@ from .outlier import batch as _outlier_batch
 from .report import rank_files
 from .strip import batch as _strip_batch
 from .substrate import batch as _substrate_batch
+from .substrate import export as _substrate_export
+from .substrate import render as _substrate_render
 from .svp import batch as _svp_batch
 from .terrain import batch as _terrain_batch
 from .tide import batch as _tide_batch
@@ -449,6 +451,11 @@ def main(argv: list[str] | None = None) -> int:
     export_audit_report_trend_parser.add_argument("--output", required=True, help="output file atomically overwritten with the audit report trend JSON")
     render_audit_report_trend_parser = sub.add_parser("render-audit-report-trend", help="render one audit report trend JSON file as two summary lines")
     render_audit_report_trend_parser.add_argument("trend", metavar="TREND", help="audit report trend JSON file")
+    export_substrate_parser = sub.add_parser("export-substrate", help="re-encode one substrate batch JSON file and atomically write it")
+    export_substrate_parser.add_argument("input", metavar="INPUT", help="substrate batch JSON file")
+    export_substrate_parser.add_argument("--output", required=True, help="output file atomically overwritten with the substrate batch JSON")
+    render_substrate_parser = sub.add_parser("render-substrate", help="render one substrate batch JSON file as summary lines")
+    render_substrate_parser.add_argument("input", metavar="INPUT", help="substrate batch JSON file")
     svp_batch_parser = sub.add_parser("svp-batch", help="trace a batch of SVP rays from a request JSON file and print the result JSON")
     svp_batch_parser.add_argument("request", metavar="REQUEST", help="batch request JSON file")
     tide_batch_parser = sub.add_parser("tide-batch", help="reduce a batch of soundings from a request JSON file and print the result JSON")
@@ -584,6 +591,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "render-audit-report-trend":
         try:
             text = render_audit_report_trend(args.trend)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "export-substrate":
+        try:
+            _substrate_export(args.input, args.output)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        return 0
+
+    if args.command == "render-substrate":
+        try:
+            text = _substrate_render(args.input)
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1

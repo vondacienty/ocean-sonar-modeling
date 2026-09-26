@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import tempfile
 
 from .svp import _is_real_number
 
-__all__ = ["batch", "classify", "load"]
+__all__ = ["batch", "classify", "export", "load", "render"]
 
 _CLASSES = ("mud", "sand", "gravel", "rock")
 
@@ -468,3 +470,156 @@ def load(path) -> dict:
         raise ValueError("file bytes do not match the canonical batch output")
 
     return parsed
+
+
+def _resolved_export_path(path):
+    """Normalized absolute path with symlinks resolved, for non-existing files."""
+    return os.path.normcase(os.path.realpath(os.path.abspath(path)))
+
+
+def _is_same_file(output, path):
+    """Whether ``output`` and ``path`` name the same file.
+
+    Existing files are compared with ``os.path.samefile`` so soft and hard
+    links are recognized; when either side does not exist, the normalized
+    ``realpath`` strings are compared instead.
+    """
+    if os.path.exists(output) and os.path.exists(path):
+        return os.path.samefile(output, path)
+    return _resolved_export_path(output) == _resolved_export_path(path)
+
+
+def _atomic_write_bytes(output, data):
+    """Write ``data`` to ``output`` via a fsynced temp file and ``os.replace``.
+
+    The temporary file lives in ``output``'s directory. On any failure before
+    the replacement the temporary file is removed and an existing ``output``
+    is left untouched.
+    """
+    directory = os.path.dirname(os.path.abspath(output)) or "."
+    fd, tmp_path = tempfile.mkstemp(
+        dir=directory, prefix="." + os.path.basename(output) + ".", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, output)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def export(path, output) -> bytes:
+    """Re-encode a :func:`load`-loaded batch and atomically write it to disk.
+
+    Calls :func:`load` exactly once with ``path`` — before any other work
+    and no second time — so its validation, exceptions (propagated
+    unchanged), file handling and file invariance all apply here as well;
+    in particular a bad ``path`` value or file is reported before
+    ``output`` is inspected. The input file is not modified.
+
+    With ``D`` the dict returned by :func:`load`, the document is
+    re-encoded as ``B`` in ``D``'s original key order with the
+    :func:`batch` JSON spec: UTF-8 JSON with ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation, no BOM
+    and no trailing newline. Any JSON or UTF-8 encoding failure raises
+    ``ValueError``.
+
+    ``output`` is then validated: it must be a non-empty ``str`` (a
+    non-str raises ``TypeError`` and an empty ``str`` raises
+    ``ValueError``), in that order.
+
+    ``output`` must not name the same file as ``path``: when both sides
+    exist they are compared with ``os.path.samefile`` so soft and hard
+    links are recognized, and otherwise the normalized paths
+    ``os.path.normcase(os.path.realpath(os.path.abspath(path)))`` are
+    compared; an overlap raises ``ValueError``.
+
+    When there is no overlap, a temporary file is created in ``output``'s
+    directory, ``B`` is written to it in binary mode, ``flush()`` and
+    ``os.fsync()`` are called and the temporary file then atomically
+    replaces ``output`` via ``os.replace``. Any failure before the
+    replacement removes the temporary file and leaves an existing
+    ``output`` byte for byte unchanged; ``OSError`` is propagated
+    unchanged.
+
+    Returns the same ``bytes`` ``B`` that were written.
+    """
+    document = load(path)
+    data = _dump_batch_document(document)
+
+    if not isinstance(output, str):
+        raise TypeError("output must be a str")
+    if output == "":
+        raise ValueError("output must not be empty")
+
+    if _is_same_file(output, path):
+        raise ValueError(
+            f"output must not be the same file as an input: "
+            f"{output!r} and {path!r}"
+        )
+    _atomic_write_bytes(output, data)
+    return data
+
+
+def _format_rendered_value(value):
+    """Format one value for :func:`render`."""
+    if isinstance(value, float):
+        return format(0.0 if value == 0 else value, ".6f")
+    if isinstance(value, int):
+        return str(value)
+    return value
+
+
+def render(path) -> str:
+    """Render a :func:`load`-loaded batch as summary lines.
+
+    Calls :func:`load` exactly once with ``path`` — and no other loading
+    or combining function — so its validation, exceptions (propagated
+    unchanged), file handling and canonical-byte checks all apply here as
+    well: a non-``str`` path raises ``TypeError``, an empty ``str`` raises
+    ``ValueError``, a missing file raises ``FileNotFoundError``, a
+    directory raises ``IsADirectoryError``, any other ``OSError`` is
+    propagated unchanged and any parse, structure or canonical-byte
+    violation raises ``ValueError``. The file is not modified.
+
+    With ``D`` the dict returned by :func:`load`, returns lines joined by
+    ``"\\n"`` with no trailing newline::
+
+        SUBSTRATE=<count>,<unknown>,<quality>
+        RESULT[0]=<class>,<confidence>
+        ...
+
+    The SUBSTRATE values are ``D["summary"]["count"]``,
+    ``D["summary"]["unknown"]`` and ``D["summary"]["quality"]``; one
+    ``RESULT[i]`` line per item of ``D["results"]`` then follows in their
+    original order, with ``i`` rendered in decimal. All values are copied
+    directly from ``D`` with no recomputation or re-sorting: ints are
+    formatted in decimal, strings are copied as-is and floats use
+    ``format(v, ".6f")`` (negative zero rendered as ``"0.000000"``).
+    """
+    document = load(path)
+    summary = document["summary"]
+    lines = [
+        "SUBSTRATE="
+        + ",".join(
+            (
+                _format_rendered_value(summary["count"]),
+                _format_rendered_value(summary["unknown"]),
+                _format_rendered_value(summary["quality"]),
+            )
+        )
+    ]
+    results = document["results"]
+    for i in range(len(results)):
+        name, confidence = results[i]
+        lines.append(
+            f"RESULT[{i}]="
+            + ",".join((name, _format_rendered_value(confidence)))
+        )
+    return "\n".join(lines)
