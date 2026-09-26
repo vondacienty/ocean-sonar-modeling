@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import tempfile
 
 from .svp import _is_real_number
 
@@ -59,6 +61,7 @@ __all__ = [
     "audit_comparisons",
     "serialize_audit",
     "load_audit",
+    "export_audit",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -3951,6 +3954,100 @@ def load_audit(path) -> dict:
         )
 
     return result
+
+
+def _resolved_path(path):
+    """Normalized absolute path with symlinks resolved, for non-existing files."""
+    return os.path.normcase(os.path.realpath(os.path.abspath(path)))
+
+
+def _reject_output_overlap(output, paths):
+    """Reject ``output`` naming the same file as any of ``paths``.
+
+    Existing files are compared with ``os.path.samefile`` so soft and hard
+    links are recognized; when either side does not exist, the normalized
+    ``realpath`` strings are compared instead.
+    """
+    output_exists = os.path.exists(output)
+    output_resolved = _resolved_path(output)
+    for path in paths:
+        if output_exists and os.path.exists(path):
+            same = os.path.samefile(output, path)
+        else:
+            same = output_resolved == _resolved_path(path)
+        if same:
+            raise ValueError(
+                f"output must not be the same file as an input: "
+                f"{output!r} and {path!r}"
+            )
+
+
+def _atomic_write_bytes(output, data):
+    """Write ``data`` to ``output`` via a fsynced temp file and ``os.replace``.
+
+    The temporary file lives in ``output``'s directory. On any failure before
+    the replacement the temporary file is removed and an existing ``output``
+    is left untouched.
+    """
+    directory = os.path.dirname(os.path.abspath(output)) or "."
+    fd, tmp_path = tempfile.mkstemp(
+        dir=directory, prefix="." + os.path.basename(output) + ".", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, output)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def export_audit(paths, output) -> bytes:
+    """Serialize an audit of comparison files and atomically write it.
+
+    Calls :func:`serialize_audit` exactly once with ``paths`` — before
+    any other work and no second time — so its validation, first-error
+    order, exceptions (propagated unchanged) and ``"paths[i]: "`` index
+    prefixes all apply here as well; in particular a bad ``paths`` value
+    is reported before ``output`` is inspected. Inputs and the loaded
+    files are not modified.
+
+    With ``B`` the bytes returned by :func:`serialize_audit`, ``output``
+    is then validated: it must be a non-empty ``str`` (a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``), in that
+    order.
+
+    ``output`` must not name the same file as any of ``paths``: when
+    both sides exist they are compared with ``os.path.samefile`` so soft
+    and hard links are recognized, and otherwise the normalized paths
+    (``abspath`` → ``realpath`` → ``normcase``) are compared; a match
+    raises ``ValueError``.
+
+    When there is no overlap, a temporary file is created in
+    ``output``'s directory, ``B`` is written to it in binary mode,
+    ``flush()`` and ``os.fsync()`` are applied and the temporary file is
+    atomically moved over ``output`` with ``os.replace``. Any failure
+    before the replacement removes the temporary file, leaves an
+    existing ``output`` byte-for-byte unchanged and propagates the
+    ``OSError`` unchanged.
+
+    Returns the same bytes ``B`` that were written.
+    """
+    data = serialize_audit(paths)
+
+    if not isinstance(output, str):
+        raise TypeError("output must be a str")
+    if output == "":
+        raise ValueError("output must not be empty")
+
+    _reject_output_overlap(output, paths)
+    _atomic_write_bytes(output, data)
+    return data
 
 
 def render_trends(paths) -> str:

@@ -11,6 +11,7 @@ import tempfile
 from . import __version__
 from .crosspoint import (
     audit_comparisons,
+    export_audit,
     export_trends,
     render_comparison,
     render_trends,
@@ -105,6 +106,11 @@ def main(argv: list[str] | None = None) -> int:
     audit_comparisons_parser.add_argument("audit_first", metavar="FILE", help="first comparison JSON file")
     audit_comparisons_parser.add_argument("audit_second", metavar="FILE", help="second comparison JSON file")
     audit_comparisons_parser.add_argument("audit_rest", nargs="*", metavar="FILE", help="additional comparison JSON files")
+    export_audit_parser = sub.add_parser("export-audit", help="audit comparison JSON files and atomically write one JSON file")
+    export_audit_parser.add_argument("export_audit_first", metavar="FILE", help="first comparison JSON file")
+    export_audit_parser.add_argument("export_audit_second", metavar="FILE", help="second comparison JSON file")
+    export_audit_parser.add_argument("export_audit_rest", nargs="*", metavar="FILE", help="additional comparison JSON files")
+    export_audit_parser.add_argument("--output", required=True, help="output file atomically overwritten with the audit JSON")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -171,6 +177,19 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
         sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "export-audit":
+        paths = [
+            args.export_audit_first,
+            args.export_audit_second,
+            *args.export_audit_rest,
+        ]
+        try:
+            export_audit(paths, args.output)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
         return 0
 
     parser.print_help()
