@@ -29,6 +29,7 @@ __all__ = [
     "render",
     "render_aggregate",
     "serialize_aggregate_report",
+    "serialize_aggregate_report_trend",
 ]
 
 _CLASSES = ("mud", "sand", "gravel", "rock")
@@ -1554,6 +1555,75 @@ def aggregate_report_trend(paths) -> dict:
         "worst": worst,
         "quality": "pass" if regressed == 0 else "fail",
     }
+
+
+def serialize_aggregate_report_trend(paths) -> bytes:
+    """Serialize an :func:`aggregate_report_trend` result as UTF-8 JSON bytes.
+
+    Calls :func:`aggregate_report_trend` exactly once with ``paths`` —
+    without pre-reading or reordering them and with no other combining
+    function — so its validation, first-error order (the ``paths``
+    container, its length of at least two, then each item's type and
+    emptiness), ``TypeError``/``ValueError`` distinction,
+    ``"paths[i]: "`` index prefixes, loading exceptions (propagated
+    unchanged) and file non-modification contract all apply here as
+    well. Inputs and the loaded files are not modified.
+
+    With ``T`` the dict returned by :func:`aggregate_report_trend`, the
+    encoded object is ``T`` itself with keys exactly in the order
+    ``count, changes, regressed, unknown_delta, unknown_ratio_delta,
+    worst, quality``: the first four values are the ints
+    ``T["count"]``, ``T["changes"]``, ``T["regressed"]`` and
+    ``T["unknown_delta"]``, ``worst`` is ``T["worst"]`` — the four-item
+    tuple ``(i, du, dr, quality)`` — encoded in that same order as the
+    JSON array ``[i, du, dr, quality]``, and the top-level ``quality``
+    is ``T["quality"]`` copied as-is. Nothing is recomputed, sorted or
+    added and no key is dropped.
+
+    The object is encoded as UTF-8 JSON with ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation, no
+    BOM and no trailing newline. The two floats
+    (``T["unknown_ratio_delta"]`` and the third item of ``T["worst"]``)
+    are rounded only at write time with ``round(float(v), 6)`` and
+    negative zero is normalized to ``0.0``; ints are written in decimal
+    and strings are copied as-is. Any JSON or UTF-8 encoding failure
+    raises ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    result = aggregate_report_trend(paths)
+    worst = result["worst"]
+
+    def rounded_float(value):
+        value = round(float(value), 6)
+        return 0.0 if value == 0 else value
+
+    document = {
+        "count": int(result["count"]),
+        "changes": int(result["changes"]),
+        "regressed": int(result["regressed"]),
+        "unknown_delta": int(result["unknown_delta"]),
+        "unknown_ratio_delta": rounded_float(result["unknown_ratio_delta"]),
+        "worst": [
+            int(worst[0]),
+            int(worst[1]),
+            rounded_float(worst[2]),
+            worst[3],
+        ],
+        "quality": result["quality"],
+    }
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"aggregate report trend: could not be serialized to JSON: {exc}"
+        ) from exc
 
 
 def export_aggregate(path, output) -> bytes:

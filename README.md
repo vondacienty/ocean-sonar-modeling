@@ -404,9 +404,11 @@ ocean-sonar-modeling render-aggregate aggregate.json
 底质分类接口位于 `ocean_sonar.substrate`，该模块导出：
 `classify`、`batch`、`load`、`aggregate`、`dump_aggregate`、
 `load_aggregate`、`export`、`render`、`export_aggregate`、
-`render_aggregate`、`serialize_aggregate_report`。其中 `export`、
-`render`、`export_aggregate`、`render_aggregate`、
-`serialize_aggregate_report` 的契约如下。
+`render_aggregate`、`serialize_aggregate_report`、
+`aggregate_report_trend`、`serialize_aggregate_report_trend`。其中
+`export`、`render`、`export_aggregate`、`render_aggregate`、
+`serialize_aggregate_report`、`serialize_aggregate_report_trend` 的
+契约如下。
 
 ### `substrate.export(path, output) -> bytes`
 
@@ -585,6 +587,30 @@ quality`：
 JSON，`ensure_ascii=False`、`separators=(",", ":")`、
 `allow_nan=False`，无缩进、无 BOM、无尾换行；任何 JSON 或 UTF-8 编
 码失败抛 `ValueError`。返回 `bytes`。
+
+### `substrate.serialize_aggregate_report_trend(paths) -> bytes`
+
+把沿同一组报告快照比较得到的趋势结果编码为 JSON 字节串。
+
+执行时**仅调用一次** `aggregate_report_trend(paths)` 得到 `T`，不预
+读或重排路径、也不调用任何其他汇总函数；因此其全部校验顺序（
+`paths` 容器、至少 2 项、逐项先类型后非空）、`TypeError`/
+`ValueError` 区分、`paths[i]: ` 下标前缀、加载异常（原样向上传播）
+与文件不变性在此同样适用；输入与任何文件均不被修改。
+
+编码对象即 `T` 本身，顶层键序严格为
+`count, changes, regressed, unknown_delta, unknown_ratio_delta,
+worst, quality`：前四项为取自 `T` 的 `int`；`worst` 为 `T["worst"]`
+的四元 tuple `(i, du, dr, quality)` 按原序编码的 JSON 数组
+`[i, du, dr, quality]`；末项 `quality` 字符串原样。不重算、不排
+序、不增删键。
+
+编码为 UTF-8 JSON，`ensure_ascii=False`、`separators=(",", ":")`、
+`allow_nan=False`，无缩进、无 BOM、无尾换行；两个浮点（
+`unknown_ratio_delta` 与 `worst` 的第三项）仅在写出时取
+`round(float(v), 6)` 并将负零归一化为 `0.0`，整数按十进制写出。任
+何 JSON 或 UTF-8 编码失败统一抛 `ValueError`。输入与文件均不被修
+改，返回最终 `bytes`。
 
 ### 通用约定
 
