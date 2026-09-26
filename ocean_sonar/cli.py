@@ -24,9 +24,11 @@ from .crosspoint import (
 )
 from .report import rank_files
 from .svp import batch as _svp_batch
+from .tide import batch as _tide_batch
 
 
 _SVP_BATCH_KEYS = ("z", "c", "rays", "z0", "limit")
+_TIDE_BATCH_KEYS = ("times", "depths", "tide_times", "levels", "datum", "limit")
 
 
 def _reject_request_constant(value):
@@ -74,6 +76,43 @@ def _svp_batch_text(path):
         if required not in request:
             raise ValueError(f"request must contain {required!r}")
     return _svp_batch(**request).decode("utf-8")
+
+
+def _tide_batch_text(path):
+    """Read a ``tide-batch`` request file and run :func:`tide.batch` once.
+
+    The file must contain one JSON object whose keys follow the
+    ``batch(times, depths, tide_times, levels, datum=0.0, limit=1.0)``
+    signature order with no extra keys; any invalid content raises
+    ``ValueError``. Returns the UTF-8 decoded text of the ``batch``
+    result bytes.
+    """
+    with open(path, "rb") as handle:
+        data = handle.read()
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"request file is not valid UTF-8: {exc}") from exc
+    try:
+        request = json.loads(
+            text,
+            parse_constant=_reject_request_constant,
+            object_pairs_hook=_reject_request_duplicate_keys,
+        )
+    except ValueError as exc:
+        raise ValueError(f"request file is not valid JSON: {exc}") from exc
+    if not isinstance(request, dict):
+        raise ValueError("request must be a JSON object")
+    keys = list(request)
+    if any(key not in _TIDE_BATCH_KEYS for key in keys):
+        raise ValueError("request must not contain extra keys")
+    positions = [_TIDE_BATCH_KEYS.index(key) for key in keys]
+    if positions != sorted(positions):
+        raise ValueError("request keys must follow the batch signature order")
+    for required in ("times", "depths", "tide_times", "levels"):
+        if required not in request:
+            raise ValueError(f"request must contain {required!r}")
+    return _tide_batch(**request).decode("utf-8")
 
 
 def _resolved_path(path):
@@ -183,6 +222,8 @@ def main(argv: list[str] | None = None) -> int:
     render_audit_report_trend_parser.add_argument("trend", metavar="TREND", help="audit report trend JSON file")
     svp_batch_parser = sub.add_parser("svp-batch", help="trace a batch of SVP rays from a request JSON file and print the result JSON")
     svp_batch_parser.add_argument("request", metavar="REQUEST", help="batch request JSON file")
+    tide_batch_parser = sub.add_parser("tide-batch", help="reduce a batch of soundings from a request JSON file and print the result JSON")
+    tide_batch_parser.add_argument("request", metavar="REQUEST", help="batch request JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -311,6 +352,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "svp-batch":
         try:
             text = _svp_batch_text(args.request)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "tide-batch":
+        try:
+            text = _tide_batch_text(args.request)
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
