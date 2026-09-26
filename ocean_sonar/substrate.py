@@ -15,7 +15,7 @@ import tempfile
 
 from .svp import _is_real_number
 
-__all__ = ["batch", "classify", "export", "load", "render"]
+__all__ = ["aggregate", "batch", "classify", "export", "load", "render"]
 
 _CLASSES = ("mud", "sand", "gravel", "rock")
 
@@ -470,6 +470,91 @@ def load(path) -> dict:
         raise ValueError("file bytes do not match the canonical batch output")
 
     return parsed
+
+
+def aggregate(paths) -> dict:
+    """Aggregate several :func:`load`-loaded substrate batches into one report.
+
+    ``paths`` must be a list/tuple of at least two non-empty ``str``
+    paths. Validation order: the ``paths`` container, its length, then
+    each item in order; checking stops at the first error. Type
+    mismatches raise ``TypeError``, all other constraint errors raise
+    ``ValueError``. Item errors are prefixed with ``"paths[i]: "``.
+
+    After validation, :func:`load` is called exactly once per path, in
+    input order; its exceptions are propagated unchanged. Neither
+    ``paths`` nor any file is modified.
+
+    Returns a dict with keys exactly in the order ``batches, summary``.
+    ``batches`` is a tuple of the dicts returned by :func:`load`, in
+    input order. ``summary`` has keys exactly in the order
+    ``batch_count, result_count, unknown, counts, unknown_ratio,
+    worst_batch_index, quality``:
+
+    - ``batch_count``: the number of batches (int).
+    - ``result_count``: the total number of results across all batches
+      (int).
+    - ``unknown``: the total number of ``unknown`` results (int).
+    - ``counts``: a dict mapping ``unknown``, ``mud``, ``sand``,
+      ``gravel``, ``rock`` (in that key order) to the total int count
+      of each class across all batches.
+    - ``unknown_ratio``: ``round(float(unknown / result_count), 6)``
+      as a float, with negative zero normalized to ``0.0``.
+    - ``worst_batch_index``: the index (int) of the batch maximizing
+      ``(batch_unknown / batch_result_count, batch_unknown, -index)``
+      computed from unrounded values, so ties in ratio and unknown
+      count resolve to the earliest batch.
+    - ``quality``: ``"pass"`` when every batch's ``summary.quality``
+      is ``"pass"``, ``"fail"`` otherwise.
+    """
+    if not isinstance(paths, (list, tuple)):
+        raise TypeError("paths must be a list or tuple")
+    if len(paths) < 2:
+        raise ValueError("paths must have at least 2 items")
+
+    for i in range(len(paths)):
+        prefix = f"paths[{i}]: "
+        path = paths[i]
+        if not isinstance(path, str):
+            raise TypeError(prefix + "must be a str")
+        if path == "":
+            raise ValueError(prefix + "must not be empty")
+
+    batches = tuple(load(path) for path in paths)
+
+    counts = {"unknown": 0, "mud": 0, "sand": 0, "gravel": 0, "rock": 0}
+    result_count = 0
+    worst_key = None
+    worst_batch_index = 0
+    quality = "pass"
+    for i, document in enumerate(batches):
+        batch_unknown = 0
+        batch_result_count = 0
+        for item in document["results"]:
+            name = item[0]
+            counts[name] += 1
+            batch_result_count += 1
+            if name == "unknown":
+                batch_unknown += 1
+        result_count += batch_result_count
+        key = (batch_unknown / batch_result_count, batch_unknown, -i)
+        if worst_key is None or key > worst_key:
+            worst_key = key
+            worst_batch_index = i
+        if document["summary"]["quality"] != "pass":
+            quality = "fail"
+
+    unknown = counts["unknown"]
+    summary = {
+        "batch_count": int(len(batches)),
+        "result_count": int(result_count),
+        "unknown": int(unknown),
+        "counts": counts,
+        "unknown_ratio": _round6(unknown / result_count),
+        "worst_batch_index": int(worst_batch_index),
+        "quality": quality,
+    }
+    return {"batches": batches, "summary": summary}
 
 
 def _resolved_export_path(path):
