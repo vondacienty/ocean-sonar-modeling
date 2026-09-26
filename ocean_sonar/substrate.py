@@ -8,11 +8,12 @@ and roughness.
 
 from __future__ import annotations
 
+import json
 import math
 
 from .svp import _is_real_number
 
-__all__ = ["classify"]
+__all__ = ["batch", "classify"]
 
 _CLASSES = ("mud", "sand", "gravel", "rock")
 
@@ -159,3 +160,121 @@ def classify(layers, slope_limit=5.0, roughness_limit=1.0):
             }
         )
     return tuple(result)
+
+
+def _check_grid_value(prefix, name, value):
+    if not _is_real_number(value):
+        raise TypeError(prefix + f"{name} must be a non-bool int or float")
+    if not math.isfinite(value):
+        raise ValueError(prefix + f"{name} must be finite")
+    if not value >= 0:
+        raise ValueError(prefix + f"{name} must be >= 0")
+
+
+def batch(analysis, intensities) -> bytes:
+    """Classify analysis grids against acoustic intensities as JSON bytes.
+
+    ``analysis`` is a non-empty list/tuple of two-element list/tuples
+    ``(p, q)``: when ``p`` is ``None``, ``q`` is ``None`` or a finite
+    non-bool int/float ``>= 0``; otherwise ``p`` and ``q`` are both
+    finite non-bool ints/floats ``>= 0``. ``intensities`` is a
+    list/tuple of the same length whose items are ``None`` or finite
+    non-bool ints/floats in ``[0, 1]``.
+
+    Validation order: the ``analysis`` container, non-emptiness, then
+    per grid (container, 2 elements, ``p``, ``q``), then the
+    ``intensities`` container, its length and finally each item in
+    order; checking stops at the first error. Type mismatches
+    (including bool) raise ``TypeError``, all other constraint errors
+    raise ``ValueError``. Grid errors are prefixed with
+    ``"analysis[i]: "`` and item errors with ``"intensities[i]: "``.
+
+    A grid whose ``p`` is ``None`` or whose intensity is ``None``
+    yields ``["unknown", 0.0]``. Otherwise, with
+    ``g = p > 5 or q > 1`` and ``a = intensity >= 0.5``, the bit pair
+    ``(g, a)`` selects the class: ``00`` mud, ``01`` sand, ``10``
+    gravel, ``11`` rock, with confidence ``1.0``.
+
+    The returned document has top-level keys exactly in the order
+    ``results, summary``. ``results`` is an array in input order of
+    ``[class, confidence]`` arrays. ``summary`` has keys exactly in the
+    order ``count, unknown, quality``: ``count`` and ``unknown`` are
+    ints and ``quality`` is ``"pass"`` only when ``unknown == 0``, and
+    ``"fail"`` otherwise.
+
+    The object is encoded as UTF-8 JSON with ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation, no
+    BOM and no trailing newline, as in ``terrain.batch``. Any JSON or
+    UTF-8 encoding failure raises ``ValueError``. Inputs are not
+    modified.
+
+    Returns the JSON document as ``bytes``.
+    """
+    if not isinstance(analysis, (list, tuple)):
+        raise TypeError("analysis must be a list or tuple")
+    if len(analysis) == 0:
+        raise ValueError("analysis must be non-empty")
+
+    for i in range(len(analysis)):
+        prefix = f"analysis[{i}]: "
+        cell = analysis[i]
+        if not isinstance(cell, (list, tuple)):
+            raise TypeError(prefix + "must be a list or tuple")
+        if len(cell) != 2:
+            raise ValueError(prefix + "must have 2 elements")
+        p, q = cell
+        if p is None:
+            if q is not None:
+                _check_grid_value(prefix, "q", q)
+        else:
+            _check_grid_value(prefix, "p", p)
+            _check_grid_value(prefix, "q", q)
+
+    if not isinstance(intensities, (list, tuple)):
+        raise TypeError("intensities must be a list or tuple")
+    if len(intensities) != len(analysis):
+        raise ValueError("analysis and intensities must have equal length")
+
+    for i in range(len(intensities)):
+        prefix = f"intensities[{i}]: "
+        intensity = intensities[i]
+        if intensity is None:
+            continue
+        if not _is_real_number(intensity):
+            raise TypeError(prefix + "must be a non-bool int or float")
+        if not math.isfinite(intensity):
+            raise ValueError(prefix + "must be finite")
+        if not 0 <= intensity <= 1:
+            raise ValueError(prefix + "must be in [0, 1]")
+
+    results = []
+    unknown = 0
+    for i in range(len(analysis)):
+        p, q = analysis[i]
+        intensity = intensities[i]
+        if p is None or intensity is None:
+            results.append(["unknown", 0.0])
+            unknown += 1
+        else:
+            g = p > 5 or q > 1
+            a = intensity >= 0.5
+            results.append([_CLASSES[2 * g + a], 1.0])
+
+    document = {
+        "results": results,
+        "summary": {
+            "count": int(len(analysis)),
+            "unknown": int(unknown),
+            "quality": "pass" if unknown == 0 else "fail",
+        },
+    }
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(f"batch: could not be serialized to JSON: {exc}") from exc

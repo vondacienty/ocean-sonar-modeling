@@ -27,6 +27,7 @@ from .grid import batch as _grid_batch
 from .outlier import batch as _outlier_batch
 from .report import rank_files
 from .strip import batch as _strip_batch
+from .substrate import batch as _substrate_batch
 from .svp import batch as _svp_batch
 from .terrain import batch as _terrain_batch
 from .tide import batch as _tide_batch
@@ -39,6 +40,7 @@ _OUTLIER_BATCH_KEYS = ("depths", "threshold", "max_outlier_ratio")
 _STRIP_BATCH_KEYS = ("strips", "tolerance", "max_adjustment")
 _GRID_BATCH_KEYS = ("points", "bounds", "resolutions", "min_coverage")
 _TERRAIN_BATCH_KEYS = ("r", "nx", "ny", "cells", "slope_limit", "roughness_limit")
+_SUBSTRATE_BATCH_KEYS = ("analysis", "intensities")
 
 
 def _reject_request_constant(value):
@@ -306,6 +308,42 @@ def _terrain_batch_text(path):
     return _terrain_batch(**request).decode("utf-8")
 
 
+def _substrate_batch_text(path):
+    """Read a ``substrate-batch`` request file and run :func:`substrate.batch` once.
+
+    The file must contain one JSON object whose keys follow the
+    ``batch(analysis, intensities)`` signature order with no extra
+    keys; any invalid content raises ``ValueError``. Returns the UTF-8
+    decoded text of the ``batch`` result bytes.
+    """
+    with open(path, "rb") as handle:
+        data = handle.read()
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"request file is not valid UTF-8: {exc}") from exc
+    try:
+        request = json.loads(
+            text,
+            parse_constant=_reject_request_constant,
+            object_pairs_hook=_reject_request_duplicate_keys,
+        )
+    except ValueError as exc:
+        raise ValueError(f"request file is not valid JSON: {exc}") from exc
+    if not isinstance(request, dict):
+        raise ValueError("request must be a JSON object")
+    keys = list(request)
+    if any(key not in _SUBSTRATE_BATCH_KEYS for key in keys):
+        raise ValueError("request must not contain extra keys")
+    positions = [_SUBSTRATE_BATCH_KEYS.index(key) for key in keys]
+    if positions != sorted(positions):
+        raise ValueError("request keys must follow the batch signature order")
+    for required in ("analysis", "intensities"):
+        if required not in request:
+            raise ValueError(f"request must contain {required!r}")
+    return _substrate_batch(**request).decode("utf-8")
+
+
 def _resolved_path(path):
     """Normalized absolute path with symlinks resolved, for non-existing files."""
     return os.path.normcase(os.path.realpath(os.path.abspath(path)))
@@ -425,6 +463,8 @@ def main(argv: list[str] | None = None) -> int:
     grid_batch_parser.add_argument("request", metavar="REQUEST", help="batch request JSON file")
     terrain_batch_parser = sub.add_parser("terrain-batch", help="analyze the slope and roughness of a gridded surface from a request JSON file and print the result JSON")
     terrain_batch_parser.add_argument("request", metavar="REQUEST", help="batch request JSON file")
+    substrate_batch_parser = sub.add_parser("substrate-batch", help="classify seabed substrate from analysis grids and intensities from a request JSON file and print the result JSON")
+    substrate_batch_parser.add_argument("request", metavar="REQUEST", help="batch request JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -607,6 +647,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "terrain-batch":
         try:
             text = _terrain_batch_text(args.request)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "substrate-batch":
+        try:
+            text = _substrate_batch_text(args.request)
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
