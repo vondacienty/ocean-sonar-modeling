@@ -89,6 +89,21 @@ ocean-sonar-modeling compare-reports report_a.json report_b.json [report_c.json 
 ocean-sonar-modeling export-comparison report_a.json report_b.json [report_c.json ...] --output comparison.json
 ```
 
+### `audit-comparisons FILE FILE [FILE ...]`
+
+把多份 `serialize_comparison` 生成的比较结果 JSON 汇总审计为一份紧凑
+JSON。路径按命令行顺序传入（至少两个），等价于**仅调用一次**
+`ocean_sonar.crosspoint.audit_comparisons(paths)`：成功时 stdout 以
+`json.dumps(result, ensure_ascii=False, separators=(',', ':'),
+allow_nan=False)` 输出其返回的 `dict` 并加一个换行，stderr 为空，退出码
+0；文件不存在、内容损坏等错误时 stdout 为空，stderr 严格输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；路径不足两个属于参数
+解析错误，退出码 2 且不调用业务函数。输入比较文件不会被修改。
+
+```bash
+ocean-sonar-modeling audit-comparisons comparison_a.json comparison_b.json [comparison_c.json ...]
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -106,6 +121,7 @@ ocean-sonar-modeling export-comparison report_a.json report_b.json [report_c.jso
 `load_trends`、`render_trends`、`export_trends`、
 `load_trend_report`、
 `serialize_comparison`、`render_comparison`、`load_comparison`、
+`audit_comparisons`、
 `serialize_pair_gate_score_summary`、`render_pair_gate_score_summary`、
 `load_pair_gate_score_summary`。
 
@@ -650,3 +666,32 @@ CHANGE[<index>]=<degraded_delta>,<coverage_delta>,<score_delta>,<quality>
 返回保持上述键序的 `dict`：仅 `changes` 数组还原为 `tuple`
 （其 `worst` 项即命中的那一元组项），其余值原样返回。文件
 不被修改。
+
+### `audit_comparisons(paths) -> dict`
+
+汇总审计多份 `serialize_comparison` 生成的比较结果 JSON 文件。
+
+`paths` 的输入契约完全沿用 `compare_reports`：必须为至少含 2 项的
+list/tuple；各项按下标顺序校验为非空 `str`。校验顺序（先报错者胜
+出）：`paths` 容器、项数、再逐项（类型、非空）。容器非 list/tuple
+或某项非 `str` 抛 `TypeError`；少于 2 项或空串抛 `ValueError`。项错
+误前缀为 `paths[i]: `。
+
+随后按输入顺序对每个 path **仅调用一次** `load_comparison`；其异常
+原样传播。输入与文件均不被修改。
+
+各份比较结果按文件顺序、并在每份文件内按 `changes` 原序展开；不排
+序、不去重、不增补。记展开总项数为 `K`、其中 `quality` 为 `"fail"`
+的项数为 `E`，最差项取使元组
+`(score_delta, coverage_delta, -degraded_delta, 文件下标, index)`
+字典序最小的项（各值均为 `load_comparison` 读回的原值，不重算、不
+重新舍入）。
+
+返回键序为 `files, changes, failed, worst, quality` 的 `dict`：
+`files` 为文件数，`changes` 为 `K`，`failed` 为 `E`，三者均为
+`int`；`worst` 为六元 tuple
+`(文件下标, index, degraded_delta, coverage_delta, score_delta,
+quality)`，其中文件下标、`index`、`degraded_delta` 为 `int`，
+`coverage_delta`、`score_delta` 为 `float`，`quality` 为对应项原样
+的 `"pass"`/`"fail"` 字符串。`quality` 仅在 `E = 0` 时为 `"pass"`，
+否则为 `"fail"`。

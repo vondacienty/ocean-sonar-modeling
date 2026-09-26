@@ -56,6 +56,7 @@ __all__ = [
     "serialize_comparison",
     "render_comparison",
     "load_comparison",
+    "audit_comparisons",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -3593,6 +3594,92 @@ def load_comparison(path) -> dict:
         )
 
     return result
+
+
+def audit_comparisons(paths) -> dict:
+    """Aggregate several :func:`serialize_comparison` JSON files.
+
+    ``paths`` follows the exact input contract of :func:`compare_reports`:
+    a list/tuple of at least two items; each item, checked in index order,
+    must be a non-empty ``str``. Validation order (first error wins): the
+    ``paths`` container, its length, then each item in index order (type,
+    then emptiness). A non-list/tuple container or a non-str item raises
+    ``TypeError``; fewer than two items or an empty ``str`` raises
+    ``ValueError``. Item errors are prefixed with ``"paths[i]: "``.
+
+    :func:`load_comparison` is then called exactly once per path, in input
+    order; any exception it raises is propagated unchanged. Inputs and the
+    loaded files are not modified.
+
+    The loaded comparisons are expanded in file order and, within each
+    file, in the original ``changes`` order; comparisons are not sorted,
+    deduplicated or augmented. With ``K`` the total number of change items
+    and ``E`` the number whose ``quality`` is ``"fail"``, the worst item
+    minimizes the tuple
+    ``(score_delta, coverage_delta, -degraded_delta, file index, index)``
+    lexicographically over the values as loaded.
+
+    Returns a dict with keys in the order
+    ``files, changes, failed, worst, quality``; ``files`` is the number of
+    files, ``changes`` is ``K`` and ``failed`` is ``E``, all ints.
+    ``worst`` is the six-item tuple
+    ``(file index, index, degraded_delta, coverage_delta, score_delta,
+    quality)`` whose first three items are ints, the next two floats and
+    the last the item's ``"pass"``/``"fail"`` string, all copied as
+    loaded. ``quality`` is ``"pass"`` only when ``E`` is ``0`` and
+    ``"fail"`` otherwise.
+    """
+    if not isinstance(paths, (list, tuple)):
+        raise TypeError("paths must be a list or tuple")
+    if len(paths) < 2:
+        raise ValueError("paths must contain at least 2 items")
+    for i in range(len(paths)):
+        prefix = f"paths[{i}]: "
+        if not isinstance(paths[i], str):
+            raise TypeError(prefix + "must be a str")
+        if paths[i] == "":
+            raise ValueError(prefix + "must not be empty")
+
+    failed = 0
+    changes = 0
+    worst_position = None
+    worst_item = None
+    for file_index in range(len(paths)):
+        comparison = load_comparison(paths[file_index])
+        for change in comparison["changes"]:
+            index = change["index"]
+            degraded_delta = change["degraded_delta"]
+            coverage_delta = change["coverage_delta"]
+            score_delta = change["score_delta"]
+            quality = change["quality"]
+            changes += 1
+            if quality == "fail":
+                failed += 1
+            position = (
+                score_delta,
+                coverage_delta,
+                -degraded_delta,
+                file_index,
+                index,
+            )
+            if worst_position is None or position < worst_position:
+                worst_position = position
+                worst_item = (
+                    int(file_index),
+                    int(index),
+                    int(degraded_delta),
+                    coverage_delta,
+                    score_delta,
+                    quality,
+                )
+
+    return {
+        "files": int(len(paths)),
+        "changes": int(changes),
+        "failed": int(failed),
+        "worst": worst_item,
+        "quality": "pass" if failed == 0 else "fail",
+    }
 
 
 def render_trends(paths) -> str:

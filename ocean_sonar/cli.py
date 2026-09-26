@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import tempfile
 
 from . import __version__
 from .crosspoint import (
+    audit_comparisons,
     export_trends,
     render_comparison,
     render_trends,
@@ -99,6 +101,10 @@ def main(argv: list[str] | None = None) -> int:
     export_comparison_parser.add_argument("compare_second", metavar="REPORT", help="second trend report JSON file")
     export_comparison_parser.add_argument("compare_rest", nargs="*", metavar="REPORT", help="additional trend report JSON files")
     export_comparison_parser.add_argument("--output", required=True, help="output file atomically overwritten with the comparison JSON")
+    audit_comparisons_parser = sub.add_parser("audit-comparisons", help="audit comparison JSON files and print one compact JSON summary")
+    audit_comparisons_parser.add_argument("audit_first", metavar="FILE", help="first comparison JSON file")
+    audit_comparisons_parser.add_argument("audit_second", metavar="FILE", help="second comparison JSON file")
+    audit_comparisons_parser.add_argument("audit_rest", nargs="*", metavar="FILE", help="additional comparison JSON files")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -149,6 +155,22 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
+        return 0
+
+    if args.command == "audit-comparisons":
+        paths = [args.audit_first, args.audit_second, *args.audit_rest]
+        try:
+            result = audit_comparisons(paths)
+            text = json.dumps(
+                result,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
         return 0
 
     parser.print_help()
