@@ -35,6 +35,8 @@ from .substrate import (
     render as render_substrate,
     render_aggregate as render_substrate_aggregate,
     render_aggregate_report_trend as render_substrate_trend,
+    serialize_aggregate_report,
+    serialize_aggregate_report_trend,
 )
 from .svp import batch as _svp_batch
 from .terrain import batch as _terrain_batch
@@ -409,6 +411,18 @@ def _export_comparison_file(paths, output):
     _atomic_write_bytes(output, data)
 
 
+def _export_substrate_report_file(path, output):
+    data = serialize_aggregate_report(path)
+    _reject_output_overlap(output, [path])
+    _atomic_write_bytes(output, data)
+
+
+def _build_substrate_report_trend_file(paths, output):
+    data = serialize_aggregate_report_trend(paths)
+    _reject_output_overlap(output, paths)
+    _atomic_write_bytes(output, data)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ocean-sonar-modeling", description="Ocean survey and seabed terrain modelling")
     sub = parser.add_subparsers(dest="command")
@@ -483,11 +497,19 @@ def main(argv: list[str] | None = None) -> int:
     export_aggregate_parser.add_argument("--output", required=True, help="output file atomically overwritten with the substrate aggregate JSON")
     render_aggregate_parser = sub.add_parser("render-aggregate", help="render one substrate aggregate JSON file as two summary lines")
     render_aggregate_parser.add_argument("input", metavar="INPUT", help="substrate aggregate JSON file")
+    export_substrate_report_parser = sub.add_parser("export-substrate-report", help="serialize one substrate aggregate JSON file into a report JSON")
+    export_substrate_report_parser.add_argument("input", metavar="AGGREGATE", help="substrate aggregate JSON file")
+    export_substrate_report_parser.add_argument("--output", required=True, help="output file atomically overwritten with the substrate aggregate report JSON")
     export_substrate_trend_parser = sub.add_parser("export-substrate-trend", help="load one substrate aggregate report trend JSON file and atomically write its canonical bytes")
     export_substrate_trend_parser.add_argument("trend", metavar="TREND", help="substrate aggregate report trend JSON file")
     export_substrate_trend_parser.add_argument("--output", required=True, help="output file atomically overwritten with the substrate aggregate report trend JSON")
     render_substrate_trend_parser = sub.add_parser("render-substrate-trend", help="render one substrate aggregate report trend JSON file as two summary lines")
     render_substrate_trend_parser.add_argument("trend", metavar="TREND", help="substrate aggregate report trend JSON file")
+    build_substrate_report_trend_parser = sub.add_parser("build-substrate-report-trend", help="serialize substrate aggregate report JSON files into one trend report JSON")
+    build_substrate_report_trend_parser.add_argument("report_first", metavar="REPORT", help="first substrate aggregate report JSON file")
+    build_substrate_report_trend_parser.add_argument("report_second", metavar="REPORT", help="second substrate aggregate report JSON file")
+    build_substrate_report_trend_parser.add_argument("report_rest", nargs="*", metavar="REPORT", help="additional substrate aggregate report JSON files")
+    build_substrate_report_trend_parser.add_argument("--output", required=True, help="output file atomically overwritten with the substrate aggregate report trend JSON")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -719,6 +741,14 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(text + "\n")
         return 0
 
+    if args.command == "export-substrate-report":
+        try:
+            _export_substrate_report_file(args.input, args.output)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        return 0
+
     if args.command == "export-substrate-trend":
         try:
             export_substrate_trend(args.trend, args.output)
@@ -734,6 +764,19 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
         sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "build-substrate-report-trend":
+        paths = [
+            args.report_first,
+            args.report_second,
+            *args.report_rest,
+        ]
+        try:
+            _build_substrate_report_trend_file(paths, args.output)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
         return 0
 
     parser.print_help()

@@ -373,6 +373,30 @@ ocean-sonar-modeling export-aggregate aggregate.json --output aggregate_copy.jso
 ocean-sonar-modeling render-aggregate aggregate.json
 ```
 
+### `export-substrate-report AGGREGATE --output OUTPUT`
+
+读取一份 `substrate.dump_aggregate` 生成的底质聚合 JSON 并序列化为底质聚合
+报告 JSON 原子写盘。等价于**仅调用一次**
+`ocean_sonar.substrate.serialize_aggregate_report(path)` 得到字节串 `B`（内部
+按原序读取与校验，不预读、不排序、不修改输入）：其读取校验、异常、报告顶层
+键序（`schema_version, source, summary, worst, quality`）与 JSON 字节规范
+（UTF-8、`ensure_ascii=False`、`separators=(",", ":")`、`allow_nan=False`、
+无 BOM、无尾换行，tuple 递归编码为数组）完全沿用被调函数且先于任何输出生效。
+成功时静默（stdout、stderr 均为空），退出码 0；`--output` 不得与 AGGREGATE
+指向同一文件（双方都存在时用 `os.path.samefile` 识别软/硬链接，否则比较
+`os.path.normcase(os.path.realpath(os.path.abspath(path)))` 规范化路径），重
+合抛 `ValueError`；非重合时在 OUTPUT 同目录建临时文件，二进制写入 `B` 并
+`flush()`、`os.fsync()` 后以 `os.replace` 原子替换，替换前发生失败会清除临
+时文件且既有 OUTPUT 逐字节不变，`OSError` 原样上抛；文件不存在、内容损坏
+等错误时 stdout 为空，stderr 严格输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；缺少 AGGREGATE、缺少
+`--output` 或参数多余属于参数解析错误，退出码 2 且不调用业务函数。输入文件
+不会被修改。
+
+```bash
+ocean-sonar-modeling export-substrate-report aggregate.json --output report.json
+```
+
 ### `export-substrate-trend TREND --output OUTPUT`
 
 读取一份 `substrate.serialize_aggregate_report_trend` 生成的底质聚合报告
@@ -412,6 +436,31 @@ stdout 输出其返回的两行文本（首行
 
 ```bash
 ocean-sonar-modeling render-substrate-trend trend.json
+```
+
+### `build-substrate-report-trend REPORT REPORT [REPORT ...] --output OUTPUT`
+
+把多份 `substrate.serialize_aggregate_report` 生成的底质聚合报告 JSON 按
+命令行原序构建为一份趋势报告 JSON 原子写盘。等价于**仅调用一次**
+`ocean_sonar.substrate.serialize_aggregate_report_trend(paths)` 得到字节串
+`B`（路径按命令行顺序传入，不预读、不排序、不修改输入）：其路径校验（至少
+两份、逐个非空字符串）、加载异常、趋势顶层键序（`count, changes, regressed,
+unknown_delta, unknown_ratio_delta, worst, quality`）与 JSON 字节规范
+（UTF-8、`ensure_ascii=False`、`separators=(",", ":")`、`allow_nan=False`、
+无 BOM、无尾换行，`worst` tuple 编码为四元数组）完全沿用被调函数且先于任何
+输出生效。成功时静默（stdout、stderr 均为空），退出码 0；`--output` 不得与
+任一 REPORT 指向同一文件（双方都存在时用 `os.path.samefile` 识别软/硬链接，
+否则比较 `os.path.normcase(os.path.realpath(os.path.abspath(path)))` 规范化
+路径），重合抛 `ValueError`；非重合时在 OUTPUT 同目录建临时文件，二进制写
+入 `B` 并 `flush()`、`os.fsync()` 后以 `os.replace` 原子替换，替换前发生失
+败会清除临时文件且既有 OUTPUT 逐字节不变，`OSError` 原样上抛；文件不存在、
+内容损坏等错误时 stdout 为空，stderr 严格输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；缺少 REPORT、REPORT 不足
+两份、缺少 `--output` 或参数多余属于参数解析错误，退出码 2 且不调用业务函
+数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling build-substrate-report-trend report_a.json report_b.json [report_c.json ...] --output trend.json
 ```
 
 ## Python 接口
