@@ -65,6 +65,7 @@ __all__ = [
     "render_audit",
     "serialize_audit_report",
     "load_audit_report",
+    "export_audit_report",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -4507,6 +4508,67 @@ def load_audit_report(path) -> dict:
         )
 
     return result
+
+
+def _reject_audit_report_output_overlap(output, audit_path):
+    """Reject ``output`` naming the same file as ``audit_path``.
+
+    Existing files are compared with ``os.path.samefile`` so soft and hard
+    links are recognized; when either side does not exist, the normalized
+    ``realpath`` strings are compared instead.
+    """
+    if os.path.exists(output) and os.path.exists(audit_path):
+        same = os.path.samefile(output, audit_path)
+    else:
+        same = _resolved_export_path(output) == _resolved_export_path(audit_path)
+    if same:
+        raise ValueError(
+            f"output must not be the same file as the audit: "
+            f"{output!r} and {audit_path!r}"
+        )
+
+
+def export_audit_report(audit_path, output) -> bytes:
+    """Serialize an audit report and atomically write it to disk.
+
+    Calls :func:`serialize_audit_report` exactly once with ``audit_path``
+    — before any other work and no second time — so its validation,
+    exceptions (propagated unchanged), file handling and file
+    invariance all apply here as well; in particular a bad
+    ``audit_path`` value or file is reported before ``output`` is
+    inspected. The audit file is not modified.
+
+    With ``B`` the ``bytes`` returned by :func:`serialize_audit_report`,
+    ``output`` is then validated: it must be a non-empty ``str`` (a
+    non-str raises ``TypeError`` and an empty ``str`` raises
+    ``ValueError``), in that order.
+
+    ``output`` must not name the same file as ``audit_path``: when both
+    sides exist they are compared with ``os.path.samefile`` so soft and
+    hard links are recognized, and otherwise the normalized paths
+    ``os.path.normcase(os.path.realpath(os.path.abspath(path)))`` are
+    compared; an overlap raises ``ValueError``.
+
+    When there is no overlap, a temporary file is created in
+    ``output``'s directory, ``B`` is written to it in binary mode,
+    ``flush()`` and ``os.fsync()`` are called and the temporary file
+    then atomically replaces ``output`` via ``os.replace``. Any failure
+    before the replacement removes the temporary file and leaves an
+    existing ``output`` byte for byte unchanged; ``OSError`` is
+    propagated unchanged.
+
+    Returns the same ``bytes`` ``B`` that were written.
+    """
+    data = serialize_audit_report(audit_path)
+
+    if not isinstance(output, str):
+        raise TypeError("output must be a str")
+    if output == "":
+        raise ValueError("output must not be empty")
+
+    _reject_audit_report_output_overlap(output, audit_path)
+    _atomic_write_bytes(output, data)
+    return data
 
 
 def render_trends(paths) -> str:
