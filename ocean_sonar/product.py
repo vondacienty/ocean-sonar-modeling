@@ -36,6 +36,7 @@ __all__ = [
     "load",
     "quality_report",
     "load_quality_report",
+    "quality_trend",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -1106,3 +1107,118 @@ def load_quality_report(path) -> dict:
         )
 
     return parsed
+
+
+def quality_trend(paths) -> dict:
+    """Compare a time-ordered series of quality reports.
+
+    ``paths`` must be a list/tuple with at least 2 items, each a
+    non-empty ``str``. Validation order, stopping at the first error:
+    the container, then the item count, then each item in index order.
+    Type mismatches raise ``TypeError``; all other constraint errors
+    raise ``ValueError``. Item errors are prefixed with
+    ``"paths[i]: "``.
+
+    Afterwards, for every item of ``paths`` in input order and exactly
+    once, :func:`load_quality_report` is called with that item passed
+    unchanged; every exception from these calls is propagated unchanged
+    and no input file is modified. Every report's ``layers`` and
+    ``total`` must equal those of the first report, otherwise
+    ``ValueError`` is raised.
+
+    For each ``i`` in ``1..n-1`` the deltas against the previous report
+    are computed: ``dc = coverage[i] - coverage[i-1]``,
+    ``dt = terrain_exceed[i] - terrain_exceed[i-1]`` and
+    ``du = unknown[i] - unknown[i-1]``. The per-step quality ``q`` is
+    ``"fail"`` when ``dc < 0``, ``dt > 0``, ``du > 0`` or the report
+    ``quality`` changes from ``"pass"`` to ``"fail"``; otherwise ``q``
+    is ``"pass"``.
+
+    Returns a dict with keys in the order ``changes, worst, quality``:
+
+    - ``changes``: a tuple with one dict per ``i`` in ``1..n-1`` order,
+      each with keys in the order ``index, coverage_delta,
+      terrain_exceed_delta, unknown_delta, quality``. ``index`` is
+      ``i``; ``coverage_delta`` is ``round(float(dc), 6)`` with
+      negative zero normalized to ``0.0``; ``terrain_exceed_delta`` and
+      ``unknown_delta`` are ``dt`` and ``du``; ``quality`` is ``q``.
+      ``index`` and the two count deltas are non-bool ints and
+      ``coverage_delta`` is a float.
+    - ``worst``: the ``changes`` item minimizing the unrounded tuple
+      ``(dc, -dt, -du, i)``.
+    - ``quality``: ``"pass"`` when every ``q`` is ``"pass"``, else
+      ``"fail"``.
+
+    Nothing is sorted, recomputed or added beyond the keys above.
+    """
+    if not isinstance(paths, (list, tuple)):
+        raise TypeError("paths must be a list or tuple")
+    if len(paths) < 2:
+        raise ValueError("paths must have at least 2 items")
+    for i in range(len(paths)):
+        prefix = f"paths[{i}]: "
+        item = paths[i]
+        if not isinstance(item, str):
+            raise TypeError(prefix + "must be a str")
+        if item == "":
+            raise ValueError(prefix + "must not be empty")
+
+    reports = [load_quality_report(path) for path in paths]
+
+    layers0 = reports[0]["layers"]
+    total0 = reports[0]["total"]
+    for i in range(1, len(reports)):
+        prefix = f"paths[{i}]: "
+        if reports[i]["layers"] != layers0:
+            raise ValueError(
+                prefix + "layers must equal the first report's layers"
+            )
+        if reports[i]["total"] != total0:
+            raise ValueError(
+                prefix + "total must equal the first report's total"
+            )
+
+    changes = []
+    worst = None
+    worst_key = None
+    all_pass = True
+    for i in range(1, len(reports)):
+        prev = reports[i - 1]
+        curr = reports[i]
+        dc = curr["coverage"] - prev["coverage"]
+        dt = curr["terrain_exceed"] - prev["terrain_exceed"]
+        du = curr["unknown"] - prev["unknown"]
+        if (
+            dc < 0
+            or dt > 0
+            or du > 0
+            or (prev["quality"] == "pass" and curr["quality"] == "fail")
+        ):
+            q = "fail"
+            all_pass = False
+        else:
+            q = "pass"
+
+        coverage_delta = round(float(dc), 6)
+        if coverage_delta == 0:
+            coverage_delta = 0.0
+
+        change = {
+            "index": i,
+            "coverage_delta": coverage_delta,
+            "terrain_exceed_delta": dt,
+            "unknown_delta": du,
+            "quality": q,
+        }
+        changes.append(change)
+
+        key = (dc, -dt, -du, i)
+        if worst_key is None or key < worst_key:
+            worst_key = key
+            worst = change
+
+    return {
+        "changes": tuple(changes),
+        "worst": worst,
+        "quality": "pass" if all_pass else "fail",
+    }
