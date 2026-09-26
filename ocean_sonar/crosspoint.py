@@ -49,6 +49,7 @@ __all__ = [
     "aggregate_trends",
     "dump_trends",
     "load_trends",
+    "render_trends",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -2945,6 +2946,95 @@ def load_trends(path) -> dict:
         )
 
     return result
+
+
+def render_trends(paths) -> str:
+    """Render an :func:`aggregate_trends` result as three text lines.
+
+    Calls :func:`aggregate_trends` exactly once with ``paths``, so its
+    validation, first-error order, exceptions (propagated unchanged)
+    and ``"paths[i]: "`` index prefixes all apply here as well; then
+    calls :func:`load_trend` exactly once per path, in input order, and
+    any exception it raises is propagated unchanged. Inputs and the
+    loaded files are not modified.
+
+    With ``A`` the dict returned by :func:`aggregate_trends`, ``T_j``
+    the trend loaded for path ``j`` and ``K = A["changes"]``, the
+    per-file proportions are ``p(j, x) = T_j[x] * T_j["changes"] / K``
+    and the spread is
+    ``u(x) = sqrt(fsum(T_j["changes"] * (T_j[x] - A[x])**2) / K)`` for
+    ``x`` in ``{coverage_delta, score_delta}``; the worst file ``w``
+    minimizes the *unrounded* tuple ``(p(j, score_delta),
+    p(j, coverage_delta), j)`` lexicographically. Every ``p`` and ``u``
+    is ``round(float(v), 6)`` with negative zero normalized to ``0.0``.
+
+    Returns three lines joined by ``"\\n"`` with no trailing newline::
+
+        TRENDS=<file_count>,<changes>,<degraded>,<coverage_delta>,<score_delta>,<quality>
+        FILES=<j>:<coverage p>:<score p>|...;RMSE=<coverage u>,<score u>;WORST_FILE=<w>
+        WORST=<j>,<i>,<b>,<r>,<dc>,<ds>
+
+    The TRENDS values are taken directly from ``A`` and the WORST
+    values from ``A["worst"]`` with no recomputation; the FILES items
+    appear in path order, one ``<j>:<coverage p>:<score p>`` triple per
+    file joined by ``"|"``. Ints are formatted in decimal, floats use
+    ``format(v, ".6f")`` (negative zero rendered as ``"0.000000"``) and
+    strings are copied as-is.
+    """
+    aggregate = aggregate_trends(paths)
+    trends = [load_trend(path) for path in paths]
+
+    changes = aggregate["changes"]
+    coverage_props = []
+    score_props = []
+    coverage_squares = []
+    score_squares = []
+    for result in trends:
+        weight = result["changes"]
+        coverage_props.append(result["coverage_delta"] * weight / changes)
+        score_props.append(result["score_delta"] * weight / changes)
+        coverage_squares.append(
+            weight * (result["coverage_delta"] - aggregate["coverage_delta"]) ** 2
+        )
+        score_squares.append(
+            weight * (result["score_delta"] - aggregate["score_delta"]) ** 2
+        )
+
+    coverage_rmse = math.sqrt(math.fsum(coverage_squares) / changes)
+    score_rmse = math.sqrt(math.fsum(score_squares) / changes)
+    worst_file = min(
+        range(len(trends)),
+        key=lambda j: (score_props[j], coverage_props[j], j),
+    )
+
+    def rounded_float(value):
+        value = round(float(value), 6)
+        return 0.0 if value == 0 else value
+
+    trends_line = "TRENDS=" + ",".join(
+        (
+            _format_rendered_value(aggregate["file_count"]),
+            _format_rendered_value(aggregate["changes"]),
+            _format_rendered_value(aggregate["degraded"]),
+            _format_rendered_value(aggregate["coverage_delta"]),
+            _format_rendered_value(aggregate["score_delta"]),
+            _format_rendered_value(aggregate["quality"]),
+        )
+    )
+    files_line = "FILES=" + "|".join(
+        f"{j}:{format(rounded_float(coverage_props[j]), '.6f')}"
+        f":{format(rounded_float(score_props[j]), '.6f')}"
+        for j in range(len(trends))
+    )
+    files_line += (
+        f";RMSE={format(rounded_float(coverage_rmse), '.6f')}"
+        f",{format(rounded_float(score_rmse), '.6f')}"
+        f";WORST_FILE={worst_file}"
+    )
+    worst_line = "WORST=" + ",".join(
+        _format_rendered_value(value) for value in aggregate["worst"]
+    )
+    return "\n".join((trends_line, files_line, worst_line))
 
 
 def serialize_pair_gate_score_summary(
