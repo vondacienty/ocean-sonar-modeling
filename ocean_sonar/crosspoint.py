@@ -46,6 +46,8 @@ __all__ = [
     "serialize_trend",
     "render_trend",
     "load_trend",
+    "aggregate_trends",
+    "dump_trends",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -2588,6 +2590,168 @@ def load_trend(path) -> dict:
         )
 
     return result
+
+
+def aggregate_trends(paths) -> dict:
+    """Aggregate several :func:`load_trend` trend files into one summary.
+
+    ``paths`` is validated exactly as in :func:`trend`: a list/tuple of
+    at least two items whose items, checked in index order, are
+    non-empty ``str`` paths. Validation order (first error wins): the
+    ``paths`` container, its length, then each item in index order
+    (type, then emptiness). A non-list/tuple container or a non-str
+    item raises ``TypeError``; fewer than two items or an empty ``str``
+    raises ``ValueError``. Item errors are prefixed with
+    ``"paths[i]: "``.
+
+    :func:`load_trend` is then called exactly once per path, in input
+    order; any exception it raises is propagated unchanged. Inputs and
+    the loaded files are not modified.
+
+    With ``T_j`` the trend loaded from ``paths[j]``, ``K`` the sum of
+    all ``T_j["changes"]`` and ``D`` the sum of all
+    ``T_j["degraded"]``, the two deltas are the change-weighted means
+    ``round(float(fsum(T_j["coverage_delta"] * T_j["changes"]) / K),
+    6)`` and ``round(float(fsum(T_j["score_delta"] * T_j["changes"]) /
+    K), 6)``, each with negative zero normalized to ``0.0``. Writing
+    ``(i, b, r, dc, ds) = T_j["worst"]``, the worst item minimizes the
+    tuple ``(ds, dc, j, i, b, r)`` lexicographically over all ``j``,
+    using the values from ``T_j["worst"]`` unchanged.
+
+    Returns a dict with keys in the order ``file_count, changes,
+    degraded, coverage_delta, score_delta, worst, quality``:
+    ``file_count`` is the int ``len(T_j)`` (the number of paths) and
+    ``changes``/``degraded`` are the ints ``K`` and ``D``; the two
+    deltas are floats; ``worst`` is the tuple ``(j, i, b, r, dc, ds)``
+    whose first four items are ints and last two the floats from the
+    winning ``T_j["worst"]``; ``quality`` is ``"pass"`` only when
+    ``D == 0`` and ``"fail"`` otherwise.
+    """
+    if not isinstance(paths, (list, tuple)):
+        raise TypeError("paths must be a list or tuple")
+    if len(paths) < 2:
+        raise ValueError("paths must contain at least 2 items")
+    for i in range(len(paths)):
+        prefix = f"paths[{i}]: "
+        if not isinstance(paths[i], str):
+            raise TypeError(prefix + "must be a str")
+        if paths[i] == "":
+            raise ValueError(prefix + "must not be empty")
+
+    trends = [load_trend(path) for path in paths]
+
+    changes = sum(item["changes"] for item in trends)
+    degraded = sum(item["degraded"] for item in trends)
+
+    coverage_delta = round(
+        float(
+            math.fsum(item["coverage_delta"] * item["changes"] for item in trends)
+            / changes
+        ),
+        6,
+    )
+    if coverage_delta == 0:
+        coverage_delta = 0.0
+    score_delta = round(
+        float(
+            math.fsum(item["score_delta"] * item["changes"] for item in trends)
+            / changes
+        ),
+        6,
+    )
+    if score_delta == 0:
+        score_delta = 0.0
+
+    worst_position = None
+    for j in range(len(trends)):
+        i, b, r, dc, ds = trends[j]["worst"]
+        position = (ds, dc, j, i, b, r)
+        if worst_position is None or position < worst_position:
+            worst_position = position
+
+    worst = (
+        int(worst_position[2]),
+        int(worst_position[3]),
+        int(worst_position[4]),
+        int(worst_position[5]),
+        worst_position[1],
+        worst_position[0],
+    )
+
+    return {
+        "file_count": int(len(trends)),
+        "changes": int(changes),
+        "degraded": int(degraded),
+        "coverage_delta": coverage_delta,
+        "score_delta": score_delta,
+        "worst": worst,
+        "quality": "pass" if degraded == 0 else "fail",
+    }
+
+
+def dump_trends(paths) -> bytes:
+    """Serialize an :func:`aggregate_trends` result as UTF-8 JSON bytes.
+
+    Calls :func:`aggregate_trends` exactly once with ``paths`` — and no
+    other combining function — so its validation, first-error order,
+    exceptions (propagated unchanged) and ``"paths[i]: "`` index
+    prefixes all apply here as well. Inputs and the loaded files are
+    not modified.
+
+    With ``A`` the dict returned by :func:`aggregate_trends`, the
+    encoded object has keys exactly in the order ``file_count, changes,
+    degraded, coverage_delta, score_delta, worst, quality``: the first
+    three values are the ints ``A["file_count"]``, ``A["changes"]`` and
+    ``A["degraded"]``, the next two are the floats
+    ``A["coverage_delta"]`` and ``A["score_delta"]``, ``worst`` is the
+    six-item JSON array ``[j, i, b, r, dc, ds]`` derived from
+    ``A["worst"]`` and ``quality`` is ``A["quality"]``, all taken
+    directly from ``A`` with no recomputation, sorting or additional
+    keys.
+
+    The object is encoded as UTF-8 JSON with ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation, no
+    BOM and no trailing newline, exactly as in :func:`serialize_trend`.
+    Floats are first rounded with ``round(float(v), 6)`` and negative
+    zero is normalized to ``0.0``; ints are written in decimal and
+    strings are copied as-is. Any JSON or UTF-8 encoding failure raises
+    ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    result = aggregate_trends(paths)
+    worst = result["worst"]
+
+    def rounded_float(value):
+        value = round(float(value), 6)
+        return 0.0 if value == 0 else value
+
+    document = {
+        "file_count": int(result["file_count"]),
+        "changes": int(result["changes"]),
+        "degraded": int(result["degraded"]),
+        "coverage_delta": rounded_float(result["coverage_delta"]),
+        "score_delta": rounded_float(result["score_delta"]),
+        "worst": [
+            int(worst[0]),
+            int(worst[1]),
+            int(worst[2]),
+            int(worst[3]),
+            rounded_float(worst[4]),
+            rounded_float(worst[5]),
+        ],
+        "quality": result["quality"],
+    }
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(f"trends: could not be serialized to JSON: {exc}") from exc
 
 
 def serialize_pair_gate_score_summary(
