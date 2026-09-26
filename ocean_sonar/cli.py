@@ -17,6 +17,7 @@ from .crosspoint import (
     export_trends,
     render_audit,
     render_audit_report,
+    render_audit_report_trend,
     render_comparison,
     render_trends,
     serialize_comparison,
@@ -127,6 +128,8 @@ def main(argv: list[str] | None = None) -> int:
     export_audit_report_trend_parser.add_argument("audit_report_second", metavar="REPORT", help="second audit report JSON file")
     export_audit_report_trend_parser.add_argument("audit_report_rest", nargs="*", metavar="REPORT", help="additional audit report JSON files")
     export_audit_report_trend_parser.add_argument("--output", required=True, help="output file atomically overwritten with the audit report trend JSON")
+    render_audit_report_trend_parser = sub.add_parser("render-audit-report-trend", help="render one audit report trend JSON file as two summary lines")
+    render_audit_report_trend_parser.add_argument("trend", metavar="TREND", help="audit report trend JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -241,6 +244,15 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
+        return 0
+
+    if args.command == "render-audit-report-trend":
+        try:
+            text = render_audit_report_trend(args.trend)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
         return 0
 
     parser.print_help()

@@ -70,6 +70,7 @@ __all__ = [
     "audit_report_trend",
     "export_audit_report_trend",
     "load_audit_report_trend",
+    "render_audit_report_trend",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -5477,3 +5478,51 @@ def load_audit_report_trend(path) -> dict:
         )
 
     return result
+
+
+def render_audit_report_trend(path) -> str:
+    """Render a :func:`load_audit_report_trend`-loaded trend report as two lines.
+
+    Calls :func:`load_audit_report_trend` exactly once with ``path`` — and
+    no other loading or combining function — so its validation, exceptions
+    (propagated unchanged), file handling, source-report re-check and
+    canonical-byte checks all apply here as well: a non-``str`` path raises
+    ``TypeError``, an empty ``str`` raises ``ValueError``, a missing file
+    raises ``FileNotFoundError``, a directory raises ``IsADirectoryError``,
+    every other ``OSError`` is propagated unchanged and any parse,
+    structure or canonical-byte violation raises ``ValueError``. The file
+    is not modified.
+
+    With ``R`` the dict returned by :func:`load_audit_report_trend`,
+    ``T = R["trend"]`` and ``W = T["worst"]``, returns two lines joined by
+    ``"\\n"`` with no trailing newline::
+
+        TREND=<count>,<changes>,<regressed>,<failed_delta>,<pass_ratio_delta>,<quality>
+        WORST=<i>,<df>,<dr>,<quality>
+
+    The TREND values are ``T["count"]``, ``T["changes"]``,
+    ``T["regressed"]``, ``T["failed_delta"]``, ``T["pass_ratio_delta"]``
+    and ``T["quality"]`` in that order, and the WORST values are the four
+    items of ``W`` in their stored order. Every value is copied directly
+    from ``R`` with no recomputation, re-sorting or rewriting: ints are
+    formatted in decimal, strings are copied as-is and floats use
+    ``format(v, ".6f")`` (negative zero rendered as ``"0.000000"``).
+    """
+    result = load_audit_report_trend(path)
+    trend = result["trend"]
+
+    trend_line = "TREND=" + ",".join(
+        _format_rendered_value(trend[name])
+        for name in (
+            "count",
+            "changes",
+            "regressed",
+            "failed_delta",
+            "pass_ratio_delta",
+            "quality",
+        )
+    )
+    worst_line = "WORST=" + ",".join(
+        _format_rendered_value(value) for value in trend["worst"]
+    )
+    return "\n".join((trend_line, worst_line))
