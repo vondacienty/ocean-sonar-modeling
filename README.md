@@ -480,6 +480,22 @@ unknown_delta, unknown_ratio_delta, worst, quality`）与 JSON 字节规范
 ocean-sonar-modeling build-substrate-report-trend report_a.json report_b.json [report_c.json ...] --output trend.json
 ```
 
+### `product-quality PRODUCT`
+
+读取一份 `ocean_sonar.product.serialize`/`write` 生成的地形产品 JSON
+文件并**仅调用一次** `ocean_sonar.product.quality_report(path)`：其
+`load` 校验、异常与文件不变性完全沿用被调函数。成功时 stdout 输出其返
+回字节的 UTF-8 解码文本（键序 `layers, total, valid, coverage,
+terrain_exceed, unknown, worst, crosspoint, quality` 的紧凑 JSON）加一
+个换行，stderr 为空，退出码 0；文件不存在、内容非法等错误时 stdout 为
+空，stderr 严格输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码 1；
+参数缺失或多余属于参数解析错误，退出码 2 且不调用业务函数。输入文件不
+会被修改。
+
+```bash
+ocean-sonar-modeling product-quality product.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -518,6 +534,10 @@ ocean-sonar-modeling build-substrate-report-trend report_a.json report_b.json [r
 `serialize_aggregate_report`、`serialize_aggregate_report_trend`、
 `load_aggregate_report_trend`、`render_aggregate_report_trend`、
 `export_aggregate_report_trend` 的契约如下。
+
+地形产品流水线接口位于 `ocean_sonar.product`，该模块导出：`build`、
+`dashboard`、`dashboard_summary`、`serialize`、`render`、`write`、
+`metrics`、`load`、`quality_report`。其中 `quality_report` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
 
@@ -791,6 +811,38 @@ unknown_ratio_delta, worst, quality` 的对象——重复、缺失或多余键�
 、`os.fsync()` 后用 `os.replace` 原子替换 `output`。替换前发生失败会
 清除临时文件且既有 `output` 逐字节不变；`OSError` 原样传播。返回值与
 写入文件的字节为同一份 `bytes`。
+
+### `product.quality_report(path) -> bytes`
+
+把一份 `product.serialize`/`product.write` 生成的地形产品 JSON 汇总为
+质量报告字节串。
+
+执行时**仅调用一次** `product.load(path)` 得到 `P`，在此之前不做任何
+其他工作、之后也不再调用第二次；因此 `path` 的校验契约、读取行为、异
+常（原样向上传播）与文件不变性完全沿用 `product.load`：非 `str` 抛
+`TypeError`，空串抛 `ValueError`，文件缺失抛 `FileNotFoundError`，目
+录抛 `IsADirectoryError`，其余 `OSError` 原样传播，解析、结构或规范字
+节非法抛 `ValueError`。输入文件不会被修改，`P` 也不会被修改。
+
+返回紧凑 JSON 字节，顶层键序恰为 `layers, total, valid, coverage,
+terrain_exceed, unknown, worst, crosspoint, quality`：
+
+- `layers`：层数，即 `len(P["layers"])`；
+- `total`/`valid`：各层 `quality.total` 与 `quality.valid` 之和；
+- `coverage`：`round(float(valid / total), 6)`；
+- `terrain_exceed`：各层 `quality.slope_exceed` 与
+  `quality.roughness_exceed` 的总和；
+- `unknown`：各层 `substrate.counts.unknown` 的总和；
+- `worst`：使未舍入元组 `(层unknown, 层slope_exceed + 层roughness_exceed,
+  -层coverage, -下标)` 最大的层下标；
+- `crosspoint`：`P["crosspoint"]["quality"]`；
+- `quality`：`P["overall"]`。
+
+各计数与 `worst` 为 `int`，`coverage` 为 `float`。JSON 字节规范沿用
+`product.serialize`：UTF-8、`ensure_ascii=False`、
+`separators=(",", ":")`、`allow_nan=False`，无缩进、无 BOM、无尾换
+行；浮点数经 `round(float(v), 6)` 且负零归一化为 `0.0`。任何 JSON 或
+UTF-8 编码失败抛 `ValueError`。返回 `bytes`。
 
 ### 通用约定
 

@@ -25,6 +25,7 @@ from .crosspoint import (
 )
 from .grid import batch as _grid_batch
 from .outlier import batch as _outlier_batch
+from .product import quality_report as _product_quality_report
 from .report import rank_files
 from .strip import batch as _strip_batch
 from .substrate import (
@@ -513,6 +514,8 @@ def main(argv: list[str] | None = None) -> int:
     build_substrate_report_trend_parser.add_argument("report_second", metavar="REPORT", help="second substrate aggregate report JSON file")
     build_substrate_report_trend_parser.add_argument("report_rest", nargs="*", metavar="REPORT", help="additional substrate aggregate report JSON files")
     build_substrate_report_trend_parser.add_argument("--output", required=True, help="output file atomically overwritten with the substrate aggregate report trend JSON")
+    product_quality_parser = sub.add_parser("product-quality", help="summarize a serialized product JSON file and print the quality report JSON")
+    product_quality_parser.add_argument("product", metavar="PRODUCT", help="product JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -789,6 +792,15 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
+        return 0
+
+    if args.command == "product-quality":
+        try:
+            data = _product_quality_report(args.product)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(data.decode("utf-8") + "\n")
         return 0
 
     parser.print_help()
