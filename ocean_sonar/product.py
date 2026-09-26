@@ -34,6 +34,7 @@ __all__ = [
     "write",
     "metrics",
     "load",
+    "quality_report",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -831,3 +832,101 @@ def load(path):
         )
 
     return product
+
+
+def quality_report(path) -> bytes:
+    """Load a product from ``path`` and summarize its quality as JSON bytes.
+
+    Execution calls :func:`load` exactly once to obtain the product
+    ``P`` and nothing else touches the file, so ``path`` validation,
+    every :func:`load` exception (propagated unchanged) and the
+    file-immutability guarantee are exactly those of :func:`load`. The
+    loaded product is not modified.
+
+    The summary is a JSON object with keys in the order
+    ``layers, total, valid, coverage, terrain_exceed, unknown, worst,
+    crosspoint, quality``:
+
+    - ``layers`` is the number of layers (a non-bool int);
+    - ``total`` and ``valid`` are the sums of the per-layer
+      ``quality.total`` and ``quality.valid`` values (non-bool ints);
+    - ``coverage`` is ``round(float(valid / total), 6)`` (a float);
+    - ``terrain_exceed`` is the sum of every layer's
+      ``quality.slope_exceed`` and ``quality.roughness_exceed``
+      (a non-bool int);
+    - ``unknown`` is the sum of every layer's
+      ``substrate.counts.unknown`` (a non-bool int);
+    - ``worst`` is the index of the layer maximizing the unrounded
+      tuple ``(layer unknown, layer slope_exceed + roughness_exceed,
+      -layer coverage, -index)`` compared lexicographically (a
+      non-bool int);
+    - ``crosspoint`` is ``P["crosspoint"]["quality"]`` and
+    - ``quality`` is ``P["overall"]``.
+
+    The bytes follow the :func:`serialize` JSON conventions exactly:
+    UTF-8, ``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``, no indentation and no trailing newline, with
+    floats rounded via ``round(float(v), 6)`` and negative zero
+    normalized to ``0.0``. Returns the JSON document as ``bytes``.
+    """
+    product = load(path)
+
+    layers = product["layers"]
+    total = 0
+    valid = 0
+    terrain_exceed = 0
+    unknown = 0
+    best_key = None
+    worst = 0
+    for i, layer in enumerate(layers):
+        quality_item = layer["quality"]
+        layer_total = quality_item["total"]
+        layer_valid = quality_item["valid"]
+        layer_exceed = (
+            quality_item["slope_exceed"] + quality_item["roughness_exceed"]
+        )
+        layer_unknown = layer["substrate"]["counts"]["unknown"]
+
+        total += layer_total
+        valid += layer_valid
+        terrain_exceed += layer_exceed
+        unknown += layer_unknown
+
+        key = (
+            layer_unknown,
+            layer_exceed,
+            -float(layer_valid / layer_total),
+            -i,
+        )
+        if best_key is None or key > best_key:
+            best_key = key
+            worst = i
+
+    coverage = round(float(valid / total), 6)
+    if coverage == 0:
+        coverage = 0.0
+
+    summary = {
+        "layers": len(layers),
+        "total": total,
+        "valid": valid,
+        "coverage": coverage,
+        "terrain_exceed": terrain_exceed,
+        "unknown": unknown,
+        "worst": worst,
+        "crosspoint": product["crosspoint"]["quality"],
+        "quality": product["overall"],
+    }
+
+    try:
+        text = json.dumps(
+            _to_jsonable(summary),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"quality report: could not be serialized to JSON: {exc}"
+        ) from exc

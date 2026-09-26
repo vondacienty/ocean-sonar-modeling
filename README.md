@@ -294,6 +294,20 @@ stdout 输出 `batch` 返回字节的 UTF-8 解码文本加一个换行，stderr
 ocean-sonar-modeling terrain-batch request.json
 ```
 
+### `product-quality PRODUCT`
+
+读取一份 `ocean_sonar.product.serialize` 生成的产品 JSON 并打印其质量
+汇总报告，**仅调用一次**
+`ocean_sonar.product.quality_report(path)`。成功时 stdout 输出该函数
+返回字节的 UTF-8 解码文本加一个换行，stderr 为空，退出码 0；文件不
+存在、内容损坏等错误时 stdout 为空，stderr 严格输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数缺失或多余属于
+参数解析错误，退出码 2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling product-quality product.json
+```
+
 ### `export-substrate INPUT --output OUTPUT`
 
 读取一份 `substrate.batch` 生成的底质分类批量 JSON 并按其规范字节原子
@@ -1634,3 +1648,46 @@ WORST=<i>,<df>,<dr>,<quality>
 行四值按 `W` 的存储顺序（`i, df, dr, quality`）取出。所有值直接取自
 `R`，不重算、不排序、不改写：`int` 按十进制渲染，`str` 原样，`float`
 用 `format(v, ".6f")`（负零渲染为 `0.000000`）。
+
+端到端产品流水线接口位于 `ocean_sonar.product`，该模块导出：
+`build`、`dashboard`、`dashboard_summary`、`serialize`、`render`、
+`write`、`metrics`、`load`、`quality_report`。其中 `quality_report`
+的契约如下。
+
+### `product.quality_report(path) -> bytes`
+
+读取一份产品 JSON 并返回其质量汇总报告字节。
+
+执行时**仅调用一次** `load(path)` 得到产品 `P`，除此之外不做任何
+其他文件操作，也不调用第二次；因此 `path` 的校验、二进制读取、系统
+异常、UTF-8/JSON 解析、结构/规范字节校验及逐字节复核的异常全部原样
+传播：非 `str` 抛 `TypeError`，空串抛 `ValueError`，文件缺失抛
+`FileNotFoundError`，目录抛 `IsADirectoryError`，其余 `OSError` 原样
+传播，解析、结构或规范字节非法抛 `ValueError`。`P` 与输入文件都不会
+被修改。
+
+返回一个 JSON 对象的 UTF-8 字节，键序固定为
+`layers, total, valid, coverage, terrain_exceed, unknown, worst,
+crosspoint, quality`，编码规范与 `serialize` 完全一致
+（`ensure_ascii=False`、`separators=(",", ":")`、
+`allow_nan=False`、无 BOM、无缩进、无尾换行；`float` 先
+`round(float(v), 6)`，负零归一为 `0.0`）。各项含义：
+
+- `layers`：`P["layers"]` 的层数；
+- `total`、`valid`：各层 `quality.total`、`quality.valid` 之和；
+- `coverage`：`round(float(valid / total), 6)`（负零归一为
+  `0.0`），其中 `valid`、`total` 为上面的合计值；
+- `terrain_exceed`：各层 `quality.slope_exceed` 与
+  `quality.roughness_exceed` 全部相加；
+- `unknown`：各层 `substrate.counts.unknown` 之和；
+- `worst`：对每层（下标 `i`）取键
+  `(层 unknown, 层两 exceed 之和, -层 coverage, -i)` 按字典序
+  **最大**者的层下标；其中层 coverage 用未舍入的
+  `quality.valid / quality.total`，因此前三项全平的层中最小下标
+  胜出；
+- `crosspoint`：`P["crosspoint"]["quality"]`；
+- `quality`：`P["overall"]`。
+
+`layers`、`total`、`valid`、`terrain_exceed`、`unknown`、`worst`
+均为非布尔 `int`，`coverage` 为 `float`，`crosspoint`、`quality`
+为 `str`。

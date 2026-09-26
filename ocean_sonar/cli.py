@@ -25,6 +25,7 @@ from .crosspoint import (
 )
 from .grid import batch as _grid_batch
 from .outlier import batch as _outlier_batch
+from .product import quality_report as _product_quality_report
 from .report import rank_files
 from .strip import batch as _strip_batch
 from .substrate import (
@@ -486,6 +487,8 @@ def main(argv: list[str] | None = None) -> int:
     grid_batch_parser.add_argument("request", metavar="REQUEST", help="batch request JSON file")
     terrain_batch_parser = sub.add_parser("terrain-batch", help="analyze the slope and roughness of a gridded surface from a request JSON file and print the result JSON")
     terrain_batch_parser.add_argument("request", metavar="REQUEST", help="batch request JSON file")
+    product_quality_parser = sub.add_parser("product-quality", help="load one product JSON file and print its quality report JSON")
+    product_quality_parser.add_argument("product", metavar="PRODUCT", help="product JSON file")
     substrate_batch_parser = sub.add_parser("substrate-batch", help="classify seabed substrate from analysis grids and intensities from a request JSON file and print the result JSON")
     substrate_batch_parser.add_argument("request", metavar="REQUEST", help="batch request JSON file")
     export_substrate_parser = sub.add_parser("export-substrate", help="load one substrate batch JSON file and atomically write its canonical bytes")
@@ -695,6 +698,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "terrain-batch":
         try:
             text = _terrain_batch_text(args.request)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "product-quality":
+        try:
+            text = _product_quality_report(args.product).decode("utf-8")
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
