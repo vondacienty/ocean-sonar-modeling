@@ -66,6 +66,7 @@ __all__ = [
     "serialize_audit_report",
     "load_audit_report",
     "export_audit_report",
+    "render_audit_report",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -3965,21 +3966,22 @@ def _resolved_export_path(path):
     return os.path.normcase(os.path.realpath(os.path.abspath(path)))
 
 
-def _reject_export_output_overlap(output, paths):
-    """Reject ``output`` naming the same file as any of ``paths``.
+def _is_same_file(output, path):
+    """Whether ``output`` and ``path`` name the same file.
 
     Existing files are compared with ``os.path.samefile`` so soft and hard
     links are recognized; when either side does not exist, the normalized
     ``realpath`` strings are compared instead.
     """
-    output_exists = os.path.exists(output)
-    output_resolved = _resolved_export_path(output)
+    if os.path.exists(output) and os.path.exists(path):
+        return os.path.samefile(output, path)
+    return _resolved_export_path(output) == _resolved_export_path(path)
+
+
+def _reject_export_output_overlap(output, paths):
+    """Reject ``output`` naming the same file as any of ``paths``."""
     for path in paths:
-        if output_exists and os.path.exists(path):
-            same = os.path.samefile(output, path)
-        else:
-            same = output_resolved == _resolved_export_path(path)
-        if same:
+        if _is_same_file(output, path):
             raise ValueError(
                 f"output must not be the same file as an input: "
                 f"{output!r} and {path!r}"
@@ -4511,17 +4513,8 @@ def load_audit_report(path) -> dict:
 
 
 def _reject_audit_report_output_overlap(output, audit_path):
-    """Reject ``output`` naming the same file as ``audit_path``.
-
-    Existing files are compared with ``os.path.samefile`` so soft and hard
-    links are recognized; when either side does not exist, the normalized
-    ``realpath`` strings are compared instead.
-    """
-    if os.path.exists(output) and os.path.exists(audit_path):
-        same = os.path.samefile(output, audit_path)
-    else:
-        same = _resolved_export_path(output) == _resolved_export_path(audit_path)
-    if same:
+    """Reject ``output`` naming the same file as ``audit_path``."""
+    if _is_same_file(output, audit_path):
         raise ValueError(
             f"output must not be the same file as the audit: "
             f"{output!r} and {audit_path!r}"
@@ -4569,6 +4562,60 @@ def export_audit_report(audit_path, output) -> bytes:
     _reject_audit_report_output_overlap(output, audit_path)
     _atomic_write_bytes(output, data)
     return data
+
+
+def render_audit_report(path) -> str:
+    """Render a :func:`load_audit_report`-loaded report as three summary lines.
+
+    Calls :func:`load_audit_report` exactly once with ``path`` — and no
+    other loading or combining function — so its validation, exceptions
+    (propagated unchanged), file handling and canonical-byte checks all
+    apply here as well: a non-``str`` path raises ``TypeError``, an empty
+    ``str`` raises ``ValueError``, a missing file raises
+    ``FileNotFoundError``, a directory raises ``IsADirectoryError``, every
+    other ``OSError`` is propagated unchanged and any parse, structure or
+    canonical-byte violation raises ``ValueError``. The file is not
+    modified.
+
+    With ``R`` the dict returned by :func:`load_audit_report`, returns
+    three lines joined by ``"\\n"`` with no trailing newline::
+
+        REPORT=<schema_version>,<source.path>,<source.kind>,<quality>
+        SUMMARY=<files>,<changes>,<failed>,<passed>,<pass_ratio>
+        WORST=<file_index>,<index>,<degraded_delta>,<coverage_delta>,<score_delta>,<quality>
+
+    The REPORT values are ``R["schema_version"]``, ``R["source"]["path"]``,
+    ``R["source"]["kind"]`` and ``R["quality"]``; the SUMMARY values are
+    the five items of ``R["summary"]`` in their stored key order and the
+    WORST values are the six items of ``R["worst"]`` in their stored key
+    order. Every value is copied directly from ``R`` with no
+    recomputation or re-sorting: ints are formatted in decimal, strings
+    are copied as-is (except ``source.path``) and floats use
+    ``format(v, ".6f")`` (negative zero rendered as ``"0.000000"``).
+    ``source.path`` is rendered with
+    ``json.dumps(v, ensure_ascii=False, separators=(",", ":"))``.
+    """
+    result = load_audit_report(path)
+
+    report_line = "REPORT=" + ",".join(
+        (
+            _format_rendered_value(result["schema_version"]),
+            json.dumps(
+                result["source"]["path"],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            _format_rendered_value(result["source"]["kind"]),
+            _format_rendered_value(result["quality"]),
+        )
+    )
+    summary_line = "SUMMARY=" + ",".join(
+        _format_rendered_value(value) for value in result["summary"].values()
+    )
+    worst_line = "WORST=" + ",".join(
+        _format_rendered_value(value) for value in result["worst"].values()
+    )
+    return "\n".join((report_line, summary_line, worst_line))
 
 
 def render_trends(paths) -> str:

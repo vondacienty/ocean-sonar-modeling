@@ -15,6 +15,7 @@ from .crosspoint import (
     export_audit_report,
     export_trends,
     render_audit,
+    render_audit_report,
     render_comparison,
     render_trends,
     serialize_comparison,
@@ -118,6 +119,8 @@ def main(argv: list[str] | None = None) -> int:
     export_audit_report_parser = sub.add_parser("export-audit-report", help="serialize one audit JSON file into a report JSON")
     export_audit_report_parser.add_argument("audit", metavar="AUDIT", help="audit JSON file")
     export_audit_report_parser.add_argument("--output", required=True, help="output file atomically overwritten with the audit report JSON")
+    render_audit_report_parser = sub.add_parser("render-audit-report", help="render one audit report JSON file as three summary lines")
+    render_audit_report_parser.add_argument("report", metavar="REPORT", help="audit report JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -210,6 +213,15 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
+        return 0
+
+    if args.command == "render-audit-report":
+        try:
+            text = render_audit_report(args.report)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
         return 0
 
     parser.print_help()
