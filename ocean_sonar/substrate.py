@@ -26,6 +26,7 @@ __all__ = [
     "load_aggregate",
     "render",
     "render_aggregate",
+    "serialize_aggregate_report",
 ]
 
 _CLASSES = ("mud", "sand", "gravel", "rock")
@@ -1069,6 +1070,66 @@ def render_aggregate(path) -> str:
         ),
     ]
     return "\n".join(lines)
+
+
+def serialize_aggregate_report(path) -> bytes:
+    """Serialize a :func:`load_aggregate`-loaded aggregate as a report in bytes.
+
+    Calls :func:`load_aggregate` exactly once with ``path`` — and no other
+    loading or combining function — so its validation, first-error order,
+    exceptions (propagated unchanged), canonical-byte checks and file
+    non-modification contract all apply here as well: a non-``str`` path
+    raises ``TypeError``, an empty ``str`` raises ``ValueError``, a missing
+    file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError``, every other ``OSError`` is propagated unchanged
+    and any parse, structure or canonical-byte violation raises
+    ``ValueError``. The file is not modified.
+
+    With ``A`` the dict returned by :func:`load_aggregate`, the encoded
+    object has top-level keys exactly in the order ``schema_version,
+    source, summary, worst, quality``:
+
+    - ``schema_version``: the non-bool int ``1``.
+    - ``source``: a dict with keys exactly in the order ``path, kind`` —
+      ``path`` is the original ``path`` argument and ``kind`` is the
+      fixed string ``"substrate_aggregate"``.
+    - ``summary``: ``A["summary"]`` itself, not copied, recomputed or
+      reordered.
+    - ``worst``: with ``i = A["summary"]["worst_batch_index"]``, a dict
+      with keys exactly in the order ``index, count, unknown, quality``
+      whose values are ``i`` and the ``count``, ``unknown`` and
+      ``quality`` of ``A["batches"][i]["summary"]``.
+    - ``quality``: ``A["summary"]["quality"]``.
+
+    No other keys are added and neither ``A`` nor the input is modified.
+
+    The object is encoded as UTF-8 JSON exactly as in
+    :func:`dump_aggregate`: tuples are recursively encoded as JSON
+    arrays, floats keep their ``round(float(v), 6)`` six-decimal rounding
+    with negative zero normalized to ``0.0``, and the settings are
+    ``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``, with no indentation, no BOM and no trailing
+    newline. Any JSON or UTF-8 encoding failure raises ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    document = load_aggregate(path)
+    summary = document["summary"]
+    index = summary["worst_batch_index"]
+    worst = document["batches"][index]["summary"]
+    report = {
+        "schema_version": 1,
+        "source": {"path": path, "kind": "substrate_aggregate"},
+        "summary": summary,
+        "worst": {
+            "index": index,
+            "count": worst["count"],
+            "unknown": worst["unknown"],
+            "quality": worst["quality"],
+        },
+        "quality": summary["quality"],
+    }
+    return _dump_aggregate_document(report)
 
 
 def export_aggregate(path, output) -> bytes:

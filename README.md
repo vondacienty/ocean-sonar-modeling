@@ -404,8 +404,9 @@ ocean-sonar-modeling render-aggregate aggregate.json
 底质分类接口位于 `ocean_sonar.substrate`，该模块导出：
 `classify`、`batch`、`load`、`aggregate`、`dump_aggregate`、
 `load_aggregate`、`export`、`render`、`export_aggregate`、
-`render_aggregate`。其中 `export`、`render`、`export_aggregate`、
-`render_aggregate` 的契约如下。
+`render_aggregate`、`serialize_aggregate_report`。其中 `export`、
+`render`、`export_aggregate`、`render_aggregate`、
+`serialize_aggregate_report` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
 
@@ -552,6 +553,38 @@ worst_batch_index, quality`，其中 `counts` 的键序恰为
 `A["batches"][index]["summary"]` 的 `count`、`unknown`、`quality`。
 所有值直接取自 `A`，不重算、不重新排序：`int` 按十进制渲染，`str`
 原样，`float` 用 `format(v, ".6f")`（负零渲染为 `0.000000`）。
+
+### `substrate.serialize_aggregate_report(path) -> bytes`
+
+把一份底质聚合 JSON 序列化为一份汇总报告的字节串。
+
+执行时**仅调用一次** `load_aggregate(path)` 得到 `A`，不调用任何其他
+加载或汇总函数；因此 `path` 的校验顺序、读取行为与异常（原样向上传
+播）、规范字节校验与文件不变性完全沿用 `load_aggregate`：非 `str`
+抛 `TypeError`，空串抛 `ValueError`，文件缺失抛
+`FileNotFoundError`，目录抛 `IsADirectoryError`，其余 `OSError` 原
+样传播，解析、结构或规范字节非法抛 `ValueError`。输入文件不会被修
+改。
+
+返回对象的顶层键序恰为 `schema_version, source, summary, worst,
+quality`：
+
+- `schema_version`：非 `bool` 整数 `1`。
+- `source`：键序恰为 `path, kind` 的 dict——`path` 为原始 `path`
+  实参，`kind` 为固定字符串 `"substrate_aggregate"`。
+- `summary`：即 `A["summary"]` 原 dict，不复制、不重算、不改序。
+- `worst`：令 `i = A["summary"]["worst_batch_index"]`，键序恰为
+  `index, count, unknown, quality`，值依次为 `i` 及
+  `A["batches"][i]["summary"]` 的 `count`、`unknown`、`quality`。
+- `quality`：即 `A["summary"]["quality"]`。
+
+不增加任何其他键；`A` 与输入均不被修改。
+
+编码规范与 `dump_aggregate` 一致：tuple 递归编码为 JSON 数组，浮点
+数保持 `round(float(v), 6)` 的六位舍入且负零归一化为 `0.0`，UTF-8
+JSON，`ensure_ascii=False`、`separators=(",", ":")`、
+`allow_nan=False`，无缩进、无 BOM、无尾换行；任何 JSON 或 UTF-8 编
+码失败抛 `ValueError`。返回 `bytes`。
 
 ### 通用约定
 
