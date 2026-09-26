@@ -404,8 +404,9 @@ ocean-sonar-modeling render-aggregate aggregate.json
 底质分类接口位于 `ocean_sonar.substrate`，该模块导出：
 `classify`、`batch`、`load`、`aggregate`、`dump_aggregate`、
 `load_aggregate`、`export`、`render`、`export_aggregate`、
-`render_aggregate`。其中 `export`、`render`、`export_aggregate`、
-`render_aggregate` 的契约如下。
+`render_aggregate`、`serialize_aggregate_report`。其中 `export`、
+`render`、`export_aggregate`、`render_aggregate`、
+`serialize_aggregate_report` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
 
@@ -553,7 +554,35 @@ worst_batch_index, quality`，其中 `counts` 的键序恰为
 所有值直接取自 `A`，不重算、不重新排序：`int` 按十进制渲染，`str`
 原样，`float` 用 `format(v, ".6f")`（负零渲染为 `0.000000`）。
 
-### 通用约定
+### `substrate.serialize_aggregate_report(path) -> bytes`
+
+把一份底质聚合 JSON 序列化为一份汇总报告的字节串。
+
+执行时**仅调用一次** `load_aggregate(path)` 得到 `A`，不调用任何其他
+加载或汇总函数；因此 `path` 的校验顺序、读取行为、异常（原样向上传
+播）、规范字节校验与文件不变性完全沿用 `load_aggregate`：非 `str`
+抛 `TypeError`，空串抛 `ValueError`，文件缺失抛
+`FileNotFoundError`，目录抛 `IsADirectoryError`，其余 `OSError` 原样
+传播，解析、结构或规范字节非法抛 `ValueError`。输入文件不会被修改。
+
+编码对象的顶层键序恰为 `schema_version, source, summary, worst,
+quality`：
+
+- `schema_version`：非布尔整数 `1`。
+- `source`：键序恰为 `path, kind` 的对象，`path` 为原始 `path` 实
+  参，`kind` 为固定字符串 `"substrate_aggregate"`。
+- `summary`：即 `A["summary"]` 原 dict，不复制、不重算、不改序。
+- `worst`：令 `i = summary["worst_batch_index"]`，键序恰为
+  `index, count, unknown, quality`；`index` 为 `i`，后三个值依次取
+  自 `A["batches"][i]["summary"]` 的同名项。
+- `quality`：即 `summary["quality"]`。
+
+不增加其他键；`A` 与输入均不被修改。编码规范与 `dump_aggregate` 一
+致：UTF-8 JSON，`ensure_ascii=False`、`separators=(",", ":")`、
+`allow_nan=False`，tuple 递归编码为 JSON 数组，无缩进、无 BOM、无
+尾换行；浮点已按 `round(float(v), 6)` 保留 6 位小数并将负零归一化
+为 `0.0`。任何 JSON 或 UTF-8 编码失败抛 `ValueError`。返回
+`bytes`。
 
 - 容器类型只接受 `list` 或 `tuple`；布尔值（`bool`）不被视为数值。
 - 类型不符抛出 `TypeError`；容器为空、元素个数不符、数值非有限
