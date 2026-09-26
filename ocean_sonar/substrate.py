@@ -15,7 +15,16 @@ import tempfile
 
 from .svp import _is_real_number
 
-__all__ = ["aggregate", "batch", "classify", "export", "load", "render"]
+__all__ = [
+    "aggregate",
+    "batch",
+    "classify",
+    "dump_aggregate",
+    "export",
+    "load",
+    "load_aggregate",
+    "render",
+]
 
 _CLASSES = ("mud", "sand", "gravel", "rock")
 
@@ -555,6 +564,300 @@ def aggregate(paths) -> dict:
         "quality": quality,
     }
     return {"batches": batches, "summary": summary}
+
+
+_AGGREGATE_KEYS = ("batches", "summary")
+_AGGREGATE_SUMMARY_KEYS = (
+    "batch_count",
+    "result_count",
+    "unknown",
+    "counts",
+    "unknown_ratio",
+    "worst_batch_index",
+    "quality",
+)
+_AGGREGATE_COUNT_KEYS = ("unknown", "mud", "sand", "gravel", "rock")
+
+
+def _aggregate_to_jsonable(value):
+    """Recursively convert tuples to JSON arrays, preserving everything else."""
+    if isinstance(value, (list, tuple)):
+        return [_aggregate_to_jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _aggregate_to_jsonable(item) for key, item in value.items()}
+    return value
+
+
+def _dump_aggregate_document(document):
+    try:
+        text = json.dumps(
+            _aggregate_to_jsonable(document),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"aggregate: could not be serialized to JSON: {exc}"
+        ) from exc
+
+
+def dump_aggregate(paths) -> bytes:
+    """Serialize an :func:`aggregate` result as JSON bytes.
+
+    Calls :func:`aggregate` exactly once with ``paths`` — and no other
+    combining function — so its validation, first-error order,
+    exception messages and ``paths[i]: `` index prefixes all apply
+    unchanged; every exception from that call is propagated unchanged
+    and neither ``paths`` nor any file is modified.
+
+    With ``A`` the dict returned by :func:`aggregate`, the encoded
+    object is ``A`` itself: keys stay in the order ``batches, summary``
+    and every value is kept unchanged; the only structural conversion
+    is that tuples (the top-level ``batches`` tuple) are recursively
+    encoded as JSON arrays, while every other container remains an
+    object or array.
+
+    The object is encoded as UTF-8 JSON with ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation, no
+    BOM and no trailing newline, exactly as in :func:`batch`; the
+    ``unknown_ratio`` float produced by :func:`aggregate` is already
+    rounded with ``round(float(v), 6)`` with negative zero normalized
+    to ``0.0``. Any JSON or UTF-8 encoding failure raises
+    ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    return _dump_aggregate_document(aggregate(paths))
+
+
+def _check_aggregate_document(document):
+    prefix = "aggregate: "
+    if not isinstance(document, dict):
+        raise TypeError("aggregate must be a dict")
+    if list(document.keys()) != list(_AGGREGATE_KEYS):
+        raise TypeError("aggregate keys must be in the order batches, summary")
+
+    batches = document["batches"]
+    if not isinstance(batches, list):
+        raise TypeError(prefix + "batches must be a list")
+    if len(batches) < 2:
+        raise ValueError(prefix + "batches must have at least 2 items")
+
+    counts = {"unknown": 0, "mud": 0, "sand": 0, "gravel": 0, "rock": 0}
+    result_count = 0
+    worst_key = None
+    worst_batch_index = 0
+    quality = "pass"
+    for i in range(len(batches)):
+        item_prefix = f"{prefix}batches[{i}]: "
+        try:
+            _check_batch_document(batches[i])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                item_prefix + f"must be a valid batch: {exc}"
+            ) from exc
+        batch = batches[i]
+        batch_unknown = 0
+        batch_result_count = 0
+        for item in batch["results"]:
+            name = item[0]
+            counts[name] += 1
+            batch_result_count += 1
+            if name == "unknown":
+                batch_unknown += 1
+        result_count += batch_result_count
+        key = (batch_unknown / batch_result_count, batch_unknown, -i)
+        if worst_key is None or key > worst_key:
+            worst_key = key
+            worst_batch_index = i
+        if batch["summary"]["quality"] != "pass":
+            quality = "fail"
+
+    unknown = counts["unknown"]
+    unknown_ratio = _round6(unknown / result_count)
+
+    summary = document["summary"]
+    summary_prefix = prefix + "summary: "
+    if not isinstance(summary, dict):
+        raise TypeError(summary_prefix + "must be a dict")
+    if list(summary.keys()) != list(_AGGREGATE_SUMMARY_KEYS):
+        raise TypeError(
+            summary_prefix
+            + "keys must be in the order batch_count, result_count, unknown, "
+            "counts, unknown_ratio, worst_batch_index, quality"
+        )
+
+    batch_count = summary["batch_count"]
+    if type(batch_count) is not int:
+        raise TypeError(summary_prefix + "batch_count must be a non-bool int")
+    if batch_count != len(batches):
+        raise ValueError(
+            summary_prefix + "batch_count must equal the number of batches"
+        )
+
+    total = summary["result_count"]
+    if type(total) is not int:
+        raise TypeError(summary_prefix + "result_count must be a non-bool int")
+    if total != result_count:
+        raise ValueError(
+            summary_prefix
+            + "result_count must equal the total number of results"
+        )
+
+    unknown_total = summary["unknown"]
+    if type(unknown_total) is not int:
+        raise TypeError(summary_prefix + "unknown must be a non-bool int")
+    if unknown_total != unknown:
+        raise ValueError(
+            summary_prefix
+            + "unknown must equal the total number of unknown results"
+        )
+
+    summary_counts = summary["counts"]
+    counts_prefix = summary_prefix + "counts: "
+    if not isinstance(summary_counts, dict):
+        raise TypeError(counts_prefix + "must be a dict")
+    if list(summary_counts.keys()) != list(_AGGREGATE_COUNT_KEYS):
+        raise TypeError(
+            counts_prefix
+            + "keys must be in the order unknown, mud, sand, gravel, rock"
+        )
+    for name in _AGGREGATE_COUNT_KEYS:
+        value = summary_counts[name]
+        if type(value) is not int:
+            raise TypeError(counts_prefix + f"{name} must be a non-bool int")
+        if value != counts[name]:
+            raise ValueError(
+                counts_prefix
+                + f"{name} must equal the total number of {name} results"
+            )
+
+    ratio = summary["unknown_ratio"]
+    if type(ratio) is not float:
+        raise TypeError(summary_prefix + "unknown_ratio must be a float")
+    if not math.isfinite(ratio):
+        raise ValueError(summary_prefix + "unknown_ratio must be finite")
+    if ratio == 0 and math.copysign(1.0, ratio) < 0:
+        raise ValueError(summary_prefix + "unknown_ratio must not be negative zero")
+    if ratio != unknown_ratio:
+        raise ValueError(
+            summary_prefix
+            + "unknown_ratio must equal round(float(unknown / result_count), 6)"
+        )
+
+    worst = summary["worst_batch_index"]
+    if type(worst) is not int:
+        raise TypeError(summary_prefix + "worst_batch_index must be a non-bool int")
+    if worst != worst_batch_index:
+        raise ValueError(
+            summary_prefix
+            + "worst_batch_index must be the index of the batch maximizing "
+            "(batch_unknown / batch_result_count, batch_unknown, -index)"
+        )
+
+    summary_quality = summary["quality"]
+    if type(summary_quality) is not str:
+        raise TypeError(summary_prefix + "quality must be a str")
+    if summary_quality != quality:
+        raise ValueError(
+            summary_prefix
+            + "quality must be 'pass' if and only if every batch quality "
+            "is 'pass'"
+        )
+
+
+def load_aggregate(path) -> dict:
+    """Load a :func:`dump_aggregate`-produced JSON aggregate from ``path``.
+
+    ``path`` must be a non-empty ``str``: a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``. The file
+    is opened in binary mode (``"rb"``) and read in full; a missing
+    file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError`` and every other ``OSError`` is propagated
+    unchanged. The file is not modified.
+
+    The bytes must be exactly those produced by :func:`dump_aggregate`
+    for the same value: compact UTF-8 JSON (``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``) with no BOM and no
+    trailing newline. A BOM, a trailing newline, a UTF-8 decoding
+    failure or a JSON parsing failure raises ``ValueError``; the
+    ``NaN``/``Infinity`` constants, any other non-finite token and
+    duplicate object keys are rejected.
+
+    The decoded value must be a JSON object with top-level keys exactly
+    in the order ``batches, summary``. ``batches`` must be an array of
+    at least two items, each satisfying the full :func:`load` return
+    structure (keys ``results, summary`` with all of its per-result and
+    per-summary rules). ``summary`` must have keys exactly in the order
+    ``batch_count, result_count, unknown, counts, unknown_ratio,
+    worst_batch_index, quality`` and, recomputed from the batches and
+    their ``results`` in their original order: ``batch_count`` must
+    equal the number of batches, ``result_count`` the total number of
+    results, ``unknown`` the total number of ``unknown`` results,
+    ``counts`` a dict with keys exactly in the order ``unknown, mud,
+    sand, gravel, rock`` mapping to the total non-bool int count of
+    each class, ``unknown_ratio`` the float
+    ``round(float(unknown / result_count), 6)`` (negative zero
+    normalized to ``0.0``), ``worst_batch_index`` the non-bool int
+    index of the batch maximizing ``(batch_unknown /
+    batch_result_count, batch_unknown, -index)`` computed from
+    unrounded values, and ``quality`` ``"pass"`` if and only if every
+    batch's ``summary.quality`` is ``"pass"``. The file bytes must also
+    equal the canonical re-serialization of the decoded value byte for
+    byte; any key-order, type, relation, parse or canonical-byte
+    mismatch raises ``ValueError``.
+
+    Returns the aggregate as a dict with the keys in the order above;
+    only the top-level ``batches`` array is restored to a tuple, every
+    other container stays a dict or list. The file is never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_json_pairs,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        _check_aggregate_document(parsed)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid aggregate: {exc}"
+        ) from exc
+
+    document = {
+        "batches": tuple(parsed["batches"]),
+        "summary": parsed["summary"],
+    }
+    canonical = _dump_aggregate_document(document)
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical dump_aggregate output"
+        )
+
+    return document
 
 
 def _resolved_export_path(path):

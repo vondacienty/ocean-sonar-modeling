@@ -362,8 +362,9 @@ ocean-sonar-modeling render-substrate substrate.json
 `trace`、`batch`。
 
 底质分类接口位于 `ocean_sonar.substrate`，该模块导出：
-`classify`、`batch`、`load`、`export`、`render`。其中 `export`、
-`render` 的契约如下。
+`classify`、`batch`、`load`、`aggregate`、`dump_aggregate`、
+`load_aggregate`、`export`、`render`。其中 `export`、`render` 的契约
+如下。
 
 ### `substrate.export(path, output) -> bytes`
 
@@ -410,6 +411,56 @@ ocean-sonar-modeling render-substrate substrate.json
 个值直接取自对应的 `[class, confidence]`。所有值直接取自 `D`，不重
 算、不重新排序：`int` 按十进制渲染，`str` 原样，`float` 用
 `format(v, ".6f")`（负零渲染为 `0.000000`）。
+
+### `substrate.dump_aggregate(paths) -> bytes`
+
+把 `aggregate` 的聚合结果编码为 JSON 字节串。
+
+执行时**仅调用一次** `aggregate(paths)`，不调用任何其他汇总函数；因
+此其全部校验顺序、异常（原样向上传播）与 `paths[i]: ` 下标前缀规则在
+此同样适用；输入与任何文件均不被修改。
+
+记 `A` 为其返回的 `dict`，编码对象即 `A` 本身：顶层键序保持
+`batches, summary`，所有值原样保留；唯一的结构转换是把 tuple（顶层
+`batches`）递归编码为 JSON 数组，其余容器仍为对象或数组。
+
+编码规范与 `batch` 一致：UTF-8 JSON，`ensure_ascii=False`、
+`separators=(",", ":")`、`allow_nan=False`，无缩进、无 BOM、无尾换
+行；聚合结果中的 `unknown_ratio` 已按
+`round(float(unknown / result_count), 6)` 保留 6 位小数并将负零归一
+化为 `0.0`。任何 JSON 或 UTF-8 编码失败抛 `ValueError`。返回
+`bytes`。
+
+### `substrate.load_aggregate(path) -> dict`
+
+从文件读回 `dump_aggregate` 生成的 JSON 聚合结果。
+
+`path` 必须为非空 `str`：非 `str` 抛 `TypeError`，空串抛
+`ValueError`。文件以二进制模式（`"rb"`）打开并整体读出；文件不存在
+抛 `FileNotFoundError`，路径为目录抛 `IsADirectoryError`，其余
+`OSError` 原样传播。文件不被修改。
+
+字节必须与 `dump_aggregate` 对同一值的输出完全一致：紧凑 UTF-8
+JSON，无 BOM、无尾换行；BOM、尾换行、UTF-8 解码失败或 JSON 解析失
+败均抛 `ValueError`，`NaN`/`Infinity` 等非常量 token 与重复对象键一
+律拒绝。
+
+解码值必须是顶层键序恰为 `batches, summary` 的对象：`batches` 为至
+少含 2 项的数组，每一项都必须满足 `load` 返回结构的全部规则（顶层
+键 `results, summary` 及其逐项、汇总规则）；`summary` 键序恰为
+`batch_count, result_count, unknown, counts, unknown_ratio,
+worst_batch_index, quality`，其中 `counts` 的键序恰为
+`unknown, mud, sand, gravel, rock`。按各批次及其 `results` 原序重
+算：批次数、结果总数、各类计数、`unknown_ratio`
+（`round(float(unknown / result_count), 6)`，负零归一化为
+`0.0`）、使未舍入元组 `(批unknown / 批result_count, 批unknown,
+-index)` 最大的批次下标；`quality` 仅当全部批次
+`summary.quality` 均为 `pass` 时为 `pass`。文件字节还必须与解码值
+的规范重编码逐字节相等；任何结构、类型、关系、解析或规范字节不匹配
+均抛 `ValueError`。
+
+返回保持原键序的 `dict`：仅顶层 `batches` 数组还原为 tuple，其余
+容器保持 dict/list。文件不被修改。
 
 ### 通用约定
 
