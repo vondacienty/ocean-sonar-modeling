@@ -50,6 +50,8 @@ __all__ = [
     "dump_trends",
     "load_trends",
     "render_trends",
+    "export_trends",
+    "load_trend_report",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -3052,6 +3054,204 @@ def render_trends(paths) -> str:
         _format_rendered_value(value) for value in aggregate["worst"]
     )
     return "\n".join(("TRENDS=" + trends_line, files_line, worst_line))
+
+
+_TREND_REPORT_KEYS = ("sources", "summary")
+
+
+def _dump_trend_report(sources, summary):
+    """Encode an ``export_trends`` report (sources plus a trends summary)."""
+    worst = summary["worst"]
+    document = {
+        "sources": list(sources),
+        "summary": {
+            "file_count": int(summary["file_count"]),
+            "changes": int(summary["changes"]),
+            "degraded": int(summary["degraded"]),
+            "coverage_delta": summary["coverage_delta"],
+            "score_delta": summary["score_delta"],
+            "worst": [
+                int(worst[0]),
+                int(worst[1]),
+                int(worst[2]),
+                int(worst[3]),
+                worst[4],
+                worst[5],
+            ],
+            "quality": summary["quality"],
+        },
+    }
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(f"trend report: could not be serialized to JSON: {exc}") from exc
+
+
+def export_trends(paths, output) -> bytes:
+    """Aggregate trend files into a sources-plus-summary JSON report.
+
+    Calls :func:`aggregate_trends` exactly once with ``paths`` — and no
+    other combining function — so its validation, first-error order,
+    exceptions (propagated unchanged) and ``"paths[i]: "`` index
+    prefixes all apply here as well, and its errors are reported before
+    any ``output`` error. Inputs and the loaded files are not modified.
+
+    ``output`` is validated only after that call: it must be a
+    non-empty ``str``; a non-str raises ``TypeError`` and an empty
+    ``str`` raises ``ValueError``.
+
+    With ``A`` the dict returned by :func:`aggregate_trends`, the
+    encoded object has top-level keys exactly in the order
+    ``sources, summary``: ``sources`` is a JSON array of the ``paths``
+    strings in their original order and ``summary`` is ``A`` itself,
+    encoded exactly as in :func:`dump_trends` (keys ``file_count,
+    changes, degraded, coverage_delta, score_delta, worst, quality``,
+    with ``worst`` the six-item JSON array). The JSON conventions are
+    therefore identical to :func:`dump_trends`: UTF-8,
+    ``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``, no indentation, no BOM and no trailing
+    newline; any JSON or UTF-8 encoding failure raises ``ValueError``.
+
+    Only after encoding succeeds is ``output`` opened in binary mode
+    (``"wb"``) and overwritten with exactly the encoded bytes; any
+    ``OSError`` from writing is propagated unchanged.
+
+    Returns the JSON document as ``bytes`` — the same bytes written to
+    ``output``.
+    """
+    aggregate = aggregate_trends(paths)
+
+    if not isinstance(output, str):
+        raise TypeError("output must be a str")
+    if output == "":
+        raise ValueError("output must not be empty")
+
+    data = _dump_trend_report(paths, aggregate)
+
+    with open(output, "wb") as handle:
+        handle.write(data)
+
+    return data
+
+
+def load_trend_report(path) -> dict:
+    """Load an :func:`export_trends`-produced JSON trend report.
+
+    ``path`` must be a non-empty ``str``: a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``. The file
+    is opened in binary mode (``"rb"``) and read in full; a missing
+    file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError`` and every other ``OSError`` is propagated
+    unchanged. The file is not modified.
+
+    Reading, the BOM and trailing-newline rejections, UTF-8/JSON
+    decoding, ``NaN``/``Infinity`` and duplicate-key rejection and the
+    canonical-byte rules all follow :func:`load_trends` exactly; the
+    bytes must be compact UTF-8 JSON with no BOM and no trailing
+    newline, byte-for-byte equal to the canonical
+    :func:`export_trends` output.
+
+    The decoded value must be a JSON object with top-level keys exactly
+    in the order ``sources, summary``. ``sources`` must be an array of
+    at least two items, each a non-empty ``str``. ``summary`` must
+    satisfy the full :func:`load_trends` contract (keys ``file_count,
+    changes, degraded, coverage_delta, score_delta, worst, quality``
+    with the same type, range, relation and rounding rules), and its
+    ``file_count`` must equal the number of sources. Any key-order,
+    type, emptiness, length or relation mismatch raises ``ValueError``.
+
+    Returns a dict with keys in the order ``sources, summary``; the
+    sources array and the summary ``worst`` array are both restored to
+    tuples and every other value is returned unchanged. The file is
+    never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_json_pairs,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        if not isinstance(parsed, dict):
+            raise TypeError("trend report must be a dict")
+        if list(parsed.keys()) != list(_TREND_REPORT_KEYS):
+            raise TypeError(
+                "trend report keys must be in the order sources, summary"
+            )
+
+        sources = parsed["sources"]
+        if not isinstance(sources, list):
+            raise TypeError("trend report: sources must be a list")
+        if len(sources) < 2:
+            raise ValueError(
+                "trend report: sources must contain at least 2 items"
+            )
+        for i in range(len(sources)):
+            source_prefix = f"trend report: sources[{i}]: "
+            if not isinstance(sources[i], str):
+                raise TypeError(source_prefix + "must be a str")
+            if sources[i] == "":
+                raise ValueError(source_prefix + "must not be empty")
+
+        summary = parsed["summary"]
+        _check_trends(summary)
+        if summary["file_count"] != len(sources):
+            raise ValueError(
+                "trend report: summary file_count must equal the number "
+                "of sources"
+            )
+
+        result = {
+            "sources": tuple(sources),
+            "summary": {
+                "file_count": summary["file_count"],
+                "changes": summary["changes"],
+                "degraded": summary["degraded"],
+                "coverage_delta": summary["coverage_delta"],
+                "score_delta": summary["score_delta"],
+                "worst": tuple(summary["worst"]),
+                "quality": summary["quality"],
+            },
+        }
+        canonical = _dump_trend_report(sources, summary)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid trend report: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical export_trends output"
+        )
+
+    return result
 
 
 def serialize_pair_gate_score_summary(

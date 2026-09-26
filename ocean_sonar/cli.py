@@ -6,7 +6,7 @@ import argparse
 import sys
 
 from . import __version__
-from .crosspoint import render_trends
+from .crosspoint import export_trends, render_trends
 from .report import rank_files
 
 
@@ -21,6 +21,11 @@ def main(argv: list[str] | None = None) -> int:
     trends_parser.add_argument("trend_first", metavar="TREND", help="first trend JSON file")
     trends_parser.add_argument("trend_second", metavar="TREND", help="second trend JSON file")
     trends_parser.add_argument("trend_rest", nargs="*", metavar="TREND", help="additional trend JSON files")
+    export_parser = sub.add_parser("export-trends", help="aggregate multi-file trend summaries into a JSON report")
+    export_parser.add_argument("export_first", metavar="TREND", help="first trend JSON file")
+    export_parser.add_argument("export_second", metavar="TREND", help="second trend JSON file")
+    export_parser.add_argument("export_rest", nargs="*", metavar="TREND", help="additional trend JSON files")
+    export_parser.add_argument("--output", required=True, help="output file overwritten with the trend report JSON")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -43,6 +48,15 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
         sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "export-trends":
+        paths = [args.export_first, args.export_second, *args.export_rest]
+        try:
+            export_trends(paths, args.output)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
         return 0
 
     parser.print_help()
