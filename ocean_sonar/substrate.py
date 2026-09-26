@@ -26,6 +26,7 @@ __all__ = [
     "load",
     "load_aggregate",
     "load_aggregate_report",
+    "load_aggregate_report_trend",
     "render",
     "render_aggregate",
     "serialize_aggregate_report",
@@ -1622,6 +1623,222 @@ def serialize_aggregate_report_trend(paths) -> bytes:
         raise ValueError(
             f"aggregate report trend: could not be serialized to JSON: {exc}"
         ) from exc
+
+
+_AGGREGATE_REPORT_TREND_KEYS = (
+    "count",
+    "changes",
+    "regressed",
+    "unknown_delta",
+    "unknown_ratio_delta",
+    "worst",
+    "quality",
+)
+
+
+def _check_aggregate_report_trend_float(value, name, prefix):
+    if type(value) is not float:
+        raise TypeError(prefix + f"{name} must be a float")
+    if not math.isfinite(value):
+        raise ValueError(prefix + f"{name} must be finite")
+    if not -1 <= value <= 1:
+        raise ValueError(prefix + f"{name} must be in [-1, 1]")
+    if value == 0 and math.copysign(1.0, value) < 0:
+        raise ValueError(prefix + f"{name} must not be negative zero")
+    if value != round(float(value), 6):
+        raise ValueError(prefix + f"{name} must equal round(float({name}), 6)")
+
+
+def _check_aggregate_report_trend(result):
+    """Validate a decoded aggregate report trend; return its normalized dict."""
+    prefix = "aggregate report trend: "
+    if not isinstance(result, dict):
+        raise TypeError("aggregate report trend must be a dict")
+    if list(result.keys()) != list(_AGGREGATE_REPORT_TREND_KEYS):
+        raise TypeError(
+            "aggregate report trend keys must be in the order "
+            "count, changes, regressed, unknown_delta, "
+            "unknown_ratio_delta, worst, quality"
+        )
+
+    count = result["count"]
+    if type(count) is not int:
+        raise TypeError(prefix + "count must be a non-bool int")
+    if count < 2:
+        raise ValueError(prefix + "count must be >= 2")
+
+    changes = result["changes"]
+    if type(changes) is not int:
+        raise TypeError(prefix + "changes must be a non-bool int")
+    if changes != count - 1:
+        raise ValueError(prefix + "changes must equal count - 1")
+
+    regressed = result["regressed"]
+    if type(regressed) is not int:
+        raise TypeError(prefix + "regressed must be a non-bool int")
+    if not 0 <= regressed <= changes:
+        raise ValueError(prefix + "regressed must be in [0, changes]")
+
+    unknown_delta = result["unknown_delta"]
+    if type(unknown_delta) is not int:
+        raise TypeError(prefix + "unknown_delta must be a non-bool int")
+
+    _check_aggregate_report_trend_float(
+        result["unknown_ratio_delta"], "unknown_ratio_delta", prefix
+    )
+
+    worst = result["worst"]
+    worst_prefix = prefix + "worst: "
+    if not isinstance(worst, list):
+        raise TypeError(worst_prefix + "must be a list")
+    if len(worst) != 4:
+        raise ValueError(worst_prefix + "must have 4 elements")
+
+    index = worst[0]
+    if type(index) is not int:
+        raise TypeError(worst_prefix + "i must be a non-bool int")
+    if not 1 <= index < count:
+        raise ValueError(worst_prefix + "i must be in [1, count)")
+
+    du = worst[1]
+    if type(du) is not int:
+        raise TypeError(worst_prefix + "du must be a non-bool int")
+
+    _check_aggregate_report_trend_float(worst[2], "dr", worst_prefix)
+
+    worst_quality = worst[3]
+    if type(worst_quality) is not str:
+        raise TypeError(worst_prefix + "quality must be a str")
+    if worst_quality not in ("pass", "fail"):
+        raise ValueError(worst_prefix + "quality must be 'pass' or 'fail'")
+
+    quality = result["quality"]
+    if type(quality) is not str:
+        raise TypeError(prefix + "quality must be a str")
+    if quality not in ("pass", "fail"):
+        raise ValueError(prefix + "quality must be 'pass' or 'fail'")
+    if (quality == "pass") != (regressed == 0):
+        raise ValueError(
+            prefix + "quality must be 'pass' if and only if regressed is 0"
+        )
+
+    return {
+        "count": int(count),
+        "changes": int(changes),
+        "regressed": int(regressed),
+        "unknown_delta": int(unknown_delta),
+        "unknown_ratio_delta": result["unknown_ratio_delta"],
+        "worst": (int(index), int(du), worst[2], worst_quality),
+        "quality": quality,
+    }
+
+
+def _dump_aggregate_report_trend(result):
+    document = {
+        "count": int(result["count"]),
+        "changes": int(result["changes"]),
+        "regressed": int(result["regressed"]),
+        "unknown_delta": int(result["unknown_delta"]),
+        "unknown_ratio_delta": result["unknown_ratio_delta"],
+        "worst": [
+            int(result["worst"][0]),
+            int(result["worst"][1]),
+            result["worst"][2],
+            result["worst"][3],
+        ],
+        "quality": result["quality"],
+    }
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"aggregate report trend: could not be serialized to JSON: {exc}"
+        ) from exc
+
+
+def load_aggregate_report_trend(path) -> dict:
+    """Load a :func:`serialize_aggregate_report_trend`-produced JSON trend from ``path``.
+
+    ``path`` validation, binary (``"rb"``) reading and system
+    exceptions (a missing file raises ``FileNotFoundError``, a directory
+    raises ``IsADirectoryError`` and every other ``OSError`` is
+    propagated unchanged), the BOM and trailing-newline rejection,
+    UTF-8/JSON decoding, the rejection of ``NaN``/``Infinity`` and
+    duplicate keys, the canonical byte-for-byte re-serialization check
+    and the file non-modification contract all follow
+    :func:`load_aggregate`; a non-``str`` path raises ``TypeError``, an
+    empty ``str`` raises ``ValueError`` and any parse, decoding,
+    structure or canonical-byte violation raises ``ValueError``. The
+    file is not modified.
+
+    The decoded value must be a JSON object with top-level keys exactly
+    in the order ``count, changes, regressed, unknown_delta,
+    unknown_ratio_delta, worst, quality`` — duplicated, missing or extra
+    keys are rejected. The first four values must be non-bool ints:
+    ``count`` must be ``>= 2``, ``changes`` must equal ``count - 1`` and
+    ``regressed`` must be in ``[0, changes]``.
+    ``unknown_ratio_delta`` must be a finite float in ``[-1, 1]``, equal
+    to ``round(float(v), 6)`` and must not be negative zero. ``worst``
+    must be the four-item array ``[i, du, dr, q]``: ``i`` and ``du``
+    must be non-bool ints with ``1 <= i < count``; ``dr`` must be a
+    finite float in ``[-1, 1]``, equal to ``round(float(v), 6)`` and
+    must not be negative zero; ``q`` must be ``"pass"`` or ``"fail"``.
+    The top-level ``quality`` must be ``"pass"`` or ``"fail"`` and
+    ``"pass"`` if and only if ``regressed`` is ``0``. Any key-order,
+    type, range or relation mismatch raises ``ValueError``.
+
+    Returns the trend as a dict with the keys in the order above; only
+    the ``worst`` array is restored to a tuple, every other value stays
+    as decoded. The file is never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_json_pairs,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        result = _check_aggregate_report_trend(parsed)
+        canonical = _dump_aggregate_report_trend(result)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid aggregate report trend: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical "
+            "serialize_aggregate_report_trend output"
+        )
+
+    return result
 
 
 def export_aggregate(path, output) -> bytes:
