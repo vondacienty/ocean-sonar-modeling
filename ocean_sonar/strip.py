@@ -9,11 +9,12 @@ strip are shifted by that offset before the strip is accumulated.
 
 from __future__ import annotations
 
+import json
 import math
 
 from .svp import _is_real_number
 
-__all__ = ["merge"]
+__all__ = ["merge", "batch"]
 
 _FIELDS = ("x", "y", "d")
 
@@ -128,3 +129,95 @@ def merge(strips, tolerance=1.0):
             values.append(0.0 if value == 0 else value)
         results.append(tuple(values))
     return tuple(results)
+
+
+def batch(strips, tolerance=1.0, max_adjustment=1.0) -> bytes:
+    """Merge a batch of strips and serialize the results as JSON bytes.
+
+    Calls :func:`merge` exactly once with ``(strips, tolerance)`` — its
+    validation and exceptions apply unchanged and the input is not
+    modified. ``max_adjustment`` is validated after the merge: it must
+    be a non-bool int/float with ``max_adjustment >= 0``; finiteness is
+    checked only for a float, so a non-negative int of any magnitude is
+    valid. A bool or non-number raises ``TypeError`` and a non-finite
+    float or a negative value raises ``ValueError``.
+
+    With ``M`` the tuple returned by :func:`merge`, ``M`` is split back
+    into per-strip segments using the original strip lengths. Each strip
+    ``i`` with ``n_i`` points yields the adjustment
+    ``a = round(float(math.fsum(original d - merged d) / n_i), 6)``
+    (negative zero normalized to ``0.0``) and the flag
+    ``w = abs(a) <= max_adjustment``.
+
+    The returned document has top-level keys exactly in the order
+    ``results, summary``: ``results`` is an array in the order of ``M``
+    of ``[x, y, d]`` arrays with the values taken unchanged from each
+    ``M[i]``; ``summary`` has keys exactly in the order ``strip_count,
+    point_count, pass_count, max_abs_adjustment, quality`` where
+    ``strip_count`` is the int number of strips, ``point_count`` the int
+    total number of points, ``pass_count`` the int number of strips
+    whose ``w`` is true, ``max_abs_adjustment`` is
+    ``round(float(max(abs(a))), 6)`` and ``quality`` is ``"pass"`` only
+    when every ``w`` is true, otherwise ``"fail"``.
+
+    The object is encoded as UTF-8 JSON with ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation, no
+    BOM and no trailing newline, as in ``attitude.batch``. Floats are
+    first rounded with ``round(float(v), 6)`` and negative zero is
+    normalized to ``0.0``. Any JSON or UTF-8 encoding failure raises
+    ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    merged = merge(strips, tolerance)
+
+    if not _is_real_number(max_adjustment):
+        raise TypeError("max_adjustment must be a non-bool int or float")
+    if isinstance(max_adjustment, float) and not math.isfinite(max_adjustment):
+        raise ValueError("max_adjustment must be finite")
+    if not max_adjustment >= 0:
+        raise ValueError("max_adjustment must be >= 0")
+
+    def rounded_float(value):
+        value = round(float(value), 6)
+        return 0.0 if value == 0 else value
+
+    adjustments = []
+    index = 0
+    for strip in strips:
+        size = len(strip)
+        segment = merged[index:index + size]
+        index += size
+        mean = math.fsum(
+            strip[j][2] - segment[j][2] for j in range(size)
+        ) / size
+        adjustments.append(rounded_float(mean))
+    within = [abs(a) <= max_adjustment for a in adjustments]
+
+    strip_count = int(len(strips))
+    point_count = int(len(merged))
+    pass_count = int(sum(1 for w in within if w))
+    max_abs_adjustment = rounded_float(max(abs(a) for a in adjustments))
+    document = {
+        "results": [
+            [rounded_float(x), rounded_float(y), rounded_float(d)]
+            for x, y, d in merged
+        ],
+        "summary": {
+            "strip_count": strip_count,
+            "point_count": point_count,
+            "pass_count": pass_count,
+            "max_abs_adjustment": max_abs_adjustment,
+            "quality": "pass" if pass_count == strip_count else "fail",
+        },
+    }
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(f"batch: could not be serialized to JSON: {exc}") from exc

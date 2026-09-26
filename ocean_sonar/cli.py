@@ -25,6 +25,7 @@ from .crosspoint import (
 )
 from .outlier import batch as _outlier_batch
 from .report import rank_files
+from .strip import batch as _strip_batch
 from .svp import batch as _svp_batch
 from .tide import batch as _tide_batch
 
@@ -33,6 +34,7 @@ _SVP_BATCH_KEYS = ("z", "c", "rays", "z0", "limit")
 _TIDE_BATCH_KEYS = ("times", "depths", "tide_times", "levels", "datum", "limit")
 _ATTITUDE_BATCH_KEYS = ("observations", "limit")
 _OUTLIER_BATCH_KEYS = ("depths", "threshold", "max_outlier_ratio")
+_STRIP_BATCH_KEYS = ("strips", "tolerance", "max_adjustment")
 
 
 def _reject_request_constant(value):
@@ -191,6 +193,42 @@ def _outlier_batch_text(path):
     return _outlier_batch(**request).decode("utf-8")
 
 
+def _strip_batch_text(path):
+    """Read a ``strip-batch`` request file and run :func:`strip.batch` once.
+
+    The file must contain one JSON object whose keys follow the
+    ``batch(strips, tolerance=1.0, max_adjustment=1.0)`` signature
+    order with no extra keys; any invalid content raises ``ValueError``.
+    Returns the UTF-8 decoded text of the ``batch`` result bytes.
+    """
+    with open(path, "rb") as handle:
+        data = handle.read()
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"request file is not valid UTF-8: {exc}") from exc
+    try:
+        request = json.loads(
+            text,
+            parse_constant=_reject_request_constant,
+            object_pairs_hook=_reject_request_duplicate_keys,
+        )
+    except ValueError as exc:
+        raise ValueError(f"request file is not valid JSON: {exc}") from exc
+    if not isinstance(request, dict):
+        raise ValueError("request must be a JSON object")
+    keys = list(request)
+    if any(key not in _STRIP_BATCH_KEYS for key in keys):
+        raise ValueError("request must not contain extra keys")
+    positions = [_STRIP_BATCH_KEYS.index(key) for key in keys]
+    if positions != sorted(positions):
+        raise ValueError("request keys must follow the batch signature order")
+    for required in ("strips",):
+        if required not in request:
+            raise ValueError(f"request must contain {required!r}")
+    return _strip_batch(**request).decode("utf-8")
+
+
 def _resolved_path(path):
     """Normalized absolute path with symlinks resolved, for non-existing files."""
     return os.path.normcase(os.path.realpath(os.path.abspath(path)))
@@ -304,6 +342,8 @@ def main(argv: list[str] | None = None) -> int:
     attitude_batch_parser.add_argument("request", metavar="REQUEST", help="batch request JSON file")
     outlier_batch_parser = sub.add_parser("outlier-batch", help="detect outliers in a batch of depths from a request JSON file and print the result JSON")
     outlier_batch_parser.add_argument("request", metavar="REQUEST", help="batch request JSON file")
+    strip_batch_parser = sub.add_parser("strip-batch", help="merge a batch of overlapping strips from a request JSON file and print the result JSON")
+    strip_batch_parser.add_argument("request", metavar="REQUEST", help="batch request JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -459,6 +499,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "outlier-batch":
         try:
             text = _outlier_batch_text(args.request)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "strip-batch":
+        try:
+            text = _strip_batch_text(args.request)
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
