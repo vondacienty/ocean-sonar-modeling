@@ -9,6 +9,7 @@ import sys
 import tempfile
 
 from . import __version__
+from .attitude import batch as _attitude_batch
 from .crosspoint import (
     audit_comparisons,
     export_audit,
@@ -29,6 +30,7 @@ from .tide import batch as _tide_batch
 
 _SVP_BATCH_KEYS = ("z", "c", "rays", "z0", "limit")
 _TIDE_BATCH_KEYS = ("times", "depths", "tide_times", "levels", "datum", "limit")
+_ATTITUDE_BATCH_KEYS = ("observations", "limit")
 
 
 def _reject_request_constant(value):
@@ -113,6 +115,42 @@ def _tide_batch_text(path):
         if required not in request:
             raise ValueError(f"request must contain {required!r}")
     return _tide_batch(**request).decode("utf-8")
+
+
+def _attitude_batch_text(path):
+    """Read an ``attitude-batch`` request file and run :func:`attitude.batch` once.
+
+    The file must contain one JSON object whose keys follow the
+    ``batch(observations, limit=1.0)`` signature order with no extra
+    keys; any invalid content raises ``ValueError``. Returns the UTF-8
+    decoded text of the ``batch`` result bytes.
+    """
+    with open(path, "rb") as handle:
+        data = handle.read()
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"request file is not valid UTF-8: {exc}") from exc
+    try:
+        request = json.loads(
+            text,
+            parse_constant=_reject_request_constant,
+            object_pairs_hook=_reject_request_duplicate_keys,
+        )
+    except ValueError as exc:
+        raise ValueError(f"request file is not valid JSON: {exc}") from exc
+    if not isinstance(request, dict):
+        raise ValueError("request must be a JSON object")
+    keys = list(request)
+    if any(key not in _ATTITUDE_BATCH_KEYS for key in keys):
+        raise ValueError("request must not contain extra keys")
+    positions = [_ATTITUDE_BATCH_KEYS.index(key) for key in keys]
+    if positions != sorted(positions):
+        raise ValueError("request keys must follow the batch signature order")
+    for required in ("observations",):
+        if required not in request:
+            raise ValueError(f"request must contain {required!r}")
+    return _attitude_batch(**request).decode("utf-8")
 
 
 def _resolved_path(path):
@@ -224,6 +262,8 @@ def main(argv: list[str] | None = None) -> int:
     svp_batch_parser.add_argument("request", metavar="REQUEST", help="batch request JSON file")
     tide_batch_parser = sub.add_parser("tide-batch", help="reduce a batch of soundings from a request JSON file and print the result JSON")
     tide_batch_parser.add_argument("request", metavar="REQUEST", help="batch request JSON file")
+    attitude_batch_parser = sub.add_parser("attitude-batch", help="correct a batch of observations from a request JSON file and print the result JSON")
+    attitude_batch_parser.add_argument("request", metavar="REQUEST", help="batch request JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -361,6 +401,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "tide-batch":
         try:
             text = _tide_batch_text(args.request)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "attitude-batch":
+        try:
+            text = _attitude_batch_text(args.request)
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
