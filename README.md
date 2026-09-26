@@ -41,6 +41,7 @@ ocean-sonar-modeling --help     # 打印用法
 `load_quality_batch`、`aggregate_quality_batches`、
 `dump_aggregate`、`load_aggregate`、`trend`、
 `serialize_trend`、`render_trend`、`load_trend`、
+`load_trends`、
 `serialize_pair_gate_score_summary`、`render_pair_gate_score_summary`、
 `load_pair_gate_score_summary`。
 
@@ -397,6 +398,31 @@ quality` 的对象，缺失、额外键或键序错误均抛 `ValueError`。前�
 `quality` 仅取 `pass`/`fail`，且当且仅当 `degraded = 0` 时为
 `pass`。文件字节还必须与解码值的规范重编码逐字节相等；任何类型、
 范围、关系或规范字节不匹配均抛 `ValueError`。
+
+返回保持原键序的 `dict`：仅 `worst` 数组还原为 tuple，其余值原样
+返回。文件不被修改。
+
+### `load_trends(path) -> dict`
+
+从文件读回 `dump_trends` 生成的 JSON 多文件趋势汇总结果；`path`
+校验、`"rb"` 读取与系统异常（文件不存在抛 `FileNotFoundError`、
+路径为目录抛 `IsADirectoryError`、其余 `OSError` 原样传播）、BOM 与
+尾换行拒绝、UTF-8/JSON/`NaN`/`Infinity`/重复键处理、规范重编码逐字节
+核对及文件不变性，规则与 `load_trend` 完全一致。
+
+解码值必须是键序恰为
+`file_count, changes, degraded, coverage_delta, score_delta, worst,
+quality` 的对象，重复、缺失、额外键或键序错误均抛 `ValueError`。前三
+项为非布尔 `int`：`file_count >= 2`、`changes > 0`、
+`degraded ∈ [0, changes]`；两个 delta 为有限非布尔 float，
+`coverage_delta ∈ [-1, 1]`、`score_delta ∈ [-100, 100]`。
+`worst` 为六元素数组 `[j, i, b, r, dc, ds]`：前四项为非布尔 `int`
+且 `0 ≤ j < file_count`、`i >= 1`、`b`/`r >= 0`；`dc`/`ds` 为有限
+非布尔 float，范围分别同两个 delta。所有 float 必须等于
+`round(float(v), 6)` 且禁用负零；`quality` 仅取 `pass`/`fail`，且当
+且仅当 `degraded = 0` 时为 `pass`。文件字节还必须与解码值的规范重
+编码逐字节相等；任何解析、键序、类型、范围、关系或规范字节不匹配均
+抛 `ValueError`。
 
 返回保持原键序的 `dict`：仅 `worst` 数组还原为 tuple，其余值原样
 返回。文件不被修改。
