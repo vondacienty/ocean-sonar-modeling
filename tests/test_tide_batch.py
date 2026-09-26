@@ -120,6 +120,25 @@ def test_batch_limit_zero_allowed():
     assert document["summary"]["quality"] == "pass"
 
 
+def test_batch_limit_huge_non_negative_int_allowed():
+    # Regression: finiteness is only checked for floats, so a non-negative
+    # int of any magnitude is a valid limit and every flag is within it.
+    document = decode(
+        tide.batch(
+            [0.5, 1.0], [10.0, 12.0], [0, 1], [1.0, 3.0],
+            datum=0.5, limit=10 ** 100,
+        )
+    )
+    assert document["results"] == [[8.5, -1.5, True], [9.5, -2.5, True]]
+    assert document["summary"]["quality"] == "pass"
+    document = decode(
+        tide.batch(
+            [0.5], [10.0], [0, 1], [1.0, 3.0], datum=0.5, limit=10 ** 1000
+        )
+    )
+    assert document["results"] == [[8.5, -1.5, True]]
+
+
 def test_batch_inputs_not_modified():
     times = [0.5, 1.0]
     depths = [10.0, 12.0]
