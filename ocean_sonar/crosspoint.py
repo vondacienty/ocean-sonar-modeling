@@ -63,6 +63,7 @@ __all__ = [
     "load_audit",
     "export_audit",
     "render_audit",
+    "serialize_audit_report",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -4090,6 +4091,102 @@ def render_audit(path) -> str:
         _format_rendered_value(value) for value in result["worst"]
     )
     return "\n".join((audit_line, worst_line))
+
+
+def serialize_audit_report(path) -> bytes:
+    """Serialize a :func:`load_audit`-loaded audit as a JSON report.
+
+    Calls :func:`load_audit` exactly once with ``path`` — and no other
+    loading or combining function — so its validation, exceptions
+    (propagated unchanged) and file non-modification contract all apply
+    here as well: a non-``str`` path raises ``TypeError``, an empty
+    ``str`` raises ``ValueError``, a missing file raises
+    ``FileNotFoundError``, a directory raises ``IsADirectoryError``,
+    every other ``OSError`` is propagated unchanged and any parse,
+    structure or canonical-byte violation raises ``ValueError``. The
+    file is not modified and the loaded audit ``A`` is never mutated or
+    augmented.
+
+    With ``A`` the dict returned by :func:`load_audit`,
+    ``files = A["files"]``, ``changes = A["changes"]`` and
+    ``failed = A["failed"]``, the encoded object has top-level keys
+    exactly in the order ``schema_version, source, summary, worst,
+    quality``:
+
+    * ``schema_version`` is the non-bool int ``1``;
+    * ``source`` is an object with keys in the order ``path, kind``,
+      whose values are the original ``path`` and the fixed string
+      ``"audit"``;
+    * ``summary`` is an object with keys in the order ``files, changes,
+      failed, passed, pass_ratio``; ``files``, ``changes`` and
+      ``failed`` are taken directly from ``A`` as ints,
+      ``passed = changes - failed`` is an int and
+      ``pass_ratio = round(float(passed / changes), 6)`` is a float
+      with negative zero normalized to ``0.0``;
+    * ``worst`` is an object with keys in the order
+      ``file_index, index, degraded_delta, coverage_delta,
+      score_delta, quality``, whose six values are the six items of
+      ``A["worst"]`` in their original order — the worst item is never
+      recomputed or re-sorted;
+    * ``quality`` is ``A["quality"]``.
+
+    The object is encoded as UTF-8 JSON with ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation, no
+    BOM and no trailing newline, exactly as in :func:`serialize_audit`;
+    the two deltas and ``pass_ratio`` are written as floats rounded to 6
+    decimals at write time with negative zero normalized to ``0.0``,
+    the counts are written in decimal as ints and strings are copied
+    as-is. Any JSON or UTF-8 encoding failure raises ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    result = load_audit(path)
+    worst = result["worst"]
+
+    def rounded_float(value):
+        value = round(float(value), 6)
+        return 0.0 if value == 0 else value
+
+    changes = int(result["changes"])
+    failed = int(result["failed"])
+    passed = changes - failed
+    pass_ratio = round(float(passed / changes), 6)
+    if pass_ratio == 0:
+        pass_ratio = 0.0
+
+    document = {
+        "schema_version": 1,
+        "source": {
+            "path": path,
+            "kind": "audit",
+        },
+        "summary": {
+            "files": int(result["files"]),
+            "changes": changes,
+            "failed": failed,
+            "passed": passed,
+            "pass_ratio": pass_ratio,
+        },
+        "worst": {
+            "file_index": int(worst[0]),
+            "index": int(worst[1]),
+            "degraded_delta": int(worst[2]),
+            "coverage_delta": rounded_float(worst[3]),
+            "score_delta": rounded_float(worst[4]),
+            "quality": worst[5],
+        },
+        "quality": result["quality"],
+    }
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(f"audit: could not be serialized to JSON: {exc}") from exc
 
 
 def render_trends(paths) -> str:

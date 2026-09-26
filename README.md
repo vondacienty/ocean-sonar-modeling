@@ -153,6 +153,7 @@ ocean-sonar-modeling render-audit audit.json
 `load_trend_report`、
 `serialize_comparison`、`render_comparison`、`load_comparison`、
 `audit_comparisons`、`export_audit`、`render_audit`、
+`serialize_audit_report`、
 `serialize_pair_gate_score_summary`、`render_pair_gate_score_summary`、
 `load_pair_gate_score_summary`。
 
@@ -772,3 +773,39 @@ WORST=<file_index>,<index>,<degraded_delta>,<coverage_delta>,<score_delta>,<qual
 `A["quality"]`；`WORST` 行的六个值依次为 `A["worst"]` 的六项原值。所有
 值直接取自 `A`，不重算、不重新排序：`int` 按十进制渲染，`str` 原样，
 `float` 用 `format(v, ".6f")`（负零渲染为 `0.000000`）。
+
+### `serialize_audit_report(path) -> bytes`
+
+把一份审计 JSON 转写为带模式版本与来源信息的 JSON 报告。
+
+执行时**仅调用一次** `load_audit(path)` 得到 `A`，不调用任何其他加载或
+汇总函数；因此 `path` 的校验契约、异常与文件不变性完全沿用
+`load_audit`：非 `str` 抛 `TypeError`，空串抛 `ValueError`，文件缺失抛
+`FileNotFoundError`，目录抛 `IsADirectoryError`，其余 `OSError` 原样
+传播，解析、结构或规范字节非法抛 `ValueError`。输入文件不会被修改，
+`A` 本身也不被修改或增补。
+
+记 `files = A["files"]`、`changes = A["changes"]`、
+`failed = A["failed"]`，编码对象顶层键序恰为
+`schema_version, source, summary, worst, quality`：
+
+- `schema_version`：非 bool 的整数 `1`；
+- `source`：键序 `path, kind`，值依次为原 `path` 与固定字符串
+  `"audit"`；
+- `summary`：键序 `files, changes, failed, passed, pass_ratio`；
+  `files`、`changes`、`failed` 直接取自 `A`（`int`），
+  `passed = changes - failed` 为 `int`，
+  `pass_ratio = round(float(passed / changes), 6)` 为 `float`
+  （负零归一化为 `0.0`）；
+- `worst`：键序
+  `file_index, index, degraded_delta, coverage_delta, score_delta,
+  quality`，六个值依次取 `A["worst"]` 的六项，不重算最差项、不重新
+  排序；
+- `quality`：取 `A["quality"]`。
+
+编码规范沿用 `serialize_audit`：UTF-8 JSON，`ensure_ascii=False`、
+`separators=(",", ":")`、`allow_nan=False`，无缩进、无 BOM、无尾
+换行；两个 delta 与 `pass_ratio` 在写入时经
+`round(float(v), 6)` 并将负零归一化为 `0.0`，计数值以十进制整数
+输出，`str` 原样插入。任何 JSON 或 UTF-8 编码失败抛出
+`ValueError`。返回 `bytes`。
