@@ -121,6 +121,20 @@ ocean-sonar-modeling audit-comparisons comparison_a.json comparison_b.json [comp
 ocean-sonar-modeling export-audit comparison_a.json comparison_b.json [comparison_c.json ...] --output audit.json
 ```
 
+### `render-audit AUDIT`
+
+把一份 `serialize_audit`/`export-audit` 生成的审计 JSON 渲染为两行汇总
+文本。等价于**仅调用一次** `ocean_sonar.crosspoint.render_audit(path)`：
+成功时 stdout 输出其返回的两行文本（`AUDIT=...`、`WORST=...`）加一个
+换行，stderr 为空，退出码 0；文件不存在、内容损坏等错误时 stdout 为空，
+stderr 严格输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数
+缺失或多余属于参数解析错误，退出码 2 且不调用业务函数。输入文件不会被
+修改。
+
+```bash
+ocean-sonar-modeling render-audit audit.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -138,7 +152,7 @@ ocean-sonar-modeling export-audit comparison_a.json comparison_b.json [compariso
 `load_trends`、`render_trends`、`export_trends`、
 `load_trend_report`、
 `serialize_comparison`、`render_comparison`、`load_comparison`、
-`audit_comparisons`、`export_audit`、
+`audit_comparisons`、`export_audit`、`render_audit`、
 `serialize_pair_gate_score_summary`、`render_pair_gate_score_summary`、
 `load_pair_gate_score_summary`。
 
@@ -736,3 +750,25 @@ quality)`，其中文件下标、`index`、`degraded_delta` 为 `int`，
 `os.fsync()` 后用 `os.replace` 原子替换 `output`。替换前发生失败会清除
 临时文件且既有 `output` 逐字节不变；`OSError` 原样传播。返回值与写入
 文件的字节为同一份 `bytes`。
+
+### `render_audit(path) -> str`
+
+把一份审计 JSON 渲染为两行汇总文本。
+
+执行时**仅调用一次** `load_audit(path)` 得到 `A`，不调用任何其他加载或
+汇总函数；因此 `path` 的校验契约与异常完全沿用 `load_audit`：非 `str`
+抛 `TypeError`，空串抛 `ValueError`，文件缺失抛 `FileNotFoundError`，
+目录抛 `IsADirectoryError`，其余 `OSError` 原样传播，解析、结构或规范
+字节非法抛 `ValueError`。输入文件不会被修改。
+
+返回以 `\n` 连接、无尾换行的两行：
+
+```
+AUDIT=<files>,<changes>,<failed>,<quality>
+WORST=<file_index>,<index>,<degraded_delta>,<coverage_delta>,<score_delta>,<quality>
+```
+
+`AUDIT` 行的四个值依次为 `A["files"]`、`A["changes"]`、`A["failed"]`、
+`A["quality"]`；`WORST` 行的六个值依次为 `A["worst"]` 的六项原值。所有
+值直接取自 `A`，不重算、不重新排序：`int` 按十进制渲染，`str` 原样，
+`float` 用 `format(v, ".6f")`（负零渲染为 `0.000000`）。

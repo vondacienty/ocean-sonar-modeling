@@ -13,6 +13,7 @@ from .crosspoint import (
     audit_comparisons,
     export_audit,
     export_trends,
+    render_audit,
     render_comparison,
     render_trends,
     serialize_comparison,
@@ -111,6 +112,8 @@ def main(argv: list[str] | None = None) -> int:
     export_audit_parser.add_argument("audit_second", metavar="FILE", help="second comparison JSON file")
     export_audit_parser.add_argument("audit_rest", nargs="*", metavar="FILE", help="additional comparison JSON files")
     export_audit_parser.add_argument("--output", required=True, help="output file atomically overwritten with the audit JSON")
+    render_audit_parser = sub.add_parser("render-audit", help="render one audit JSON file as two summary lines")
+    render_audit_parser.add_argument("audit", metavar="AUDIT", help="audit JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -186,6 +189,15 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
+        return 0
+
+    if args.command == "render-audit":
+        try:
+            text = render_audit(args.audit)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
         return 0
 
     parser.print_help()
