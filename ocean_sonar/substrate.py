@@ -30,6 +30,7 @@ __all__ = [
     "load_aggregate_report_trend",
     "render",
     "render_aggregate",
+    "render_aggregate_report",
     "render_aggregate_report_trend",
     "serialize_aggregate_report",
     "serialize_aggregate_report_trend",
@@ -1436,6 +1437,97 @@ def load_aggregate_report(path) -> dict:
         )
 
     return result
+
+
+def render_aggregate_report(path) -> str:
+    """Render a :func:`load_aggregate_report`-loaded report as three lines.
+
+    Calls :func:`load_aggregate_report` exactly once with ``path`` — and
+    no other loading or combining function — so its validation,
+    exceptions (propagated unchanged), canonical-byte checks and file
+    non-modification contract all apply here as well: a non-``str`` path
+    raises ``TypeError``, an empty ``str`` raises ``ValueError``, a
+    missing file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError``, every other ``OSError`` is propagated
+    unchanged and any parse, structure or canonical-byte violation
+    raises ``ValueError``. The file is not modified.
+
+    With ``R`` the dict returned by :func:`load_aggregate_report`,
+    returns three lines joined by ``"\\n"`` with no trailing newline.
+    The first line is::
+
+        REPORT=<schema_version>,<path>,<kind>,<quality>
+
+    with ``schema_version`` taken from ``R["schema_version"]``, ``path``
+    the JSON encoding of ``R["source"]["path"]`` produced by
+    ``json.dumps(v, ensure_ascii=False, separators=(",", ":"))``,
+    ``kind`` taken from ``R["source"]["kind"]`` and ``quality`` from
+    ``R["quality"]``. The second line is::
+
+        SUMMARY=<batch_count>,<result_count>,<unknown>,<unknown_ratio>,<worst_batch_index>,<quality>;COUNTS=<unknown>,<mud>,<sand>,<gravel>,<rock>
+
+    with the six ``SUMMARY`` values taken from ``R["summary"]`` in its
+    key order and the five ``COUNTS`` values taken from
+    ``R["summary"]["counts"]`` in its key order. The third line is::
+
+        WORST=<index>,<count>,<unknown>,<quality>
+
+    with the four values taken from ``R["worst"]`` in its key order.
+    Values are taken with no recomputation or re-sorting: ints are
+    formatted in decimal, strings are copied as-is and floats use
+    ``format(v, ".6f")`` (negative zero rendered as ``"0.000000"``).
+    """
+    report = load_aggregate_report(path)
+    source = report["source"]
+    summary = report["summary"]
+    counts = summary["counts"]
+    worst = report["worst"]
+    lines = [
+        "REPORT="
+        + ",".join(
+            (
+                _format_rendered_value(report["schema_version"]),
+                json.dumps(
+                    source["path"],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                _format_rendered_value(source["kind"]),
+                _format_rendered_value(report["quality"]),
+            )
+        ),
+        "SUMMARY="
+        + ",".join(
+            (
+                _format_rendered_value(summary["batch_count"]),
+                _format_rendered_value(summary["result_count"]),
+                _format_rendered_value(summary["unknown"]),
+                _format_rendered_value(summary["unknown_ratio"]),
+                _format_rendered_value(summary["worst_batch_index"]),
+                _format_rendered_value(summary["quality"]),
+            )
+        )
+        + ";COUNTS="
+        + ",".join(
+            (
+                _format_rendered_value(counts["unknown"]),
+                _format_rendered_value(counts["mud"]),
+                _format_rendered_value(counts["sand"]),
+                _format_rendered_value(counts["gravel"]),
+                _format_rendered_value(counts["rock"]),
+            )
+        ),
+        "WORST="
+        + ",".join(
+            (
+                _format_rendered_value(worst["index"]),
+                _format_rendered_value(worst["count"]),
+                _format_rendered_value(worst["unknown"]),
+                _format_rendered_value(worst["quality"]),
+            )
+        ),
+    ]
+    return "\n".join(lines)
 
 
 def aggregate_report_trend(paths) -> dict:

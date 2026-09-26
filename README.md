@@ -438,6 +438,23 @@ stdout 输出其返回的两行文本（首行
 ocean-sonar-modeling render-substrate-trend trend.json
 ```
 
+### `render-substrate-report REPORT`
+
+把一份 `substrate.serialize_aggregate_report` 生成的底质聚合报告 JSON
+渲染为三行汇总文本。等价于**仅调用一次**
+`ocean_sonar.substrate.render_aggregate_report(path)`：成功时 stdout
+输出其返回的三行文本（首行
+`REPORT=<schema_version>,<JSON路径>,<kind>,<quality>`，次行
+`SUMMARY=<batch_count>,<result_count>,<unknown>,<unknown_ratio>,<worst_batch_index>,<quality>;COUNTS=<unknown>,<mud>,<sand>,<gravel>,<rock>`，
+末行 `WORST=<index>,<count>,<unknown>,<quality>`）加一个换行，stderr
+为空，退出码 0；文件不存在、内容损坏等错误时 stdout 为空，stderr 严格
+输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数缺失或多余
+属于参数解析错误，退出码 2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling render-substrate-report report.json
+```
+
 ### `build-substrate-report-trend REPORT REPORT [REPORT ...] --output OUTPUT`
 
 把多份 `substrate.serialize_aggregate_report` 生成的底质聚合报告 JSON 按
