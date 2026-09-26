@@ -128,3 +128,26 @@ def test_batch_inputs_not_modified():
     snapshot = [list(v) for v in (times, depths, tide_times, levels)]
     tide.batch(times, depths, tide_times, levels, datum=0.5, limit=2.0)
     assert [times, depths, tide_times, levels] == snapshot
+
+
+def test_batch_huge_non_negative_int_limit_passes():
+    # Regression: finiteness is checked only for floats, so a huge
+    # non-negative int limit of any magnitude must be accepted and every
+    # finite adjustment must be within it.
+    document = decode(
+        tide.batch([0.5], [10.0], [0, 1], [1.0, 3.0], limit=10**100)
+    )
+    assert document["results"] == [[8.0, -2.0, True]]
+    assert document["summary"]["max_abs_adjustment"] == 2.0
+    assert document["summary"]["quality"] == "pass"
+
+
+def test_batch_huge_negative_int_limit_rejected():
+    with pytest.raises(ValueError, match="limit must be >= 0"):
+        tide.batch([0.5], [10.0], [0, 1], [1.0, 3.0], limit=-(10**100))
+
+
+def test_batch_huge_int_limit_does_not_serialize_limit():
+    # The limit itself never appears in the output document.
+    data = tide.batch([0.5], [10.0], [0, 1], [1.0, 3.0], limit=10**400)
+    assert b"1e+" not in data

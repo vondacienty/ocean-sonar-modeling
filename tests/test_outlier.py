@@ -240,5 +240,6 @@ def test_first_bad_element_wins():
 
 
 def test_exported():
-    assert outlier.__all__ == ["detect"]
+    assert outlier.__all__ == ["detect", "batch"]
     assert callable(outlier.detect)
+    assert callable(outlier.batch)
