@@ -11,11 +11,12 @@ are averaged with ``math.fsum`` in point input order.
 
 from __future__ import annotations
 
+import json
 import math
 
 from .svp import _is_real_number
 
-__all__ = ["build"]
+__all__ = ["build", "batch"]
 
 _FIELDS = ("x", "y", "d")
 
@@ -161,3 +162,105 @@ def build(points, bounds, resolutions):
             rr = 0.0
         layers.append((rr, nx, ny, tuple(cells)))
     return tuple(layers)
+
+
+def batch(points, bounds, resolutions, min_coverage=1.0) -> bytes:
+    """Build the grids and serialize per-layer coverage as JSON bytes.
+
+    Calls :func:`build` exactly once with ``(points, bounds,
+    resolutions)`` — its validation and exceptions apply unchanged and
+    the inputs are not modified. ``min_coverage`` is validated after the
+    build: it must be a finite non-bool int/float in ``[0, 1]``. A bool
+    or non-number raises ``TypeError``; a non-finite or out-of-range
+    value raises ``ValueError``.
+
+    With ``G`` the tuple returned by :func:`build`, the returned
+    document has top-level keys exactly in the order ``results,
+    summary``. ``results`` is an array in the layer order of ``G``; each
+    item has keys exactly in the order ``resolution, nx, ny, cells,
+    filled, coverage`` where ``resolution``/``nx``/``ny`` are the
+    layer's ``r``/``nx``/``ny``, ``cells`` is the layer's cells in
+    original order as ``[count, mean]`` arrays (``None`` becomes
+    ``null``), ``filled`` is the int number of non-empty cells and
+    ``coverage`` is ``round(filled / (nx * ny), 6)``. ``summary`` has
+    keys exactly in the order ``layer_count, total_cells, filled_cells,
+    mean_coverage, quality`` where ``layer_count`` is the int number of
+    layers, ``total_cells`` the int total number of cells,
+    ``filled_cells`` the int total number of non-empty cells,
+    ``mean_coverage`` the ``math.fsum`` mean of the per-layer
+    ``coverage`` values rounded to 6 decimals, and ``quality`` is
+    ``"pass"`` only when every ``coverage >= min_coverage``, otherwise
+    ``"fail"``.
+
+    The object is encoded as UTF-8 JSON with ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation, no
+    BOM and no trailing newline, as in ``strip.batch``. Counts are JSON
+    ints; the other numbers are floats first rounded with
+    ``round(float(v), 6)`` with negative zero normalized to ``0.0``.
+    Any JSON or UTF-8 encoding failure raises ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    layers = build(points, bounds, resolutions)
+
+    if not _is_real_number(min_coverage):
+        raise TypeError("min_coverage must be a non-bool int or float")
+    if not math.isfinite(min_coverage):
+        raise ValueError("min_coverage must be finite")
+    if not 0 <= min_coverage <= 1:
+        raise ValueError("min_coverage must be in [0, 1]")
+
+    def rounded_float(value):
+        value = round(float(value), 6)
+        return 0.0 if value == 0 else value
+
+    results = []
+    coverages = []
+    total_cells = 0
+    filled_cells = 0
+    for r, nx, ny, cells in layers:
+        filled = sum(1 for count, _ in cells if count > 0)
+        coverage = rounded_float(filled / (nx * ny))
+        results.append(
+            {
+                "resolution": rounded_float(r),
+                "nx": int(nx),
+                "ny": int(ny),
+                "cells": [
+                    [int(count), None if mean is None else rounded_float(mean)]
+                    for count, mean in cells
+                ],
+                "filled": int(filled),
+                "coverage": coverage,
+            }
+        )
+        coverages.append(coverage)
+        total_cells += nx * ny
+        filled_cells += filled
+
+    layer_count = int(len(layers))
+    mean_coverage = rounded_float(math.fsum(coverages) / layer_count)
+    document = {
+        "results": results,
+        "summary": {
+            "layer_count": layer_count,
+            "total_cells": int(total_cells),
+            "filled_cells": int(filled_cells),
+            "mean_coverage": mean_coverage,
+            "quality": (
+                "pass"
+                if all(coverage >= min_coverage for coverage in coverages)
+                else "fail"
+            ),
+        },
+    }
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(f"batch: could not be serialized to JSON: {exc}") from exc
