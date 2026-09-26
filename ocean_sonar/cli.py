@@ -27,7 +27,11 @@ from .grid import batch as _grid_batch
 from .outlier import batch as _outlier_batch
 from .report import rank_files
 from .strip import batch as _strip_batch
-from .substrate import batch as _substrate_batch
+from .substrate import (
+    batch as _substrate_batch,
+    export as export_substrate,
+    render as render_substrate,
+)
 from .svp import batch as _svp_batch
 from .terrain import batch as _terrain_batch
 from .tide import batch as _tide_batch
@@ -465,6 +469,11 @@ def main(argv: list[str] | None = None) -> int:
     terrain_batch_parser.add_argument("request", metavar="REQUEST", help="batch request JSON file")
     substrate_batch_parser = sub.add_parser("substrate-batch", help="classify seabed substrate from analysis grids and intensities from a request JSON file and print the result JSON")
     substrate_batch_parser.add_argument("request", metavar="REQUEST", help="batch request JSON file")
+    export_substrate_parser = sub.add_parser("export-substrate", help="load one substrate batch JSON file and atomically write its canonical bytes")
+    export_substrate_parser.add_argument("input", metavar="INPUT", help="substrate batch JSON file")
+    export_substrate_parser.add_argument("--output", required=True, help="output file atomically overwritten with the substrate batch JSON")
+    render_substrate_parser = sub.add_parser("render-substrate", help="render one substrate batch JSON file as a header and one line per result")
+    render_substrate_parser.add_argument("input", metavar="INPUT", help="substrate batch JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -656,6 +665,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "substrate-batch":
         try:
             text = _substrate_batch_text(args.request)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "export-substrate":
+        try:
+            export_substrate(args.input, args.output)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        return 0
+
+    if args.command == "render-substrate":
+        try:
+            text = render_substrate(args.input)
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1

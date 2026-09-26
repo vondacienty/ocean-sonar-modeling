@@ -294,6 +294,45 @@ stdout 输出 `batch` 返回字节的 UTF-8 解码文本加一个换行，stderr
 ocean-sonar-modeling terrain-batch request.json
 ```
 
+### `export-substrate INPUT --output OUTPUT`
+
+读取一份 `substrate.batch` 生成的底质分类批量 JSON 并按其规范字节原子
+写盘。等价于**仅调用一次**
+`ocean_sonar.substrate.export(path, output)`：先且仅调用一次
+`ocean_sonar.substrate.load(path)` 得到 `D`，其读取校验、异常与文件
+不变性完全沿用且先于 `output` 生效；随后按 `D` 的原键序与 `batch` 的
+JSON 规范（UTF-8、`ensure_ascii=False`、`separators=(",", ":")`、
+`allow_nan=False`、无 BOM、无尾换行）编码出字节串 `B`。成功时静默
+（stdout、stderr 均为空），退出码 0，并以临时文件加 `flush()`、
+`os.fsync()`、`os.replace` 原子覆写 `--output` 指定的文件；`--output`
+必须为非空字符串且不得与 INPUT 指向同一文件（双方都存在时用
+`os.path.samefile` 识别软/硬链接，否则比较规范化路径），非
+`str`/空串分别抛 `TypeError`/`ValueError`，重合抛 `ValueError`；替换
+前发生失败会清除临时文件且既有 OUTPUT 逐字节不变；文件不存在、内容
+损坏等错误时 stdout 为空，stderr 严格输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；缺少 INPUT、缺少
+`--output` 或参数多余属于参数解析错误，退出码 2 且不调用业务函数。
+输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling export-substrate substrate.json --output substrate_copy.json
+```
+
+### `render-substrate INPUT`
+
+把一份 `substrate.batch` 生成的底质分类批量 JSON 渲染为一个汇总行加逐
+结果文本。等价于**仅调用一次**
+`ocean_sonar.substrate.render(path)`：成功时 stdout 输出其返回的多行
+文本（首行 `SUBSTRATE=<count>,<unknown>,<quality>`，随后按 results 原
+序逐行 `RESULT[i]=<class>,<confidence>`）加一个换行，stderr 为空，退
+出码 0；文件不存在、内容损坏等错误时 stdout 为空，stderr 严格输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数缺失或多余属于
+参数解析错误，退出码 2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling render-substrate substrate.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -321,6 +360,56 @@ ocean-sonar-modeling terrain-batch request.json
 
 声速剖面（SVP）声线追踪接口位于 `ocean_sonar.svp`，该模块导出：
 `trace`、`batch`。
+
+底质分类接口位于 `ocean_sonar.substrate`，该模块导出：
+`classify`、`batch`、`load`、`export`、`render`。其中 `export`、
+`render` 的契约如下。
+
+### `substrate.export(path, output) -> bytes`
+
+读取一份底质分类批量 JSON 并把其规范字节原子写盘，返回所写字节。
+
+执行时**先且仅调用一次** `load(path)` 得到 `D`，在此之前不做任何其他
+工作、之后也不再调用第二次；因此 `path` 的校验契约、读取异常（原样
+向上传播）、规范字节校验与文件不变性完全沿用 `load`，且 `path` 的错
+误先于 `output` 报出。输入文件不被修改。
+
+随后按 `D` 的原键序与 `batch` 的 JSON 规范（UTF-8、
+`ensure_ascii=False`、`separators=(",", ":")`、`allow_nan=False`，无
+缩进、无 BOM、无尾换行）重新编码出字节串 `B`。
+
+然后才校验 `output`：必须为非空 `str`——非 `str` 抛 `TypeError`
+（`output must be a str`），空串抛 `ValueError`
+（`output must not be empty`）。
+
+`output` 不得与 `path` 指向同一文件：双方都存在时用
+`os.path.samefile` 识别软/硬链接，任一方不存在时比较
+`os.path.normcase(os.path.realpath(os.path.abspath(path)))`；重合时抛
+`ValueError`。
+
+非重合时在 `output` 同目录创建临时文件，以二进制写入 `B`，`flush()`
+、`os.fsync()` 后用 `os.replace` 原子替换 `output`。替换前发生失败会
+清除临时文件且既有 `output` 逐字节不变；`OSError` 原样传播。返回值与
+写入文件的字节为同一份 `bytes`。
+
+### `substrate.render(path) -> str`
+
+把一份底质分类批量 JSON 渲染为一个汇总行加逐结果文本。
+
+执行时**仅调用一次** `load(path)` 得到 `D`，不调用任何其他加载或汇总
+函数；因此 `path` 的校验契约、读取行为与异常完全沿用 `load`：非
+`str` 抛 `TypeError`，空串抛 `ValueError`，文件缺失抛
+`FileNotFoundError`，目录抛 `IsADirectoryError`，其余 `OSError` 原样
+传播，解析、结构或规范字节非法抛 `ValueError`。输入文件不会被修改。
+
+返回以 `\n` 连接、无尾换行的文本：首行为
+`SUBSTRATE=<count>,<unknown>,<quality>`，三个值依次取自
+`D["summary"]` 的 `count`、`unknown`、`quality`；随后按
+`D["results"]` 原序逐行输出
+`RESULT[i]=<class>,<confidence>`，其中 `i` 为从 0 起的十进制下标，两
+个值直接取自对应的 `[class, confidence]`。所有值直接取自 `D`，不重
+算、不重新排序：`int` 按十进制渲染，`str` 原样，`float` 用
+`format(v, ".6f")`（负零渲染为 `0.000000`）。
 
 ### 通用约定
 
