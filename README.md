@@ -41,6 +41,20 @@ ocean-sonar-modeling --help     # 打印用法
 ocean-sonar-modeling render-trends trend_a.json trend_b.json [trend_c.json ...]
 ```
 
+### `export-trends TREND TREND [TREND ...] --output OUTPUT`
+
+把多份 `serialize_trend` 生成的趋势 JSON 文件聚合后导出为一份报告
+JSON。路径按命令行顺序传入（至少两个），等价于调用
+`ocean_sonar.crosspoint.export_trends(paths, output)`：成功时静默
+（stdout、stderr 均为空），退出码 0，并以 `"wb"` 覆写 `--output`
+指定的文件；文件不存在、内容损坏等错误时 stdout 为空，stderr 输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；路径不足两个或缺少
+`--output` 属于参数解析错误，退出码 2。输入趋势文件不会被修改。
+
+```bash
+ocean-sonar-modeling export-trends trend_a.json trend_b.json [trend_c.json ...] --output report.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -55,7 +69,8 @@ ocean-sonar-modeling render-trends trend_a.json trend_b.json [trend_c.json ...]
 `load_quality_batch`、`aggregate_quality_batches`、
 `dump_aggregate`、`load_aggregate`、`trend`、
 `serialize_trend`、`render_trend`、`load_trend`、
-`load_trends`、`render_trends`、
+`load_trends`、`render_trends`、`export_trends`、
+`load_trend_report`、
 `serialize_pair_gate_score_summary`、`render_pair_gate_score_summary`、
 `load_pair_gate_score_summary`。
 
@@ -478,3 +493,51 @@ TRENDS 行各值直接取自 `A`；FILES 行按 `j` 顺序以 `|` 连接各
 `A["worst"]`，不重算、不排序。格式化规则：`int` 以十进制输出，
 `str` 原样插入，`float` 使用 `format(v, ".6f")`（负零渲染为
 `0.000000`）。
+
+### `export_trends(paths, output) -> bytes`
+
+聚合多份趋势文件并导出为报告 JSON，同时写盘并返回所写字节。
+
+执行时**先且仅调用一次** `aggregate_trends(paths)` 得到 `A`，在此
+之前不做任何其他工作、之后也不再调用第二次；因此 `paths` 的校验
+契约（容器、至少 2 项、逐项非空 `str`，错误前缀 `paths[i]: `）与
+异常（原样向上传播）完全沿用 `aggregate_trends`，且 `paths` 的错误
+先于 `output` 报出。随后才校验 `output`：必须为非空 `str`——非
+`str` 抛 `TypeError`（`output must be a str`），空串抛
+`ValueError`（`output must not be empty`）。输入与文件均不被修改。
+
+编码对象顶层键序恰为 `sources, summary`：`sources` 为 `paths` 原序
+字符串的 JSON 数组（不排序、不去重）；`summary` 即 `A` 本身，键序
+`file_count, changes, degraded, coverage_delta, score_delta, worst,
+quality`，其 `worst` tuple 编码为六项 JSON 数组。JSON 编码规范与
+`dump_trends` 完全一致：UTF-8、`ensure_ascii=False`、
+`separators=(",", ":")`、`allow_nan=False`，无缩进、无 BOM、无尾
+换行，float 经 `round(float(v), 6)` 并将负零归一化为 `0.0`；任何
+JSON 或 UTF-8 编码失败抛 `ValueError`。
+
+仅在编码完成后，才以 `"wb"` 打开并覆写 `output`，写入上述字节。
+返回值与写入文件的字节为同一份 `bytes`。
+
+### `load_trend_report(path) -> dict`
+
+从文件读回 `export_trends` 生成的 JSON 趋势报告。
+
+`path` 的非空 `str` 校验、`"rb"` 整体读取与系统异常（文件不存在抛
+`FileNotFoundError`、路径为目录抛 `IsADirectoryError`、其余
+`OSError` 原样传播）、BOM 与尾换行拒绝、UTF-8/JSON 解码、
+`NaN`/`Infinity` 与重复键拒绝、规范重编码逐字节核对等规则，全部
+沿用 `load_trends`；任何解析、解码或规范字节不匹配均抛
+`ValueError`。文件不被修改。
+
+解码值必须是顶层键序恰为 `sources, summary` 的对象，重复、缺失、
+额外键或键序错误均抛 `ValueError`。`sources` 必须是至少含 2 项的
+数组，且每项均为非空 `str`（类型不符为 `TypeError`、项数不足或空
+串为 `ValueError`，最终统一包成 `ValueError`）。`summary` 必须满足
+`load_trends` 返回结构的全部契约（键序
+`file_count, changes, degraded, coverage_delta, score_delta, worst,
+quality` 及其类型、范围、关系与规范字节规则），并且其
+`file_count` 必须等于 `sources` 的长度，否则抛 `ValueError`。
+
+返回保持 `sources, summary` 键序的 `dict`：`sources` 为按存储顺序
+排列的路径字符串 list，`summary` 中仅 `worst` 还原为 tuple（与
+`load_trends` 一致），其余值原样返回。文件不被修改。
