@@ -8,6 +8,7 @@ import pytest
 import ocean_sonar.crosspoint as crosspoint_mod
 from ocean_sonar.crosspoint import dump_aggregate, trend
 from ocean_sonar.crosspoint import render_trend, serialize_trend
+from ocean_sonar.crosspoint import load_trend
 
 
 def _q6(value):
@@ -527,3 +528,397 @@ def test_trend_render_serialize_exported():
     assert hasattr(crosspoint_mod, "render_trend")
     assert "serialize_trend" in crosspoint_mod.__all__
     assert "render_trend" in crosspoint_mod.__all__
+
+
+def _write_bytes(tmp_path, data, name="trend.json"):
+    path = tmp_path / name
+    path.write_bytes(data)
+    return str(path)
+
+
+@pytest.fixture
+def trend_bytes(snapshot_paths):
+    return serialize_trend(list(snapshot_paths))
+
+
+@pytest.fixture
+def pass_trend_bytes(tmp_path):
+    batches = [("p0", [(0.5, 50.0, "pass")])]
+    first = write_aggregate(tmp_path / "a.json", batches)
+    second = write_aggregate(tmp_path / "b.json", batches)
+    return serialize_trend([str(first), str(second)])
+
+
+def test_load_trend_exported():
+    assert hasattr(crosspoint_mod, "load_trend")
+    assert "load_trend" in crosspoint_mod.__all__
+    assert crosspoint_mod.load_trend is load_trend
+
+
+def test_load_trend_roundtrip(tmp_path, trend_bytes):
+    document = json.loads(trend_bytes)
+    result = load_trend(_write_bytes(tmp_path, trend_bytes))
+
+    assert isinstance(result, dict)
+    assert list(result.keys()) == EXPECTED_KEYS
+    assert result["count"] == document["count"] == 3
+    assert result["changes"] == document["changes"] == 6
+    assert result["degraded"] == document["degraded"] == 3
+    assert result["coverage_delta"] == document["coverage_delta"] == -0.008333
+    assert result["score_delta"] == document["score_delta"] == 0.0
+    assert math.copysign(1.0, result["score_delta"]) == 1.0
+    assert result["worst"] == tuple(document["worst"]) == (2, 1, 0, -0.05, -1.0)
+    assert isinstance(result["worst"], tuple)
+    assert result["quality"] == "fail"
+
+    assert type(result["count"]) is int
+    assert type(result["changes"]) is int
+    assert type(result["degraded"]) is int
+    for key in ("coverage_delta", "score_delta"):
+        assert type(result[key]) is float
+    assert all(type(v) is int for v in result["worst"][:3])
+    assert all(type(v) is float for v in result["worst"][3:])
+
+
+def test_load_trend_matches_trend(tmp_path, snapshot_paths, trend_bytes):
+    path = _write_bytes(tmp_path, trend_bytes)
+    assert load_trend(path) == trend(list(snapshot_paths))
+
+
+def test_load_trend_pass_roundtrip(tmp_path, pass_trend_bytes):
+    result = load_trend(_write_bytes(tmp_path, pass_trend_bytes))
+    assert result == {
+        "count": 2,
+        "changes": 1,
+        "degraded": 0,
+        "coverage_delta": 0.0,
+        "score_delta": 0.0,
+        "worst": (1, 0, 0, 0.0, 0.0),
+        "quality": "pass",
+    }
+    for value in (result["coverage_delta"], result["score_delta"], *result["worst"][3:]):
+        assert math.copysign(1.0, value) == 1.0
+
+
+def test_load_trend_does_not_modify_file(tmp_path, trend_bytes):
+    path = _write_bytes(tmp_path, trend_bytes)
+    load_trend(path)
+    with open(path, "rb") as handle:
+        assert handle.read() == trend_bytes
+
+
+def test_load_trend_path_type_error():
+    with pytest.raises(TypeError):
+        load_trend(42)
+    with pytest.raises(TypeError):
+        load_trend(None)
+    with pytest.raises(TypeError):
+        load_trend(b"trend.json")
+
+
+def test_load_trend_path_empty_value_error():
+    with pytest.raises(ValueError):
+        load_trend("")
+
+
+def test_load_trend_missing_file(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        load_trend(str(tmp_path / "missing.json"))
+
+
+def test_load_trend_directory_path(tmp_path):
+    with pytest.raises(IsADirectoryError):
+        load_trend(str(tmp_path))
+
+
+def test_load_trend_bom_rejected(tmp_path, trend_bytes):
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, b"\xef\xbb\xbf" + trend_bytes))
+
+
+def test_load_trend_trailing_newline_rejected(tmp_path, trend_bytes):
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, trend_bytes + b"\n"))
+
+
+def test_load_trend_invalid_utf8(tmp_path, trend_bytes):
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, trend_bytes[:-2] + b"\xff\xfe"))
+
+
+def test_load_trend_invalid_json(tmp_path):
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, b"{"))
+
+
+def test_load_trend_non_object_json(tmp_path):
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, b"[1,2,3]"))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, b"42"))
+
+
+def test_load_trend_nan_infinity_rejected(tmp_path, trend_bytes):
+    with pytest.raises(ValueError):
+        load_trend(
+            _write_bytes(
+                tmp_path,
+                trend_bytes.replace(b'"coverage_delta":-0.008333', b'"coverage_delta":NaN', 1),
+            )
+        )
+    with pytest.raises(ValueError):
+        load_trend(
+            _write_bytes(
+                tmp_path,
+                trend_bytes.replace(b'"coverage_delta":-0.008333', b'"coverage_delta":Infinity', 1),
+            )
+        )
+
+
+def test_load_trend_duplicate_key_rejected(tmp_path, trend_bytes):
+    duplicated = trend_bytes.replace(b'"count":3', b'"count":2,"count":3', 1)
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, duplicated))
+
+
+def test_load_trend_key_order_rejected(tmp_path, trend_bytes):
+    document = json.loads(trend_bytes)
+    keys = list(document)
+    reordered = {key: document[key] for key in keys[1:] + keys[:1]}
+    data = json.dumps(reordered, separators=(",", ":")).encode("utf-8")
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, data))
+
+
+def test_load_trend_missing_and_extra_keys(tmp_path, trend_bytes):
+    document = json.loads(trend_bytes)
+
+    def encode(value):
+        return json.dumps(value, separators=(",", ":")).encode("utf-8")
+
+    missing = {key: document[key] for key in document if key != "quality"}
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, encode(missing)))
+    extra = dict(document)
+    extra["extra"] = 1
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, encode(extra)))
+
+
+def _mutated_trend(document, **changes):
+    value = dict(document)
+    value.update(changes)
+    return json.dumps(value, separators=(",", ":")).encode("utf-8")
+
+
+def test_load_trend_count_type_errors(tmp_path, trend_bytes):
+    document = json.loads(trend_bytes)
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, _mutated_trend(document, count=True)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, _mutated_trend(document, count=3.0)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, _mutated_trend(document, count="3")))
+
+
+def test_load_trend_count_range_errors(tmp_path, trend_bytes):
+    document = json.loads(trend_bytes)
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, _mutated_trend(document, count=1)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, _mutated_trend(document, count=0)))
+
+
+def test_load_trend_changes_errors(tmp_path, trend_bytes):
+    document = json.loads(trend_bytes)
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, _mutated_trend(document, changes=True)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, _mutated_trend(document, changes=6.0)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, _mutated_trend(document, changes=0)))
+
+
+def test_load_trend_degraded_errors(tmp_path, trend_bytes):
+    document = json.loads(trend_bytes)
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, _mutated_trend(document, degraded=True)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, _mutated_trend(document, degraded=3.0)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, _mutated_trend(document, degraded=-1)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, _mutated_trend(document, degraded=7)))
+
+
+def test_load_trend_delta_type_range_errors(tmp_path, trend_bytes):
+    document = json.loads(trend_bytes)
+    with pytest.raises(ValueError):
+        load_trend(
+            _write_bytes(tmp_path, _mutated_trend(document, coverage_delta=0))
+        )
+    with pytest.raises(ValueError):
+        load_trend(
+            _write_bytes(tmp_path, _mutated_trend(document, coverage_delta="0.0"))
+        )
+    with pytest.raises(ValueError):
+        load_trend(
+            _write_bytes(tmp_path, _mutated_trend(document, coverage_delta=1.5))
+        )
+    with pytest.raises(ValueError):
+        load_trend(
+            _write_bytes(tmp_path, _mutated_trend(document, coverage_delta=-1.5))
+        )
+    with pytest.raises(ValueError):
+        load_trend(
+            _write_bytes(tmp_path, _mutated_trend(document, score_delta=0))
+        )
+    with pytest.raises(ValueError):
+        load_trend(
+            _write_bytes(tmp_path, _mutated_trend(document, score_delta=100.5))
+        )
+    with pytest.raises(ValueError):
+        load_trend(
+            _write_bytes(tmp_path, _mutated_trend(document, score_delta=-100.5))
+        )
+
+
+def test_load_trend_delta_precision_and_negative_zero(tmp_path, trend_bytes):
+    document = json.loads(trend_bytes)
+    with pytest.raises(ValueError):
+        load_trend(
+            _write_bytes(
+                tmp_path,
+                _mutated_trend(document, coverage_delta=-0.0083334),
+            )
+        )
+    with pytest.raises(ValueError):
+        load_trend(
+            _write_bytes(tmp_path, _mutated_trend(document, score_delta=-0.0))
+        )
+
+
+def test_load_trend_worst_container_and_length(tmp_path, trend_bytes):
+    document = json.loads(trend_bytes)
+    broken = dict(document)
+    broken["worst"] = [2, 1, 0, -0.05]
+    with pytest.raises(ValueError):
+        load_trend(
+            _write_bytes(
+                tmp_path,
+                json.dumps(broken, separators=(",", ":")).encode("utf-8"),
+            )
+        )
+    broken["worst"] = {"i": 2}
+    with pytest.raises(ValueError):
+        load_trend(
+            _write_bytes(
+                tmp_path,
+                json.dumps(broken, separators=(",", ":")).encode("utf-8"),
+            )
+        )
+
+
+def test_load_trend_worst_int_errors(tmp_path, trend_bytes):
+    document = json.loads(trend_bytes)
+
+    def worst_with(index, value):
+        broken = dict(document)
+        worst = list(document["worst"])
+        worst[index] = value
+        broken["worst"] = worst
+        return json.dumps(broken, separators=(",", ":")).encode("utf-8")
+
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, worst_with(0, True)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, worst_with(0, 2.0)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, worst_with(0, 0)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, worst_with(0, 3)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, worst_with(1, -1)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, worst_with(1, 1.0)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, worst_with(2, -1)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, worst_with(2, True)))
+
+
+def test_load_trend_worst_float_errors(tmp_path, trend_bytes):
+    document = json.loads(trend_bytes)
+
+    def worst_with(index, value):
+        broken = dict(document)
+        worst = list(document["worst"])
+        worst[index] = value
+        broken["worst"] = worst
+        return json.dumps(broken, separators=(",", ":")).encode("utf-8")
+
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, worst_with(3, 0)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, worst_with(3, "-0.05")))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, worst_with(3, 1.5)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, worst_with(3, -1.5)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, worst_with(3, -0.0500001)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, worst_with(3, -0.0)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, worst_with(4, -1)))
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, worst_with(4, 100.5)))
+
+
+def test_load_trend_quality_relation(tmp_path, trend_bytes, pass_trend_bytes):
+    document = json.loads(trend_bytes)
+    # degraded == 3 must pair with "fail".
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, _mutated_trend(document, quality="pass")))
+    with pytest.raises(ValueError):
+        load_trend(
+            _write_bytes(tmp_path, _mutated_trend(document, quality="maybe"))
+        )
+    with pytest.raises(ValueError):
+        load_trend(_write_bytes(tmp_path, _mutated_trend(document, quality=True)))
+
+    pass_document = json.loads(pass_trend_bytes)
+    # degraded == 0 must pair with "pass".
+    with pytest.raises(ValueError):
+        load_trend(
+            _write_bytes(
+                tmp_path, _mutated_trend(pass_document, quality="fail")
+            )
+        )
+    degraded = dict(pass_document)
+    degraded["degraded"] = 1
+    with pytest.raises(ValueError):
+        load_trend(
+            _write_bytes(
+                tmp_path,
+                json.dumps(degraded, separators=(",", ":")).encode("utf-8"),
+            )
+        )
+
+
+def test_load_trend_noncanonical_bytes_rejected(tmp_path, trend_bytes):
+    # pretty-printed / spaced encoder
+    document = json.loads(trend_bytes)
+    with pytest.raises(ValueError):
+        load_trend(
+            _write_bytes(
+                tmp_path, json.dumps(document, indent=2).encode("utf-8")
+            )
+        )
+    # non-canonical float representation
+    with pytest.raises(ValueError):
+        load_trend(
+            _write_bytes(
+                tmp_path, trend_bytes.replace(b"-0.05", b"-0.050", 1)
+            )
+        )

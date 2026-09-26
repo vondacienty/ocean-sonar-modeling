@@ -40,7 +40,7 @@ ocean-sonar-modeling --help     # 打印用法
 `render_quality_batch`、`serialize_quality_batch`、
 `load_quality_batch`、`aggregate_quality_batches`、
 `dump_aggregate`、`load_aggregate`、`trend`、
-`serialize_trend`、`render_trend`、
+`serialize_trend`、`render_trend`、`load_trend`、
 `serialize_pair_gate_score_summary`、`render_pair_gate_score_summary`、
 `load_pair_gate_score_summary`。
 
@@ -371,3 +371,32 @@ WORST=<i>,<b>,<r>,<dc>,<ds>
 各值依次直接取自 `T` 与 `T["worst"]`，不重算、不排序：`int` 以十
 进制输出，`str` 原样插入，float 使用 `format(v, ".6f")`（负零渲染
 为 `0.000000`）。
+
+### `load_trend(path) -> dict`
+
+从文件读回 `serialize_trend` 生成的 JSON 趋势结果。
+
+`path` 必须为非空 `str`：非 `str` 抛 `TypeError`，空串抛
+`ValueError`。文件以二进制模式（`"rb"`）打开并整体读出；文件不存在
+抛 `FileNotFoundError`，路径为目录抛 `IsADirectoryError`，其余
+`OSError` 原样传播。文件不被修改。
+
+字节必须与 `serialize_trend` 对同一值的输出完全一致：无 BOM、无尾
+换行的紧凑 UTF-8 JSON；BOM、尾换行、UTF-8 解码失败、JSON 解析失败、
+`NaN`/`Infinity` 等非常量 token 或重复键均抛 `ValueError`。
+
+解码值必须是键序恰为
+`count, changes, degraded, coverage_delta, score_delta, worst,
+quality` 的对象，缺失、额外键或键序错误均抛 `ValueError`。前三项为
+非布尔 `int`：`count >= 2`、`changes > 0`、
+`degraded ∈ [0, changes]`；两个 delta 为有限非布尔 float，
+`coverage_delta ∈ [-1, 1]`、`score_delta ∈ [-100, 100]`。
+`worst` 为五元素数组 `[i, b, r, dc, ds]`：前三项为非布尔 `int` 且
+`1 ≤ i < count`、`b`/`r >= 0`，后两项为有限非布尔 float，范围分别
+同两个 delta。所有 float 必须等于 `round(float(v), 6)` 且禁用负零；
+`quality` 仅取 `pass`/`fail`，且当且仅当 `degraded = 0` 时为
+`pass`。文件字节还必须与解码值的规范重编码逐字节相等；任何类型、
+范围、关系或规范字节不匹配均抛 `ValueError`。
+
+返回保持原键序的 `dict`：仅 `worst` 数组还原为 tuple，其余值原样
+返回。文件不被修改。

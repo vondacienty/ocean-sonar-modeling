@@ -45,6 +45,7 @@ __all__ = [
     "trend",
     "serialize_trend",
     "render_trend",
+    "load_trend",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -2367,6 +2368,226 @@ def render_trend(paths) -> str:
         _format_rendered_value(value) for value in worst
     )
     return "\n".join(("TREND=" + trend_line, worst_line))
+
+
+_TREND_KEYS = (
+    "count",
+    "changes",
+    "degraded",
+    "coverage_delta",
+    "score_delta",
+    "worst",
+    "quality",
+)
+
+
+def _reject_duplicate_json_pairs(pairs):
+    """``object_pairs_hook`` that rejects duplicate JSON object keys."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate key {key!r}")
+        result[key] = value
+    return result
+
+
+def _check_trend_float(value, name, low, high, prefix):
+    """Validate a trend float: non-bool, finite, in range, 6-rounded, no -0.0."""
+    _check_quality_batch_unit_float(value, name, low, high, prefix)
+    if value == 0.0 and math.copysign(1.0, value) < 0.0:
+        raise ValueError(prefix + f"{name} must not be negative zero")
+
+
+def _check_trend_int(value, name, predicate, range_text, prefix):
+    """Validate one non-bool trend int against ``predicate``."""
+    if type(value) is not int:
+        raise TypeError(prefix + f"{name} must be a non-bool int")
+    if not predicate(value):
+        raise ValueError(prefix + f"{name} must be {range_text}")
+
+
+def _check_trend(result):
+    prefix = "trend: "
+    if not isinstance(result, dict):
+        raise TypeError("trend must be a dict")
+    if list(result.keys()) != list(_TREND_KEYS):
+        raise TypeError(
+            "trend keys must be in the order "
+            "count, changes, degraded, coverage_delta, score_delta, "
+            "worst, quality"
+        )
+
+    count = result["count"]
+    _check_trend_int(count, "count", lambda v: v >= 2, ">= 2", prefix)
+
+    changes = result["changes"]
+    _check_trend_int(changes, "changes", lambda v: v > 0, "> 0", prefix)
+
+    degraded = result["degraded"]
+    _check_trend_int(
+        degraded,
+        "degraded",
+        lambda v: 0 <= v <= changes,
+        "in [0, changes]",
+        prefix,
+    )
+
+    _check_trend_float(
+        result["coverage_delta"], "coverage_delta", -1, 1, prefix
+    )
+    _check_trend_float(
+        result["score_delta"], "score_delta", -100, 100, prefix
+    )
+
+    worst = result["worst"]
+    worst_prefix = prefix + "worst: "
+    if not isinstance(worst, list):
+        raise TypeError(worst_prefix + "must be a list")
+    if len(worst) != 5:
+        raise ValueError(worst_prefix + "must have 5 elements")
+
+    _check_trend_int(
+        worst[0],
+        "i",
+        lambda v: 1 <= v < count,
+        "in [1, count)",
+        worst_prefix,
+    )
+    _check_trend_int(worst[1], "b", lambda v: v >= 0, ">= 0", worst_prefix)
+    _check_trend_int(worst[2], "r", lambda v: v >= 0, ">= 0", worst_prefix)
+    _check_trend_float(worst[3], "dc", -1, 1, worst_prefix)
+    _check_trend_float(worst[4], "ds", -100, 100, worst_prefix)
+
+    quality = result["quality"]
+    if type(quality) is not str:
+        raise TypeError(prefix + "quality must be a str")
+    if quality not in ("pass", "fail"):
+        raise ValueError(prefix + "quality must be 'pass' or 'fail'")
+    if (quality == "pass") != (degraded == 0):
+        raise ValueError(
+            prefix
+            + "quality must be 'pass' if and only if degraded is 0"
+        )
+
+
+def _dump_trend(result):
+    document = {
+        "count": int(result["count"]),
+        "changes": int(result["changes"]),
+        "degraded": int(result["degraded"]),
+        "coverage_delta": result["coverage_delta"],
+        "score_delta": result["score_delta"],
+        "worst": [
+            int(result["worst"][0]),
+            int(result["worst"][1]),
+            int(result["worst"][2]),
+            result["worst"][3],
+            result["worst"][4],
+        ],
+        "quality": result["quality"],
+    }
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(f"trend: could not be serialized to JSON: {exc}") from exc
+
+
+def load_trend(path) -> dict:
+    """Load a :func:`serialize_trend`-produced JSON trend document.
+
+    ``path`` must be a non-empty ``str``: a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``. The file
+    is opened in binary mode (``"rb"``) and read in full; a missing
+    file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError`` and every other ``OSError`` is propagated
+    unchanged. The file is not modified.
+
+    The bytes must be exactly those produced by
+    :func:`serialize_trend` for the same value: compact UTF-8 JSON
+    (``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``) with no BOM and no trailing newline. A BOM, a
+    trailing newline, a UTF-8 decoding failure or a JSON parsing
+    failure raises ``ValueError``; the ``NaN``/``Infinity`` constants,
+    any other non-finite token and duplicate object keys are rejected.
+
+    The decoded value must be a JSON object with keys exactly in the
+    order ``count, changes, degraded, coverage_delta, score_delta,
+    worst, quality`` — duplicated, missing or extra keys are rejected.
+    The first three values must be non-bool ints with ``count >= 2``,
+    ``changes > 0`` and ``degraded`` in ``[0, changes]``.
+    ``coverage_delta`` must be a finite non-bool float in ``[-1, 1]``
+    and ``score_delta`` a finite non-bool float in ``[-100, 100]``.
+    ``worst`` must be the five-item array ``[i, b, r, dc, ds]``:
+    ``i``, ``b`` and ``r`` non-bool ints with ``1 <= i < count`` and
+    ``b``/``r >= 0``; ``dc`` a finite non-bool float in ``[-1, 1]``;
+    and ``ds`` a finite non-bool float in ``[-100, 100]``. Every float
+    must equal ``round(float(v), 6)`` and negative zero is forbidden.
+    ``quality`` must be ``"pass"`` or ``"fail"``, and must be
+    ``"pass"`` if and only if ``degraded`` is ``0``. The file bytes
+    must also equal the canonical re-serialization of the decoded
+    value byte for byte; any key-order, type, range, relation, parse or
+    canonical-byte mismatch raises ``ValueError``.
+
+    Returns the trend as a dict with the keys in the order above; only
+    the ``worst`` array is restored to a tuple and every other value is
+    returned unchanged. The file is never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_json_pairs,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        _check_trend(parsed)
+        result = {
+            "count": parsed["count"],
+            "changes": parsed["changes"],
+            "degraded": parsed["degraded"],
+            "coverage_delta": parsed["coverage_delta"],
+            "score_delta": parsed["score_delta"],
+            "worst": tuple(parsed["worst"]),
+            "quality": parsed["quality"],
+        }
+        canonical = _dump_trend(result)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid trend: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical serialize_trend output"
+        )
+
+    return result
 
 
 def serialize_pair_gate_score_summary(
