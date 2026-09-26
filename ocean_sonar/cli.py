@@ -34,6 +34,7 @@ from .substrate import (
     export_aggregate_report_trend as export_substrate_trend,
     render as render_substrate,
     render_aggregate as render_substrate_aggregate,
+    render_aggregate_report as render_substrate_report,
     render_aggregate_report_trend as render_substrate_trend,
     serialize_aggregate_report,
     serialize_aggregate_report_trend,
@@ -505,6 +506,8 @@ def main(argv: list[str] | None = None) -> int:
     export_substrate_trend_parser.add_argument("--output", required=True, help="output file atomically overwritten with the substrate aggregate report trend JSON")
     render_substrate_trend_parser = sub.add_parser("render-substrate-trend", help="render one substrate aggregate report trend JSON file as two summary lines")
     render_substrate_trend_parser.add_argument("trend", metavar="TREND", help="substrate aggregate report trend JSON file")
+    render_substrate_report_parser = sub.add_parser("render-substrate-report", help="render one substrate aggregate report JSON file as three summary lines")
+    render_substrate_report_parser.add_argument("report", metavar="REPORT", help="substrate aggregate report JSON file")
     build_substrate_report_trend_parser = sub.add_parser("build-substrate-report-trend", help="serialize substrate aggregate report JSON files into one trend report JSON")
     build_substrate_report_trend_parser.add_argument("report_first", metavar="REPORT", help="first substrate aggregate report JSON file")
     build_substrate_report_trend_parser.add_argument("report_second", metavar="REPORT", help="second substrate aggregate report JSON file")
@@ -760,6 +763,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "render-substrate-trend":
         try:
             text = render_substrate_trend(args.trend)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "render-substrate-report":
+        try:
+            text = render_substrate_report(args.report)
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
