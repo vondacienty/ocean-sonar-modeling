@@ -21,9 +21,11 @@ __all__ = [
     "classify",
     "dump_aggregate",
     "export",
+    "export_aggregate",
     "load",
     "load_aggregate",
     "render",
+    "render_aggregate",
 ]
 
 _CLASSES = ("mud", "sand", "gravel", "rock")
@@ -1007,4 +1009,113 @@ def render(path) -> str:
             f"RESULT[{i}]="
             + ",".join(_format_rendered_value(value) for value in item)
         )
+    return "\n".join(lines)
+
+
+def export_aggregate(path, output) -> bytes:
+    """Load a substrate aggregate and atomically write its canonical bytes.
+
+    Calls :func:`load_aggregate` exactly once with ``path`` — before any
+    other work and no second time — so its validation, first-error order,
+    exceptions (propagated unchanged), canonical-byte checks and file
+    non-modification contract all apply here as well; in particular a bad
+    ``path`` value is reported before ``output`` is inspected.
+
+    With ``A`` the dict returned by :func:`load_aggregate`, the bytes
+    ``B`` are the canonical :func:`dump_aggregate` re-serialization of
+    ``A`` (its original key order and the same UTF-8 JSON settings:
+    ``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``, no BOM and no trailing newline, with tuples
+    recursively encoded as JSON arrays). ``output`` is then validated: it
+    must be a non-empty ``str`` (a non-str raises ``TypeError`` and an
+    empty ``str`` raises ``ValueError``), in that order.
+
+    ``output`` must not name the same file as ``path``: when both sides
+    exist they are compared with ``os.path.samefile`` so soft and hard
+    links are recognized, and otherwise the normalized paths
+    ``os.path.normcase(os.path.realpath(os.path.abspath(path)))`` are
+    compared; an overlap raises ``ValueError``.
+
+    When there is no overlap, a temporary file is created in ``output``'s
+    directory, ``B`` is written to it in binary mode, ``flush()`` and
+    ``os.fsync()`` are called and the temporary file then atomically
+    replaces ``output`` via ``os.replace``. Any failure before the
+    replacement removes the temporary file and leaves an existing
+    ``output`` byte for byte unchanged; ``OSError`` is propagated
+    unchanged.
+
+    Returns the same ``bytes`` ``B`` that were written.
+    """
+    document = load_aggregate(path)
+    data = _dump_aggregate_document(document)
+
+    if not isinstance(output, str):
+        raise TypeError("output must be a str")
+    if output == "":
+        raise ValueError("output must not be empty")
+
+    if _is_same_file(output, path):
+        raise ValueError(
+            f"output must not be the same file as an input: "
+            f"{output!r} and {path!r}"
+        )
+    _atomic_write_bytes(output, data)
+    return data
+
+
+def render_aggregate(path) -> str:
+    """Render a :func:`load_aggregate`-loaded substrate aggregate as two lines.
+
+    Calls :func:`load_aggregate` exactly once with ``path`` — and no other
+    loading or combining function — so its validation, exceptions
+    (propagated unchanged), canonical-byte checks and file
+    non-modification contract all apply here as well: a non-``str`` path
+    raises ``TypeError``, an empty ``str`` raises ``ValueError``, a
+    missing file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError``, every other ``OSError`` is propagated unchanged
+    and any parse, structure or canonical-byte violation raises
+    ``ValueError``.
+
+    With ``A`` the dict returned by :func:`load_aggregate`, returns two
+    lines joined by ``"\\n"`` with no trailing newline. The first line
+    is::
+
+        AGGREGATE=<batch_count>,<result_count>,<unknown>,<unknown_ratio>,<quality>
+
+    with the five values taken from ``A["summary"]``, and the second
+    line is::
+
+        WORST=<index>,<count>,<unknown>,<quality>
+
+    with ``index`` equal to ``A["summary"]["worst_batch_index"]`` and the
+    remaining three values taken from the ``summary`` of
+    ``A["batches"][index]`` (``count``, ``unknown``, ``quality``).
+    Values are taken with no recomputation or re-sorting: ints are
+    formatted in decimal, strings are copied as-is and floats use
+    ``format(v, ".6f")`` (negative zero rendered as ``"0.000000"``).
+    """
+    document = load_aggregate(path)
+    summary = document["summary"]
+    worst = document["batches"][summary["worst_batch_index"]]["summary"]
+    lines = [
+        "AGGREGATE="
+        + ",".join(
+            (
+                _format_rendered_value(summary["batch_count"]),
+                _format_rendered_value(summary["result_count"]),
+                _format_rendered_value(summary["unknown"]),
+                _format_rendered_value(summary["unknown_ratio"]),
+                _format_rendered_value(summary["quality"]),
+            )
+        ),
+        "WORST="
+        + ",".join(
+            (
+                _format_rendered_value(summary["worst_batch_index"]),
+                _format_rendered_value(worst["count"]),
+                _format_rendered_value(worst["unknown"]),
+                _format_rendered_value(worst["quality"]),
+            )
+        ),
+    ]
     return "\n".join(lines)

@@ -30,7 +30,9 @@ from .strip import batch as _strip_batch
 from .substrate import (
     batch as _substrate_batch,
     export as export_substrate,
+    export_aggregate as export_substrate_aggregate,
     render as render_substrate,
+    render_aggregate as render_substrate_aggregate,
 )
 from .svp import batch as _svp_batch
 from .terrain import batch as _terrain_batch
@@ -474,6 +476,11 @@ def main(argv: list[str] | None = None) -> int:
     export_substrate_parser.add_argument("--output", required=True, help="output file atomically overwritten with the substrate batch JSON")
     render_substrate_parser = sub.add_parser("render-substrate", help="render one substrate batch JSON file as a header and one line per result")
     render_substrate_parser.add_argument("input", metavar="INPUT", help="substrate batch JSON file")
+    export_aggregate_parser = sub.add_parser("export-aggregate", help="load one substrate aggregate JSON file and atomically write its canonical bytes")
+    export_aggregate_parser.add_argument("input", metavar="INPUT", help="substrate aggregate JSON file")
+    export_aggregate_parser.add_argument("--output", required=True, help="output file atomically overwritten with the substrate aggregate JSON")
+    render_aggregate_parser = sub.add_parser("render-aggregate", help="render one substrate aggregate JSON file as two summary lines")
+    render_aggregate_parser.add_argument("input", metavar="INPUT", help="substrate aggregate JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -682,6 +689,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "render-substrate":
         try:
             text = render_substrate(args.input)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "export-aggregate":
+        try:
+            export_substrate_aggregate(args.input, args.output)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        return 0
+
+    if args.command == "render-aggregate":
+        try:
+            text = render_substrate_aggregate(args.input)
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1

@@ -333,6 +333,49 @@ ocean-sonar-modeling export-substrate substrate.json --output substrate_copy.jso
 ocean-sonar-modeling render-substrate substrate.json
 ```
 
+### `export-aggregate INPUT --output OUTPUT`
+
+读取一份 `substrate.dump_aggregate` 生成的底质聚合 JSON 并按其规范字节
+原子写盘。等价于**仅调用一次**
+`ocean_sonar.substrate.export_aggregate(path, output)`：先且仅调用一次
+`ocean_sonar.substrate.load_aggregate(path)` 得到 `A`，其读取校验、异常
+与文件不变性完全沿用且先于 `output` 生效；随后按 `A` 的原键序与
+`dump_aggregate` 的 JSON 规范（UTF-8、`ensure_ascii=False`、
+`separators=(",", ":")`、`allow_nan=False`、无 BOM、无尾换行，tuple 递归
+编码为 JSON 数组）编码出字节串 `B`。成功时静默（stdout、stderr 均为
+空），退出码 0，并以临时文件加 `flush()`、`os.fsync()`、`os.replace`
+原子覆写 `--output` 指定的文件；`--output` 必须为非空字符串且不得与
+INPUT 指向同一文件（双方都存在时用 `os.path.samefile` 识别软/硬链接，
+否则比较规范化路径），非 `str`/空串分别抛 `TypeError`/`ValueError`，重
+合抛 `ValueError`；替换前发生失败会清除临时文件且既有 OUTPUT 逐字节不
+变；文件不存在、内容损坏等错误时 stdout 为空，stderr 严格输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；缺少 INPUT、缺少
+`--output` 或参数多余属于参数解析错误，退出码 2 且不调用业务函数。
+输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling export-aggregate aggregate.json --output aggregate_copy.json
+```
+
+### `render-aggregate INPUT`
+
+把一份 `substrate.dump_aggregate` 生成的底质聚合 JSON 渲染为两行汇总
+文本。等价于**仅调用一次**
+`ocean_sonar.substrate.render_aggregate(path)`：成功时 stdout 输出其返回
+的两行文本（首行
+`AGGREGATE=<batch_count>,<result_count>,<unknown>,<unknown_ratio>,<quality>`，
+值依次取自 `A["summary"]`；次行
+`WORST=<index>,<count>,<unknown>,<quality>`，`index` 为
+`A["summary"]["worst_batch_index"]`，其余三个值取自
+`A["batches"][index]["summary"]`）加一个换行，stderr 为空，退出码 0；
+文件不存在、内容损坏等错误时 stdout 为空，stderr 严格输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数缺失或多余属于
+参数解析错误，退出码 2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling render-aggregate aggregate.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -363,8 +406,9 @@ ocean-sonar-modeling render-substrate substrate.json
 
 底质分类接口位于 `ocean_sonar.substrate`，该模块导出：
 `classify`、`batch`、`load`、`aggregate`、`dump_aggregate`、
-`load_aggregate`、`export`、`render`。其中 `export`、`render` 的契约
-如下。
+`load_aggregate`、`export`、`render`、`export_aggregate`、
+`render_aggregate`。其中 `export`、`render`、`export_aggregate`、
+`render_aggregate` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
 
@@ -461,6 +505,56 @@ worst_batch_index, quality`，其中 `counts` 的键序恰为
 
 返回保持原键序的 `dict`：仅顶层 `batches` 数组还原为 tuple，其余
 容器保持 dict/list。文件不被修改。
+
+### `substrate.export_aggregate(path, output) -> bytes`
+
+读取一份底质聚合 JSON 并把其规范字节原子写盘，返回所写字节。
+
+执行时**先且仅调用一次** `load_aggregate(path)` 得到 `A`，在此之前不
+做任何其他工作、之后也不再调用第二次；因此 `path` 的校验契约、读取
+异常（原样向上传播）、规范字节校验与文件不变性完全沿用
+`load_aggregate`，且 `path` 的错误先于 `output` 报出。输入文件不被修
+改。
+
+随后按 `A` 的原键序与 `dump_aggregate` 的 JSON 规范（UTF-8、
+`ensure_ascii=False`、`separators=(",", ":")`、`allow_nan=False`，无
+缩进、无 BOM、无尾换行，tuple 递归编码为 JSON 数组）重新编码出字节串
+`B`。
+
+然后才校验 `output`：必须为非空 `str`——非 `str` 抛 `TypeError`
+（`output must be a str`），空串抛 `ValueError`
+（`output must not be empty`）。
+
+`output` 不得与 `path` 指向同一文件：双方都存在时用
+`os.path.samefile` 识别软/硬链接，任一方不存在时比较
+`os.path.normcase(os.path.realpath(os.path.abspath(path)))`；重合时抛
+`ValueError`。
+
+非重合时在 `output` 同目录创建临时文件，以二进制写入 `B`，`flush()`
+、`os.fsync()` 后用 `os.replace` 原子替换 `output`。替换前发生失败会
+清除临时文件且既有 `output` 逐字节不变；`OSError` 原样传播。返回值与
+写入文件的字节为同一份 `bytes`。
+
+### `substrate.render_aggregate(path) -> str`
+
+把一份底质聚合 JSON 渲染为两行汇总文本。
+
+执行时**仅调用一次** `load_aggregate(path)` 得到 `A`，不调用任何其他
+加载或汇总函数；因此 `path` 的校验契约、读取行为与异常完全沿用
+`load_aggregate`：非 `str` 抛 `TypeError`，空串抛 `ValueError`，文件
+缺失抛 `FileNotFoundError`，目录抛 `IsADirectoryError`，其余 `OSError`
+原样传播，解析、结构或规范字节非法抛 `ValueError`。输入文件不会被修
+改。
+
+返回以 `\n` 连接、无尾换行的两行文本。首行为
+`AGGREGATE=<batch_count>,<result_count>,<unknown>,<unknown_ratio>,<quality>`，
+五个值依次取自 `A["summary"]` 的 `batch_count`、`result_count`、
+`unknown`、`unknown_ratio`、`quality`；次行为
+`WORST=<index>,<count>,<unknown>,<quality>`，其中 `index` 为
+`A["summary"]["worst_batch_index"]`，其余三个值依次取自
+`A["batches"][index]["summary"]` 的 `count`、`unknown`、`quality`。所
+有值直接取自 `A`，不重算、不重新排序：`int` 按十进制渲染，`str` 原
+样，`float` 用 `format(v, ".6f")`（负零渲染为 `0.000000`）。
 
 ### 通用约定
 
