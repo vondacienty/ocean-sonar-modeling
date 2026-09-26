@@ -55,6 +55,38 @@ JSON。路径按命令行顺序传入（至少两个），等价于调用
 ocean-sonar-modeling export-trends trend_a.json trend_b.json [trend_c.json ...] --output report.json
 ```
 
+### `compare-reports REPORT REPORT [REPORT ...]`
+
+把多份 `export_trends` 生成的趋势报告 JSON 文件按序比较并渲染为多行
+文本。路径按命令行顺序传入（至少两个），等价于调用
+`ocean_sonar.crosspoint.render_comparison(paths)`：成功时 stdout 输出其
+返回文本（`QUALITY=...`、`CHANGE[...]` 等行）加一个换行，stderr 为空，
+退出码 0；文件不存在、内容损坏等错误时 stdout 为空，stderr 输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；路径不足两个属于参数
+解析错误，退出码 2。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling compare-reports report_a.json report_b.json [report_c.json ...]
+```
+
+### `export-comparison REPORT REPORT [REPORT ...] --output OUTPUT`
+
+把多份 `export_trends` 生成的趋势报告 JSON 文件的逐份比较结果导出为
+一份比较 JSON。路径按命令行顺序传入（至少两个），等价于调用
+`ocean_sonar.crosspoint.serialize_comparison(paths)` 得到字节串 B 后写入
+`--output`：禁止 OUTPUT 与任一 REPORT 指向同一文件——存在的路径用
+`os.path.samefile` 识别软/硬链接，不存在的路径比较
+`normcase(realpath(abspath(path)))`，重合抛 `ValueError`；否则在 OUTPUT
+同目录创建临时文件，写入 B 并 `flush`、`os.fsync` 后以 `os.replace`
+原子替换。成功时静默（stdout、stderr 均为空），退出码 0；替换前失败会
+清除临时文件且既有 OUTPUT 逐字节不变，输入 REPORT 文件不会被修改；其余
+错误时 stdout 为空，stderr 输出 `ERROR <异常类名>: <异常消息>` 加换行，
+退出码 1；路径不足两个或缺少 `--output` 属于参数解析错误，退出码 2。
+
+```bash
+ocean-sonar-modeling export-comparison report_a.json report_b.json [report_c.json ...] --output comparison.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
