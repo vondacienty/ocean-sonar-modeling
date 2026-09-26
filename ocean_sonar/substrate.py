@@ -17,6 +17,7 @@ from .svp import _is_real_number
 
 __all__ = [
     "aggregate",
+    "aggregate_report_trend",
     "batch",
     "classify",
     "dump_aggregate",
@@ -1431,6 +1432,115 @@ def load_aggregate_report(path) -> dict:
         )
 
     return result
+
+
+def aggregate_report_trend(paths) -> dict:
+    """Compare successive :func:`load_aggregate_report` snapshots.
+
+    ``paths`` must be a list/tuple of at least two items; each item,
+    checked in index order, must be a non-empty ``str``. Validation
+    order (first error wins): the ``paths`` container, its length, then
+    each item in index order (type, then emptiness). A non-list/tuple
+    container or a non-str item raises ``TypeError``; fewer than two
+    items or an empty ``str`` raises ``ValueError``. Item errors are
+    prefixed with ``"paths[i]: "``.
+
+    :func:`load_aggregate_report` is then called exactly once per path,
+    in input order; any exception it raises is propagated unchanged.
+    Inputs and the loaded files are not modified.
+
+    Every loaded report's ``summary.batch_count`` and
+    ``summary.result_count`` must equal the first report's; otherwise a
+    ``ValueError`` is raised.
+
+    For each snapshot pair ``i = 1..n-1`` the unrounded deltas are
+    ``du = unknown_i - unknown_(i-1)`` and
+    ``dr = unknown_ratio_i - unknown_ratio_(i-1)``, taken from the
+    loaded ``summary`` values with no recomputation; a change is
+    regressed when ``du > 0``, ``dr > 0`` or the summary quality
+    changes from ``"pass"`` to ``"fail"``. With ``K = n - 1`` changes
+    and ``E`` the number of regressed changes, the worst change
+    minimizes the *unrounded* tuple ``(-dr, -du, i)``
+    lexicographically. Changes are not sorted, deduplicated or
+    augmented.
+
+    Returns a dict with keys in the order ``count, changes, regressed,
+    unknown_delta, unknown_ratio_delta, worst, quality``: ``count`` is
+    the snapshot count ``n``, ``changes`` is ``K``, ``regressed`` is
+    ``E`` and ``unknown_delta`` is the sum of all ``du`` values, all
+    ints; ``unknown_ratio_delta`` is the float
+    ``round(float(math.fsum(dr) / K), 6)`` and ``worst`` is the tuple
+    ``(i, du, round(float(dr), 6), q)`` whose first two items are ints,
+    whose third item is the rounded delta float and whose ``q`` is the
+    ``"pass"``/``"fail"`` summary quality of the change; both floats
+    are ``round(float(v), 6)`` with negative zero normalized to
+    ``0.0``. ``quality`` is ``"pass"`` only when ``E`` is ``0`` and
+    ``"fail"`` otherwise.
+    """
+    if not isinstance(paths, (list, tuple)):
+        raise TypeError("paths must be a list or tuple")
+    if len(paths) < 2:
+        raise ValueError("paths must contain at least 2 items")
+    for i in range(len(paths)):
+        prefix = f"paths[{i}]: "
+        if not isinstance(paths[i], str):
+            raise TypeError(prefix + "must be a str")
+        if paths[i] == "":
+            raise ValueError(prefix + "must not be empty")
+
+    reports = [load_aggregate_report(path) for path in paths]
+
+    first_summary = reports[0]["summary"]
+    batch_count = first_summary["batch_count"]
+    result_count = first_summary["result_count"]
+    for i in range(1, len(reports)):
+        summary = reports[i]["summary"]
+        if summary["batch_count"] != batch_count:
+            raise ValueError(
+                f"aggregate report at paths[{i}] has batch_count "
+                f"{summary['batch_count']}, expected {batch_count}"
+            )
+        if summary["result_count"] != result_count:
+            raise ValueError(
+                f"aggregate report at paths[{i}] has result_count "
+                f"{summary['result_count']}, expected {result_count}"
+            )
+
+    ratio_deltas = []
+    unknown_delta = 0
+    regressed = 0
+    worst_key = None
+    worst = None
+    for i in range(1, len(reports)):
+        previous = reports[i - 1]["summary"]
+        current = reports[i]["summary"]
+        du = current["unknown"] - previous["unknown"]
+        dr = current["unknown_ratio"] - previous["unknown_ratio"]
+        ratio_deltas.append(dr)
+        unknown_delta += du
+        if (
+            du > 0
+            or dr > 0
+            or (previous["quality"] == "pass" and current["quality"] == "fail")
+        ):
+            regressed += 1
+        key = (-dr, -du, i)
+        if worst_key is None or key < worst_key:
+            worst_key = key
+            worst = (int(i), int(du), _round6(dr), current["quality"])
+
+    changes = len(ratio_deltas)
+    unknown_ratio_delta = _round6(math.fsum(ratio_deltas) / changes)
+
+    return {
+        "count": int(len(reports)),
+        "changes": int(changes),
+        "regressed": int(regressed),
+        "unknown_delta": int(unknown_delta),
+        "unknown_ratio_delta": unknown_ratio_delta,
+        "worst": worst,
+        "quality": "pass" if regressed == 0 else "fail",
+    }
 
 
 def export_aggregate(path, output) -> bytes:
