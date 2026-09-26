@@ -15,7 +15,7 @@ import tempfile
 
 from .svp import _is_real_number
 
-__all__ = ["batch", "classify", "export", "load", "render"]
+__all__ = ["aggregate", "batch", "classify", "export", "load", "render"]
 
 _CLASSES = ("mud", "sand", "gravel", "rock")
 
@@ -470,6 +470,92 @@ def load(path) -> dict:
         raise ValueError("file bytes do not match the canonical batch output")
 
     return parsed
+
+
+def aggregate(paths) -> dict:
+    """Aggregate several :func:`batch`-produced JSON files.
+
+    ``paths`` must be a list/tuple of at least two items whose items,
+    checked in index order, are non-empty ``str`` paths. Validation
+    order (first error wins): the ``paths`` container, its item count,
+    then each item in index order (type, then emptiness). A
+    non-list/tuple container or a non-str item raises ``TypeError``;
+    fewer than two items or an empty ``str`` raises ``ValueError``.
+    Item errors are prefixed with ``"paths[i]: "``.
+
+    :func:`load` is then called exactly once per path, in input order;
+    any exception it raises is propagated unchanged. Inputs and the
+    loaded files are not modified.
+
+    Returns a dict with keys in the order ``batches, summary``.
+    ``batches`` is a tuple of the dicts returned by :func:`load`, in
+    input order and preserving each loaded batch object as-is.
+    ``summary`` has keys in the order ``batch_count, result_count,
+    unknown, counts, unknown_ratio, worst_batch_index, quality``:
+    ``batch_count`` is the int number of batches; ``result_count`` is
+    the int total number of results across all batches; ``unknown`` is
+    the int total number of ``unknown`` results; ``counts`` maps
+    ``unknown``, ``mud``, ``sand``, ``gravel``, ``rock`` (in that key
+    order) to int totals counted from the results; ``unknown_ratio`` is
+    ``round(float(unknown / result_count), 6)`` as a float with
+    negative zero normalized to ``0.0``; ``worst_batch_index`` is the
+    int index of the batch maximizing the tuple ``(unknown / count,
+    unknown, -index)`` computed from each batch's own ``summary``
+    values with the unrounded ratio; and ``quality`` is ``"pass"`` only
+    when every batch's ``summary.quality`` is ``"pass"``, and
+    ``"fail"`` otherwise.
+    """
+    if not isinstance(paths, (list, tuple)):
+        raise TypeError("paths must be a list or tuple")
+    if len(paths) < 2:
+        raise ValueError("paths must contain at least 2 items")
+    for i in range(len(paths)):
+        prefix = f"paths[{i}]: "
+        if not isinstance(paths[i], str):
+            raise TypeError(prefix + "must be a str")
+        if paths[i] == "":
+            raise ValueError(prefix + "must not be empty")
+
+    batches = []
+    counts = {"unknown": 0, "mud": 0, "sand": 0, "gravel": 0, "rock": 0}
+    result_count = 0
+    all_pass = True
+    worst_key = None
+    worst_index = 0
+    for i in range(len(paths)):
+        document = load(paths[i])
+        batches.append(document)
+        summary = document["summary"]
+        results = document["results"]
+        result_count += len(results)
+        for item in results:
+            counts[item[0]] += 1
+        if summary["quality"] != "pass":
+            all_pass = False
+        key = (
+            summary["unknown"] / summary["count"],
+            summary["unknown"],
+            -i,
+        )
+        if worst_key is None or key > worst_key:
+            worst_key = key
+            worst_index = i
+
+    unknown = counts["unknown"]
+    unknown_ratio = round(float(unknown / result_count), 6)
+    if unknown_ratio == 0:
+        unknown_ratio = 0.0
+
+    summary = {
+        "batch_count": int(len(paths)),
+        "result_count": int(result_count),
+        "unknown": int(unknown),
+        "counts": counts,
+        "unknown_ratio": unknown_ratio,
+        "worst_batch_index": int(worst_index),
+        "quality": "pass" if all_pass else "fail",
+    }
+    return {"batches": tuple(batches), "summary": summary}
 
 
 def _resolved_export_path(path):
