@@ -167,7 +167,7 @@ def test_batch_intensities_container_type():
 
 def test_batch_intensities_equal_length():
     with pytest.raises(
-        ValueError, match="analysis and intensities must have equal length"
+        ValueError, match="intensities must have the same length as analysis"
     ):
         substrate.batch([(1.0, 0.0)], [0.5, 0.6])
 
