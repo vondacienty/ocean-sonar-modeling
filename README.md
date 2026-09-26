@@ -200,6 +200,21 @@ ocean-sonar-modeling export-audit-report-trend audit_report_a.json audit_report_
 ocean-sonar-modeling render-audit-report-trend audit_report_trend.json
 ```
 
+### `svp-batch REQUEST`
+
+读取一份批量声线追踪请求 JSON 文件并**仅调用一次**
+`ocean_sonar.svp.batch`。REQUEST 必须是按 `batch(z, c, rays, z0=0.0,
+limit=1000.0)` 签名参数键序排列且无额外键的 JSON 对象（`z`、`c`、
+`rays` 必填，`z0`、`limit` 可省略），非法内容抛 `ValueError`。成功时
+stdout 输出 `batch` 返回字节的 UTF-8 解码文本加一个换行，stderr 为
+空，退出码 0；文件不存在、内容非法等错误时 stdout 为空，stderr 严格
+输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数缺失或多余
+属于参数解析错误，退出码 2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling svp-batch request.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -224,6 +239,9 @@ ocean-sonar-modeling render-audit-report-trend audit_report_trend.json
 `load_audit_report_trend`、`render_audit_report_trend`、
 `serialize_pair_gate_score_summary`、`render_pair_gate_score_summary`、
 `load_pair_gate_score_summary`。
+
+声速剖面（SVP）声线追踪接口位于 `ocean_sonar.svp`，该模块导出：
+`trace`、`batch`。
 
 ### 通用约定
 

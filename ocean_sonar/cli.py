@@ -23,6 +23,57 @@ from .crosspoint import (
     serialize_comparison,
 )
 from .report import rank_files
+from .svp import batch as _svp_batch
+
+
+_SVP_BATCH_KEYS = ("z", "c", "rays", "z0", "limit")
+
+
+def _reject_request_constant(value):
+    raise ValueError(f"request contains a non-finite JSON constant: {value}")
+
+
+def _reject_request_duplicate_keys(pairs):
+    keys = [key for key, _ in pairs]
+    if len(set(keys)) != len(keys):
+        raise ValueError("request contains duplicate keys")
+    return dict(pairs)
+
+
+def _svp_batch_text(path):
+    """Read a ``svp-batch`` request file and run :func:`svp.batch` once.
+
+    The file must contain one JSON object whose keys follow the
+    ``batch(z, c, rays, z0=0.0, limit=1000.0)`` signature order with no
+    extra keys; any invalid content raises ``ValueError``. Returns the
+    UTF-8 decoded text of the ``batch`` result bytes.
+    """
+    with open(path, "rb") as handle:
+        data = handle.read()
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"request file is not valid UTF-8: {exc}") from exc
+    try:
+        request = json.loads(
+            text,
+            parse_constant=_reject_request_constant,
+            object_pairs_hook=_reject_request_duplicate_keys,
+        )
+    except ValueError as exc:
+        raise ValueError(f"request file is not valid JSON: {exc}") from exc
+    if not isinstance(request, dict):
+        raise ValueError("request must be a JSON object")
+    keys = list(request)
+    if any(key not in _SVP_BATCH_KEYS for key in keys):
+        raise ValueError("request must not contain extra keys")
+    positions = [_SVP_BATCH_KEYS.index(key) for key in keys]
+    if positions != sorted(positions):
+        raise ValueError("request keys must follow the batch signature order")
+    for required in ("z", "c", "rays"):
+        if required not in request:
+            raise ValueError(f"request must contain {required!r}")
+    return _svp_batch(**request).decode("utf-8")
 
 
 def _resolved_path(path):
@@ -130,6 +181,8 @@ def main(argv: list[str] | None = None) -> int:
     export_audit_report_trend_parser.add_argument("--output", required=True, help="output file atomically overwritten with the audit report trend JSON")
     render_audit_report_trend_parser = sub.add_parser("render-audit-report-trend", help="render one audit report trend JSON file as two summary lines")
     render_audit_report_trend_parser.add_argument("trend", metavar="TREND", help="audit report trend JSON file")
+    svp_batch_parser = sub.add_parser("svp-batch", help="trace a batch of SVP rays from a request JSON file and print the result JSON")
+    svp_batch_parser.add_argument("request", metavar="REQUEST", help="batch request JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -249,6 +302,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "render-audit-report-trend":
         try:
             text = render_audit_report_trend(args.trend)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "svp-batch":
+        try:
+            text = _svp_batch_text(args.request)
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
