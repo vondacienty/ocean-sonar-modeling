@@ -55,6 +55,7 @@ __all__ = [
     "compare_reports",
     "serialize_comparison",
     "render_comparison",
+    "load_comparison",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -3363,6 +3364,235 @@ def render_comparison(paths) -> str:
             )
         )
     return "\n".join(lines)
+
+
+_COMPARISON_KEYS = ("changes", "worst", "quality")
+_COMPARISON_CHANGE_KEYS = (
+    "index",
+    "degraded_delta",
+    "coverage_delta",
+    "score_delta",
+    "quality",
+)
+
+
+def _check_comparison_change(change, expected_index, prefix):
+    """Validate one comparison change object and return its normalized dict.
+
+    ``expected_index`` is the required ``index`` value, or ``None`` to skip
+    the index/consecutiveness check (used for ``worst``).
+    """
+    if not isinstance(change, dict):
+        raise TypeError(prefix + "must be an object")
+    if list(change.keys()) != list(_COMPARISON_CHANGE_KEYS):
+        raise TypeError(
+            prefix
+            + "keys must be in the order "
+            "index, degraded_delta, coverage_delta, score_delta, quality"
+        )
+
+    index = change["index"]
+    if type(index) is not int:
+        raise TypeError(prefix + "index must be a non-bool int")
+    if expected_index is not None and index != expected_index:
+        raise ValueError(
+            prefix + f"index must be {expected_index} (consecutive from 1)"
+        )
+
+    degraded_delta = change["degraded_delta"]
+    if type(degraded_delta) is not int:
+        raise TypeError(prefix + "degraded_delta must be a non-bool int")
+    if not -2 <= degraded_delta <= 2:
+        raise ValueError(prefix + "degraded_delta must be in [-2, 2]")
+
+    _check_trend_float(
+        change["coverage_delta"], "coverage_delta", -2, 2, prefix
+    )
+    _check_trend_float(
+        change["score_delta"], "score_delta", -200, 200, prefix
+    )
+
+    quality = change["quality"]
+    if type(quality) is not str:
+        raise TypeError(prefix + "quality must be a str")
+    if quality not in ("pass", "fail"):
+        raise ValueError(prefix + "quality must be 'pass' or 'fail'")
+
+    return {
+        "index": int(index),
+        "degraded_delta": int(degraded_delta),
+        "coverage_delta": change["coverage_delta"],
+        "score_delta": change["score_delta"],
+        "quality": quality,
+    }
+
+
+def _check_comparison(comparison):
+    prefix = "comparison: "
+    if not isinstance(comparison, dict):
+        raise TypeError("comparison must be a dict")
+    if list(comparison.keys()) != list(_COMPARISON_KEYS):
+        raise TypeError(
+            "comparison keys must be in the order changes, worst, quality"
+        )
+
+    changes = comparison["changes"]
+    if not isinstance(changes, list):
+        raise TypeError(prefix + "changes must be a list")
+    if len(changes) == 0:
+        raise ValueError(prefix + "changes must be non-empty")
+
+    items = []
+    all_pass = True
+    for i in range(len(changes)):
+        item = _check_comparison_change(
+            changes[i], i + 1, f"{prefix}changes[{i}]: "
+        )
+        items.append(item)
+        if item["quality"] != "pass":
+            all_pass = False
+
+    worst = comparison["worst"]
+    worst_prefix = prefix + "worst: "
+    if not isinstance(worst, dict):
+        raise TypeError(worst_prefix + "must be an object")
+    if list(worst.keys()) != list(_COMPARISON_CHANGE_KEYS):
+        raise TypeError(
+            worst_prefix
+            + "keys must be in the order "
+            "index, degraded_delta, coverage_delta, score_delta, quality"
+        )
+    matched = None
+    for item in items:
+        if worst == item:
+            matched = item
+            break
+    if matched is None:
+        raise ValueError(
+            worst_prefix
+            + "must be field-for-field equal to one of the changes items"
+        )
+
+    quality = comparison["quality"]
+    if type(quality) is not str:
+        raise TypeError(prefix + "quality must be a str")
+    if quality not in ("pass", "fail"):
+        raise ValueError(prefix + "quality must be 'pass' or 'fail'")
+    expected_quality = "pass" if all_pass else "fail"
+    if quality != expected_quality:
+        raise ValueError(
+            prefix
+            + "quality must be 'pass' if and only if every change quality "
+            "is 'pass'"
+        )
+
+    return {"changes": tuple(items), "worst": matched, "quality": quality}
+
+
+def _dump_comparison(comparison):
+    document = {
+        "changes": [dict(change) for change in comparison["changes"]],
+        "worst": dict(comparison["worst"]),
+        "quality": comparison["quality"],
+    }
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"comparison: could not be serialized to JSON: {exc}"
+        ) from exc
+
+
+def load_comparison(path) -> dict:
+    """Load a :func:`serialize_comparison`-produced JSON comparison.
+
+    ``path`` must be a non-empty ``str``: a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``. The file
+    is opened in binary mode (``"rb"``) and read in full; a missing
+    file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError`` and every other ``OSError`` is propagated
+    unchanged. The file is not modified.
+
+    The bytes must be exactly those produced by
+    :func:`serialize_comparison` for the same value: compact UTF-8
+    JSON (``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``) with no BOM and no trailing newline. A BOM, a
+    trailing newline, a UTF-8 decoding failure or a JSON parsing
+    failure raises ``ValueError``; the ``NaN``/``Infinity`` constants,
+    any other non-finite token and duplicate object keys are rejected.
+
+    The decoded value must be a JSON object with top-level keys exactly
+    in the order ``changes, worst, quality`` — duplicated, missing or
+    extra keys are rejected. ``changes`` must be a non-empty array of
+    objects whose keys are exactly in the order
+    ``index, degraded_delta, coverage_delta, score_delta, quality``:
+    ``index`` and ``degraded_delta`` must be non-bool ints, with
+    ``index`` running consecutively from ``1`` and
+    ``degraded_delta`` in ``[-2, 2]``; ``coverage_delta`` and
+    ``score_delta`` must be finite non-bool floats in ``[-2, 2]`` and
+    ``[-200, 200]`` respectively, each equal to
+    ``round(float(v), 6)`` with negative zero forbidden; and
+    ``quality`` must be ``"pass"`` or ``"fail"``. ``worst`` must have
+    the same key order and be field-for-field equal to one of the
+    ``changes`` items. The top-level ``quality`` must be ``"pass"`` if
+    and only if every change quality is ``"pass"``, and ``"fail"``
+    otherwise. The file bytes must also equal the canonical
+    re-serialization of the decoded value byte for byte; any
+    key-order, type, range, consecutiveness, relation, parse or
+    canonical-byte mismatch raises ``ValueError``.
+
+    Returns the comparison as a dict with the keys in the order above;
+    only the ``changes`` array is restored to a tuple (its ``worst``
+    item is the matching tuple entry) and every other value is
+    returned unchanged. The file is never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_json_pairs,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        result = _check_comparison(parsed)
+        canonical = _dump_comparison(result)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid comparison: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical serialize_comparison output"
+        )
+
+    return result
 
 
 def render_trends(paths) -> str:

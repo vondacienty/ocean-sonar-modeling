@@ -105,7 +105,7 @@ ocean-sonar-modeling export-comparison report_a.json report_b.json [report_c.jso
 `serialize_trend`、`render_trend`、`load_trend`、
 `load_trends`、`render_trends`、`export_trends`、
 `load_trend_report`、
-`serialize_comparison`、`render_comparison`、
+`serialize_comparison`、`render_comparison`、`load_comparison`、
 `serialize_pair_gate_score_summary`、`render_pair_gate_score_summary`、
 `load_pair_gate_score_summary`。
 
@@ -617,3 +617,36 @@ CHANGE[<index>]=<degraded_delta>,<coverage_delta>,<score_delta>,<quality>
 `C["changes"]` 原序逐项输出一行 `CHANGE[...]`，各值直接取自对应的
 变化项，不重算、不排序。格式化规则：`int` 以十进制输出，`str` 原样
 插入，`float` 使用 `format(v, ".6f")`（负零渲染为 `0.000000`）。
+
+### `load_comparison(path) -> dict`
+
+从文件读回 `serialize_comparison` 生成的 JSON 比较结果。
+
+`path` 必须是非空 `str`：非 `str` 抛 `TypeError`，空串抛
+`ValueError`。文件以 `"rb"` 整体读取；文件不存在抛
+`FileNotFoundError`，路径为目录抛 `IsADirectoryError`，其余
+`OSError` 原样传播。文件不被修改。
+
+文件字节必须恰为 `serialize_comparison` 对同一值生成的字节：
+紧凑 UTF-8 JSON（`ensure_ascii=False`、`separators=(",", ":")`、
+`allow_nan=False`），无 BOM、无尾换行。BOM、尾换行、UTF-8 解码
+失败或 JSON 解析失败均抛 `ValueError`；`NaN`/`Infinity` 常量、
+其他非有限 token 与重复对象键一律拒绝。
+
+解码值必须是顶层键序恰为 `changes, worst, quality` 的对象——
+重复、缺失、额外键或键序错误均抛 `ValueError`。`changes` 必须是
+非空数组，各项键序恰为
+`index, degraded_delta, coverage_delta, score_delta, quality`：
+`index` 与 `degraded_delta` 为非 bool `int`，`index` 从 `1`
+起连续，`degraded_delta` 属 `[-2, 2]`；`coverage_delta` 与
+`score_delta` 为有限非 bool `float`，依次属 `[-2, 2]`、
+`[-200, 200]`，且各自等于 `round(float(v), 6)`、禁负零；
+`quality` 仅取 `"pass"`/`"fail"`。`worst` 键序相同，且必须与
+某个 `changes` 项逐字段相等。顶层 `quality` 仅当全部项均为
+`"pass"` 时为 `"pass"`，否则为 `"fail"`。文件字节还须与解码值
+的规范重编码逐字节一致；任何键序、类型、范围、连续性、关系或
+规范字节不匹配均抛 `ValueError`。
+
+返回保持上述键序的 `dict`：仅 `changes` 数组还原为 `tuple`
+（其 `worst` 项即命中的那一元组项），其余值原样返回。文件
+不被修改。
