@@ -67,6 +67,7 @@ __all__ = [
     "load_audit_report",
     "export_audit_report",
     "render_audit_report",
+    "audit_report_trend",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -4616,6 +4617,129 @@ def render_audit_report(path) -> str:
         _format_rendered_value(value) for value in result["worst"].values()
     )
     return "\n".join((report_line, summary_line, worst_line))
+
+
+def audit_report_trend(paths) -> dict:
+    """Compare successive :func:`load_audit_report` snapshots along one path set.
+
+    ``paths`` follows the exact input contract of :func:`trend`: a
+    list/tuple of at least two items; each item, checked in index order,
+    must be a non-empty ``str``. Validation order (first error wins):
+    the ``paths`` container, its length, then each item in index order
+    (type, then emptiness). A non-list/tuple container or a non-str item
+    raises ``TypeError``; fewer than two items or an empty ``str`` raises
+    ``ValueError``. Item errors are prefixed with ``"paths[i]: "``.
+
+    :func:`load_audit_report` is then called exactly once per path, in
+    input order; any exception it raises is propagated unchanged.
+    Inputs and the loaded files are not modified.
+
+    Every loaded report must have ``summary.files`` and
+    ``summary.changes`` equal to those of the first report; otherwise a
+    ``ValueError`` is raised.
+
+    For each adjacent pair ``i = 1..n-1`` the unrounded deltas are
+    ``df = failed_i - failed_(i-1)`` and
+    ``dr = pass_ratio_i - pass_ratio_(i-1)``; a comparison regresses
+    when ``df > 0``, ``dr < 0`` or the top-level quality changes from
+    ``"pass"`` to ``"fail"``. With ``K = n - 1`` and ``E`` the number
+    of regressions, the worst comparison minimizes the *unrounded*
+    tuple ``(dr, -df, i)`` lexicographically. Comparisons are not
+    sorted, deduplicated or augmented, and the loaded values are never
+    recomputed.
+
+    Returns a dict with keys in the order
+    ``count, changes, regressed, failed_delta, pass_ratio_delta, worst,
+    quality``: ``count`` is the report count ``n`` and
+    ``changes``/``regressed`` are ``K`` and ``E``, all ints;
+    ``failed_delta`` is the int sum of the ``df`` values;
+    ``pass_ratio_delta`` is
+    ``round(float(math.fsum(dr) / K), 6)`` with negative zero
+    normalized to ``0.0``; and ``worst`` is the tuple
+    ``(i, df, round(float(dr), 6), q)`` whose first two items are ints,
+    the third the rounded delta float (negative zero normalized to
+    ``0.0``) and ``q`` the comparison's ``"pass"``/``"fail"`` quality.
+    The top-level ``quality`` is ``"pass"`` only when ``E`` is ``0``
+    and ``"fail"`` otherwise.
+    """
+    if not isinstance(paths, (list, tuple)):
+        raise TypeError("paths must be a list or tuple")
+    if len(paths) < 2:
+        raise ValueError("paths must contain at least 2 items")
+    for i in range(len(paths)):
+        prefix = f"paths[{i}]: "
+        if not isinstance(paths[i], str):
+            raise TypeError(prefix + "must be a str")
+        if paths[i] == "":
+            raise ValueError(prefix + "must not be empty")
+
+    reports = [load_audit_report(path) for path in paths]
+
+    first_files = reports[0]["summary"]["files"]
+    first_changes = reports[0]["summary"]["changes"]
+    for i in range(1, len(reports)):
+        summary = reports[i]["summary"]
+        if summary["files"] != first_files:
+            raise ValueError(
+                f"audit report at paths[{i}] has {summary['files']} files, "
+                f"expected {first_files}"
+            )
+        if summary["changes"] != first_changes:
+            raise ValueError(
+                f"audit report at paths[{i}] has {summary['changes']} changes, "
+                f"expected {first_changes}"
+            )
+
+    failed_deltas = []
+    pass_ratio_deltas = []
+    worst_position = None
+    worst_df = None
+    worst_dr = None
+    worst_quality = None
+    regressed = 0
+    for i in range(1, len(reports)):
+        previous = reports[i - 1]
+        current = reports[i]
+        df = current["summary"]["failed"] - previous["summary"]["failed"]
+        dr = (
+            current["summary"]["pass_ratio"]
+            - previous["summary"]["pass_ratio"]
+        )
+        failed_deltas.append(df)
+        pass_ratio_deltas.append(dr)
+        if (
+            df > 0
+            or dr < 0
+            or (previous["quality"] == "pass" and current["quality"] == "fail")
+        ):
+            quality = "fail"
+            regressed += 1
+        else:
+            quality = "pass"
+        position = (dr, -df, i)
+        if worst_position is None or position < worst_position:
+            worst_position = position
+            worst_df = df
+            worst_dr = dr
+            worst_quality = quality
+
+    k = len(reports) - 1
+    pass_ratio_delta = round(float(math.fsum(pass_ratio_deltas) / k), 6)
+    if pass_ratio_delta == 0:
+        pass_ratio_delta = 0.0
+    worst_dr = round(float(worst_dr), 6)
+    if worst_dr == 0:
+        worst_dr = 0.0
+
+    return {
+        "count": int(len(reports)),
+        "changes": int(k),
+        "regressed": int(regressed),
+        "failed_delta": int(sum(failed_deltas)),
+        "pass_ratio_delta": pass_ratio_delta,
+        "worst": (int(worst_position[2]), int(worst_df), worst_dr, worst_quality),
+        "quality": "pass" if regressed == 0 else "fail",
+    }
 
 
 def render_trends(paths) -> str:
