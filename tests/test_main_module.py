@@ -47,6 +47,12 @@ CASES = [
     pytest.param(["version"], id="version"),
     pytest.param(["--help"], id="help"),
     pytest.param([], id="no-subcommand"),
+    pytest.param(["render-trends"], id="render-trends-no-paths"),
+    pytest.param(["render-trends", "only.json"], id="render-trends-single-path"),
+    pytest.param(
+        ["render-trends", "missing_a.json", "missing_b.json"],
+        id="render-trends-missing-files",
+    ),
 ]
 
 # Environment variables that can inject the source tree (or arbitrary code)
@@ -628,6 +634,68 @@ def test_installed_version_exact_output(
     assert result.returncode == 0
     assert result.stdout == b"0.1.0\n"
     assert result.stderr == b""
+
+
+def _write_trend_file(path: Path, quality: str) -> str:
+    """Write one canonical serialize_trend-compatible JSON trend file."""
+    coverage_delta, score_delta, degraded = (
+        (0.1, 2.0, 0) if quality == "pass" else (-0.1, -1.0, 1)
+    )
+    document = {
+        "count": 2,
+        "changes": 1,
+        "degraded": degraded,
+        "coverage_delta": coverage_delta,
+        "score_delta": score_delta,
+        "worst": [1, 0, 0, coverage_delta, score_delta],
+        "quality": quality,
+    }
+    path.write_bytes(
+        json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    )
+    return str(path)
+
+
+def test_installed_render_trends_success_matches_console_script(
+    installed_env: InstalledEnv,
+    tmp_path: Path,
+) -> None:
+    """render-trends success output is byte-identical across entry points."""
+    paths = [
+        _write_trend_file(tmp_path / "trend_0.json", "pass"),
+        _write_trend_file(tmp_path / "trend_1.json", "fail"),
+    ]
+    env = _scrubbed_env(installed_env.scripts_dir)
+    args = ["render-trends", *paths]
+
+    module = _run(
+        [installed_env.python, "-m", "ocean_sonar", *args],
+        cwd=tmp_path,
+        env=env,
+    )
+    script = _run(
+        [installed_env.console_script, *args],
+        cwd=tmp_path,
+        env=env,
+    )
+
+    assert module.returncode == script.returncode == 0
+    assert module.stderr == script.stderr == b""
+    assert module.stdout == script.stdout
+    assert module.stdout == (
+        b"TRENDS=2,2,1,0.000000,0.500000,fail\n"
+        b"FILES=0:0.050000:1.000000|1:-0.050000:-0.500000;"
+        b"RMSE=0.100000,1.500000;WORST_FILE=1\n"
+        b"WORST=1,1,0,0,-0.100000,-1.000000\n"
+    )
+    # The input trend files are not modified.
+    for path in paths:
+        assert json.loads(Path(path).read_bytes().decode("utf-8"))["count"] == 2
 
 
 @pytest.mark.parametrize("args", CASES)

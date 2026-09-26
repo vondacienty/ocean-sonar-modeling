@@ -6,6 +6,7 @@ import argparse
 import sys
 
 from . import __version__
+from .crosspoint import render_trends
 from .report import rank_files
 
 
@@ -16,6 +17,10 @@ def main(argv: list[str] | None = None) -> int:
     rank_parser = sub.add_parser("rank-batches", help="rank serialized batch summaries and write the ranking")
     rank_parser.add_argument("inputs", nargs="+", metavar="INPUT", help="batch summary JSON files, in ranking input order")
     rank_parser.add_argument("--output", required=True, help="output file overwritten with the ranking JSON")
+    trends_parser = sub.add_parser("render-trends", help="render multi-file trend summaries as three lines")
+    trends_parser.add_argument("trend_first", metavar="TREND", help="first trend JSON file")
+    trends_parser.add_argument("trend_second", metavar="TREND", help="second trend JSON file")
+    trends_parser.add_argument("trend_rest", nargs="*", metavar="TREND", help="additional trend JSON files")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -28,6 +33,16 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
+        return 0
+
+    if args.command == "render-trends":
+        paths = [args.trend_first, args.trend_second, *args.trend_rest]
+        try:
+            text = render_trends(paths)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
         return 0
 
     parser.print_help()

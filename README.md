@@ -27,6 +27,20 @@ ocean-sonar-modeling version    # 打印版本号
 ocean-sonar-modeling --help     # 打印用法
 ```
 
+### `render-trends TREND TREND [TREND ...]`
+
+把多份 `serialize_trend` 生成的趋势 JSON 文件渲染为三行汇总文本。
+路径按命令行顺序传入（至少两个），等价于调用
+`ocean_sonar.crosspoint.render_trends(paths)`：成功时 stdout 输出其返回
+的三行文本（`TRENDS=...`、`FILES=...`、`WORST=...`）加一个换行，stderr
+为空，退出码 0；文件不存在、内容损坏等错误时 stdout 为空，stderr 输出
+`ERROR <异常类名>: <异常消息>`，退出码 1；路径不足两个属于参数解析
+错误，退出码 2。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling render-trends trend_a.json trend_b.json [trend_c.json ...]
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
