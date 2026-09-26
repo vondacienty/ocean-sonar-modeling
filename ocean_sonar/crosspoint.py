@@ -64,6 +64,7 @@ __all__ = [
     "export_audit",
     "render_audit",
     "serialize_audit_report",
+    "load_audit_report",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -4181,6 +4182,331 @@ def serialize_audit_report(path) -> bytes:
         raise ValueError(
             f"audit report: could not be serialized to JSON: {exc}"
         ) from exc
+
+
+_AUDIT_REPORT_KEYS = ("schema_version", "source", "summary", "worst", "quality")
+_AUDIT_REPORT_SOURCE_KEYS = ("path", "kind")
+_AUDIT_REPORT_SUMMARY_KEYS = (
+    "files",
+    "changes",
+    "failed",
+    "passed",
+    "pass_ratio",
+)
+_AUDIT_REPORT_WORST_KEYS = (
+    "file_index",
+    "index",
+    "degraded_delta",
+    "coverage_delta",
+    "score_delta",
+    "quality",
+)
+
+
+def _dump_audit_report(report):
+    """Re-serialize a validated audit report like :func:`serialize_audit_report`."""
+    summary = report["summary"]
+    worst = report["worst"]
+    document = {
+        "schema_version": int(report["schema_version"]),
+        "source": {
+            "path": report["source"]["path"],
+            "kind": report["source"]["kind"],
+        },
+        "summary": {
+            "files": int(summary["files"]),
+            "changes": int(summary["changes"]),
+            "failed": int(summary["failed"]),
+            "passed": int(summary["passed"]),
+            "pass_ratio": summary["pass_ratio"],
+        },
+        "worst": {
+            "file_index": int(worst["file_index"]),
+            "index": int(worst["index"]),
+            "degraded_delta": int(worst["degraded_delta"]),
+            "coverage_delta": worst["coverage_delta"],
+            "score_delta": worst["score_delta"],
+            "quality": worst["quality"],
+        },
+        "quality": report["quality"],
+    }
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"audit report: could not be serialized to JSON: {exc}"
+        ) from exc
+
+
+def _check_audit_report(report):
+    """Validate a decoded audit report and return its normalized dict."""
+    prefix = "audit report: "
+    if not isinstance(report, dict):
+        raise TypeError("audit report must be a dict")
+    if list(report.keys()) != list(_AUDIT_REPORT_KEYS):
+        raise TypeError(
+            "audit report keys must be in the order "
+            "schema_version, source, summary, worst, quality"
+        )
+
+    schema_version = report["schema_version"]
+    if type(schema_version) is not int:
+        raise TypeError(prefix + "schema_version must be a non-bool int")
+    if schema_version != 1:
+        raise ValueError(prefix + "schema_version must be 1")
+
+    source = report["source"]
+    source_prefix = prefix + "source: "
+    if not isinstance(source, dict):
+        raise TypeError(source_prefix + "must be an object")
+    if list(source.keys()) != list(_AUDIT_REPORT_SOURCE_KEYS):
+        raise TypeError(
+            source_prefix + "keys must be in the order path, kind"
+        )
+    source_path = source["path"]
+    if type(source_path) is not str:
+        raise TypeError(source_prefix + "path must be a str")
+    if source_path == "":
+        raise ValueError(source_prefix + "path must not be empty")
+    kind = source["kind"]
+    if type(kind) is not str:
+        raise TypeError(source_prefix + "kind must be a str")
+    if kind != "audit":
+        raise ValueError(source_prefix + "kind must be 'audit'")
+
+    summary = report["summary"]
+    summary_prefix = prefix + "summary: "
+    if not isinstance(summary, dict):
+        raise TypeError(summary_prefix + "must be an object")
+    if list(summary.keys()) != list(_AUDIT_REPORT_SUMMARY_KEYS):
+        raise TypeError(
+            summary_prefix
+            + "keys must be in the order "
+            "files, changes, failed, passed, pass_ratio"
+        )
+
+    files = summary["files"]
+    if type(files) is not int:
+        raise TypeError(summary_prefix + "files must be a non-bool int")
+    if files < 2:
+        raise ValueError(summary_prefix + "files must be >= 2")
+
+    changes = summary["changes"]
+    if type(changes) is not int:
+        raise TypeError(summary_prefix + "changes must be a non-bool int")
+    if changes < files:
+        raise ValueError(summary_prefix + "changes must be >= files")
+
+    failed = summary["failed"]
+    if type(failed) is not int:
+        raise TypeError(summary_prefix + "failed must be a non-bool int")
+    if not 0 <= failed <= changes:
+        raise ValueError(summary_prefix + "failed must be in [0, changes]")
+
+    passed = summary["passed"]
+    if type(passed) is not int:
+        raise TypeError(summary_prefix + "passed must be a non-bool int")
+    if passed != changes - failed:
+        raise ValueError(summary_prefix + "passed must equal changes - failed")
+
+    pass_ratio = summary["pass_ratio"]
+    if type(pass_ratio) is not float:
+        raise TypeError(summary_prefix + "pass_ratio must be a float")
+    if not math.isfinite(pass_ratio):
+        raise ValueError(summary_prefix + "pass_ratio must be finite")
+    expected_ratio = round(float(passed / changes), 6)
+    if expected_ratio == 0:
+        expected_ratio = 0.0
+    if pass_ratio != expected_ratio:
+        raise ValueError(
+            summary_prefix + "pass_ratio must equal round(passed / changes, 6)"
+        )
+    if pass_ratio == 0.0 and math.copysign(1.0, pass_ratio) < 0.0:
+        raise ValueError(summary_prefix + "pass_ratio must not be negative zero")
+
+    worst = report["worst"]
+    worst_prefix = prefix + "worst: "
+    if not isinstance(worst, dict):
+        raise TypeError(worst_prefix + "must be an object")
+    if list(worst.keys()) != list(_AUDIT_REPORT_WORST_KEYS):
+        raise TypeError(
+            worst_prefix
+            + "keys must be in the order file_index, index, "
+            "degraded_delta, coverage_delta, score_delta, quality"
+        )
+
+    file_index = worst["file_index"]
+    if type(file_index) is not int:
+        raise TypeError(worst_prefix + "file_index must be a non-bool int")
+    if not 0 <= file_index < files:
+        raise ValueError(worst_prefix + "file_index must be in [0, files)")
+
+    index = worst["index"]
+    if type(index) is not int:
+        raise TypeError(worst_prefix + "index must be a non-bool int")
+    if index < 1:
+        raise ValueError(worst_prefix + "index must be >= 1")
+
+    degraded_delta = worst["degraded_delta"]
+    if type(degraded_delta) is not int:
+        raise TypeError(worst_prefix + "degraded_delta must be a non-bool int")
+    if not -2 <= degraded_delta <= 2:
+        raise ValueError(worst_prefix + "degraded_delta must be in [-2, 2]")
+
+    _check_trend_float(
+        worst["coverage_delta"], "coverage_delta", -2, 2, worst_prefix
+    )
+    _check_trend_float(
+        worst["score_delta"], "score_delta", -200, 200, worst_prefix
+    )
+
+    worst_quality = worst["quality"]
+    if type(worst_quality) is not str:
+        raise TypeError(worst_prefix + "quality must be a str")
+    if worst_quality not in ("pass", "fail"):
+        raise ValueError(worst_prefix + "quality must be 'pass' or 'fail'")
+
+    quality = report["quality"]
+    if type(quality) is not str:
+        raise TypeError(prefix + "quality must be a str")
+    if quality not in ("pass", "fail"):
+        raise ValueError(prefix + "quality must be 'pass' or 'fail'")
+    if failed == 0:
+        if quality != "pass":
+            raise ValueError(prefix + "quality must be 'pass' when failed is 0")
+        if worst_quality != "pass":
+            raise ValueError(
+                worst_prefix + "quality must be 'pass' when failed is 0"
+            )
+    elif quality != "fail":
+        raise ValueError(prefix + "quality must be 'fail' when failed is not 0")
+
+    return {
+        "schema_version": int(schema_version),
+        "source": {
+            "path": source_path,
+            "kind": kind,
+        },
+        "summary": {
+            "files": int(files),
+            "changes": int(changes),
+            "failed": int(failed),
+            "passed": int(passed),
+            "pass_ratio": pass_ratio,
+        },
+        "worst": {
+            "file_index": int(file_index),
+            "index": int(index),
+            "degraded_delta": int(degraded_delta),
+            "coverage_delta": worst["coverage_delta"],
+            "score_delta": worst["score_delta"],
+            "quality": worst_quality,
+        },
+        "quality": quality,
+    }
+
+
+def load_audit_report(path) -> dict:
+    """Load a :func:`serialize_audit_report`-produced JSON audit report.
+
+    ``path`` must be a non-empty ``str``: a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``. The file
+    is opened in binary mode (``"rb"``) and read in full; a missing
+    file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError`` and every other ``OSError`` is propagated
+    unchanged. The file is not modified.
+
+    The bytes must be exactly those produced by
+    :func:`serialize_audit_report` for the same value: compact UTF-8
+    JSON (``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``) with no BOM and no trailing newline. A BOM, a
+    trailing newline, a UTF-8 decoding failure or a JSON parsing
+    failure raises ``ValueError``; the ``NaN``/``Infinity`` constants,
+    any other non-finite token and duplicate object keys are rejected.
+
+    The decoded value must be a JSON object with top-level keys exactly
+    in the order ``schema_version, source, summary, worst, quality`` —
+    duplicated, missing or extra keys are rejected.
+
+    ``schema_version`` must be the non-bool int ``1``. ``source`` must
+    be an object with keys exactly in the order ``path, kind``:
+    ``path`` a non-empty ``str`` and ``kind`` the fixed string
+    ``"audit"``.
+
+    ``summary`` must have keys exactly in the order
+    ``files, changes, failed, passed, pass_ratio``. ``files``,
+    ``changes``, ``failed`` and ``passed`` must be non-bool ints with
+    ``files >= 2``, ``changes >= files``,
+    ``0 <= failed <= changes`` and ``passed == changes - failed``.
+    ``pass_ratio`` must be a finite non-bool float equal to
+    ``round(float(passed / changes), 6)`` with negative zero forbidden.
+
+    ``worst`` must be an object with keys exactly in the order
+    ``file_index, index, degraded_delta, coverage_delta, score_delta,
+    quality``: ``file_index``, ``index`` and ``degraded_delta`` must be
+    non-bool ints satisfying ``0 <= file_index < files``,
+    ``index >= 1`` and ``-2 <= degraded_delta <= 2``;
+    ``coverage_delta`` and ``score_delta`` must be finite non-bool
+    floats in ``[-2, 2]`` and ``[-200, 200]`` respectively, each equal
+    to ``round(float(v), 6)`` with negative zero forbidden; and
+    ``quality`` must be ``"pass"`` or ``"fail"``. The top-level
+    ``quality`` must be ``"pass"`` if and only if ``failed`` is ``0``,
+    in which case the ``worst`` quality must also be ``"pass"``. The
+    file bytes must also equal the canonical re-serialization of the
+    decoded value byte for byte; any key-order, type, range, relation,
+    parse or canonical-byte mismatch raises ``ValueError``.
+
+    Returns the report as a dict with the keys in the order above;
+    every value is returned unchanged in its stored key order. The
+    file is never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_json_pairs,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        result = _check_audit_report(parsed)
+        canonical = _dump_audit_report(result)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid audit report: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical serialize_audit_report output"
+        )
+
+    return result
 
 
 def render_trends(paths) -> str:

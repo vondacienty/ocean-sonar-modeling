@@ -153,7 +153,7 @@ ocean-sonar-modeling render-audit audit.json
 `load_trend_report`、
 `serialize_comparison`、`render_comparison`、`load_comparison`、
 `audit_comparisons`、`export_audit`、`render_audit`、
-`serialize_audit_report`、
+`serialize_audit_report`、`load_audit_report`、
 `serialize_pair_gate_score_summary`、`render_pair_gate_score_summary`、
 `load_pair_gate_score_summary`。
 
@@ -801,3 +801,38 @@ WORST=<file_index>,<index>,<degraded_delta>,<coverage_delta>,<score_delta>,<qual
 计数为 `int`，两个 delta 与 `pass_ratio` 为 `float`。JSON 字节格式、浮
 点六位舍入、负零归一化及编码失败抛 `ValueError` 的规则沿用
 `serialize_audit`；不重算最差项、不修改 `A`、不增加额外键。
+
+### `load_audit_report(path) -> dict`
+
+读取一份 `serialize_audit_report` 产出的审计报告 JSON。
+
+`path` 校验、二进制（`"rb"`）读取与系统异常、BOM/尾换行拒绝、UTF-8/JSON
+解码、`NaN`/`Infinity` 与重复键拒绝以及逐字节规范重序列化核对，全部沿用
+`load_audit`：非 `str` 抛 `TypeError`，空串抛 `ValueError`，文件缺失抛
+`FileNotFoundError`，目录抛 `IsADirectoryError`，其余 `OSError` 原样传
+播；解析、结构或规范字节不符一律抛 `ValueError`。文件不会被修改。
+
+解码值必须是 JSON 对象，顶层键序恰好为
+`schema_version, source, summary, worst, quality`——重复、缺失或多余键
+均被拒绝：
+
+- `schema_version` 为非布尔整数 `1`；
+- `source` 为对象，键序恰好为 `path, kind`：`path` 为非空 `str`，`kind`
+  为固定字符串 `"audit"`；
+- `summary` 键序恰好为 `files, changes, failed, passed, pass_ratio`：前四
+  项为非布尔 `int`，满足 `files >= 2`、`changes >= files`、
+  `0 <= failed <= changes`、`passed = changes - failed`；`pass_ratio` 为
+  有限非布尔 `float`，等于 `round(float(passed / changes), 6)`，禁止负零；
+- `worst` 为对象，键序恰好为
+  `file_index, index, degraded_delta, coverage_delta, score_delta,
+  quality`：前三项为非布尔 `int`，满足 `0 <= file_index < files`、
+  `index >= 1`、`-2 <= degraded_delta <= 2`；`coverage_delta` 与
+  `score_delta` 为有限非布尔 `float`，分别落在 `[-2, 2]` 与
+  `[-200, 200]`，各自等于 `round(float(v), 6)` 且禁止负零；`quality` 为
+  `"pass"`/`"fail"`——其类型、范围、六位舍入、负零与质量联动规则沿用
+  `load_audit` 的 `worst`；
+- 顶层 `quality` 仅为 `"pass"`/`"fail"`，当且仅当 `failed = 0` 时为
+  `"pass"`，此时 `worst.quality` 也必须为 `"pass"`。
+
+返回保持原键序的 dict（`source`、`summary`、`worst` 亦保持其存储键序），
+各值原样返回，文件始终不被修改。
