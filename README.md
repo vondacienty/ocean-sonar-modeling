@@ -25,7 +25,21 @@ python -m pytest
 ```bash
 ocean-sonar-modeling version    # 打印版本号
 ocean-sonar-modeling --help     # 打印用法
+ocean-sonar-modeling render-trends TREND TREND [TREND ...]   # 渲染多文件趋势汇总
 ```
+
+`render-trends` 按命令行顺序接收至少两个 `serialize_trend` 生成的趋势
+JSON 文件，仅调用一次 `ocean_sonar.crosspoint.render_trends(paths)`，
+不预读、不排序、不改写路径及文件。成功时 stdout 为该函数返回的三行
+文本再加一个换行，stderr 为空，退出码 0；返回文本的三行结构、字段
+顺序、六位浮点、负零、最差文件与质量语义完全沿用
+`crosspoint.render_trends`。不足两个路径属于参数解析错误：argparse
+写 stderr 并退出 2，不调用业务函数。`render_trends` 抛出的
+`TypeError`、`ValueError`、`FileNotFoundError`、`IsADirectoryError`
+及其他 `OSError` 不被替换：stdout 为空，stderr 为
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1。
+`python -m ocean_sonar` 与本命令对该子命令的 stdout、stderr 和退出码
+逐字节一致。
 
 ## Python 接口
 

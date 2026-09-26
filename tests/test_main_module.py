@@ -47,6 +47,11 @@ CASES = [
     pytest.param(["version"], id="version"),
     pytest.param(["--help"], id="help"),
     pytest.param([], id="no-subcommand"),
+    pytest.param(["render-trends", "only-one.json"], id="render-trends-single-path"),
+    pytest.param(
+        ["render-trends", "missing-a.json", "missing-b.json"],
+        id="render-trends-missing-files",
+    ),
 ]
 
 # Environment variables that can inject the source tree (or arbitrary code)
@@ -628,6 +633,52 @@ def test_installed_version_exact_output(
     assert result.returncode == 0
     assert result.stdout == b"0.1.0\n"
     assert result.stderr == b""
+
+
+def _write_trend_file(path: Path, *, degraded: bool) -> str:
+    """Write a canonical serialize_trend-compatible JSON trend file."""
+    document = {
+        "count": 2,
+        "changes": 1,
+        "degraded": 1 if degraded else 0,
+        "coverage_delta": -0.1 if degraded else 0.1,
+        "score_delta": -1.0 if degraded else 2.0,
+        "worst": [1, 0, 0, -0.1 if degraded else 0.1, -1.0 if degraded else 2.0],
+        "quality": "fail" if degraded else "pass",
+    }
+    path.write_bytes(
+        json.dumps(document, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    )
+    return str(path)
+
+
+@pytest.mark.parametrize("entry", ["module", "console-script"], ids=["python -m", "console-script"])
+def test_installed_render_trends_success_exact_output(
+    entry: str,
+    installed_env: InstalledEnv,
+    tmp_path: Path,
+) -> None:
+    """``render-trends`` succeeds identically from an outside directory."""
+    assert not tmp_path.resolve().is_relative_to(REPO_ROOT)
+    paths = [
+        _write_trend_file(tmp_path / "trend_0.json", degraded=False),
+        _write_trend_file(tmp_path / "trend_1.json", degraded=True),
+    ]
+    env = _scrubbed_env(installed_env.scripts_dir)
+    if entry == "module":
+        cmd = [installed_env.python, "-m", "ocean_sonar", "render-trends", *paths]
+    else:
+        cmd = [installed_env.console_script, "render-trends", *paths]
+
+    result = _run(cmd, cwd=tmp_path, env=env)
+    assert result.returncode == 0
+    assert result.stderr == b""
+    assert result.stdout == (
+        b"TRENDS=2,2,1,0.000000,0.500000,fail\n"
+        b"FILES=0:0.050000:1.000000|1:-0.050000:-0.500000;"
+        b"RMSE=0.100000,1.500000;WORST_FILE=1\n"
+        b"WORST=1,1,0,0,-0.100000,-1.000000\n"
+    )
 
 
 @pytest.mark.parametrize("args", CASES)
