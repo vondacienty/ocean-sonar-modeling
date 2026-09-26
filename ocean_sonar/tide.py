@@ -121,9 +121,11 @@ def batch(times, depths, tide_times, levels, datum=0.0, limit=1.0) -> bytes:
     Calls :func:`reduce` exactly once with ``(times, depths, tide_times,
     levels, datum)`` — its validation and exceptions apply unchanged and
     the inputs are not modified. ``limit`` is validated after the
-    reduction: it must be a finite non-bool int/float with
-    ``limit >= 0``; a bool or non-number raises ``TypeError`` and a
-    non-finite or negative value raises ``ValueError``.
+    reduction: it must be a non-bool int/float with ``limit >= 0``;
+    finiteness is checked for floats only, so an arbitrarily large
+    non-negative int is accepted. A bool or non-number raises
+    ``TypeError``; a non-finite float or a negative value raises
+    ``ValueError``.
 
     With ``R`` the tuple returned by :func:`reduce`, each observation
     ``i`` yields the adjustment ``a = round(float(R[i] - depths[i]), 6)``
@@ -151,7 +153,7 @@ def batch(times, depths, tide_times, levels, datum=0.0, limit=1.0) -> bytes:
 
     if not _is_real_number(limit):
         raise TypeError("limit must be a non-bool int or float")
-    if not math.isfinite(limit):
+    if type(limit) is float and not math.isfinite(limit):
         raise ValueError("limit must be finite")
     if not limit >= 0:
         raise ValueError("limit must be >= 0")

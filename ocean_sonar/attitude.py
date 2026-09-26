@@ -10,11 +10,12 @@ the y axis, then subtracts heave from the resulting depth.
 
 from __future__ import annotations
 
+import json
 import math
 
 from .svp import _is_real_number
 
-__all__ = ["correct"]
+__all__ = ["correct", "batch"]
 
 _FIELDS = ("x", "y", "d", "roll", "pitch", "heave")
 
@@ -84,3 +85,89 @@ def correct(observations):
             result.append(0.0 if v == 0 else v)
         results.append(tuple(result))
     return tuple(results)
+
+
+def batch(observations, limit=1.0) -> bytes:
+    """Correct a batch of attitude observations and serialize as JSON bytes.
+
+    Calls :func:`correct` exactly once with ``observations`` — its
+    validation and exceptions apply unchanged and the input is not
+    modified. ``limit`` is validated after the correction: it must be a
+    non-bool int/float with ``limit >= 0``; finiteness is checked for
+    floats only, so an arbitrarily large non-negative int is accepted.
+    A bool or non-number raises ``TypeError``; a non-finite float or a
+    negative value raises ``ValueError``.
+
+    With ``R`` the tuple returned by :func:`correct`, each observation
+    ``i`` yields the depth adjustment
+    ``a = round(float(R[i][2] - observations[i][2]), 6)`` (negative
+    zero normalized to ``0.0``) and the flag ``w = abs(a) <= limit``.
+
+    The returned document has top-level keys exactly in the order
+    ``results, summary``: ``results`` is an array in observation order
+    of ``[X, Y, D, a, w]`` arrays, with ``X``, ``Y`` and ``D`` taken
+    directly from ``R[i]``; ``summary`` has keys exactly in the order
+    ``count, pass_count, max_abs_adjustment, quality`` where ``count``
+    and ``pass_count`` are ints, ``max_abs_adjustment`` is
+    ``round(float(max(abs(a))), 6)`` and ``quality`` is ``"pass"`` only
+    when every ``w`` is true, otherwise ``"fail"``.
+
+    The object is encoded as UTF-8 JSON with ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation, no
+    BOM and no trailing newline, as in ``serialize_trend``. Floats are
+    first rounded with ``round(float(v), 6)`` and negative zero is
+    normalized to ``0.0``. Any JSON or UTF-8 encoding failure raises
+    ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    corrected = correct(observations)
+
+    if not _is_real_number(limit):
+        raise TypeError("limit must be a non-bool int or float")
+    if type(limit) is float and not math.isfinite(limit):
+        raise ValueError("limit must be finite")
+    if not limit >= 0:
+        raise ValueError("limit must be >= 0")
+
+    def rounded_float(value):
+        value = round(float(value), 6)
+        return 0.0 if value == 0 else value
+
+    adjustments = [
+        rounded_float(corrected[i][2] - observations[i][2])
+        for i in range(len(corrected))
+    ]
+    within = [abs(a) <= limit for a in adjustments]
+
+    count = int(len(corrected))
+    pass_count = int(sum(1 for w in within if w))
+    max_abs_adjustment = rounded_float(max(abs(a) for a in adjustments))
+    document = {
+        "results": [
+            [
+                corrected[i][0],
+                corrected[i][1],
+                corrected[i][2],
+                adjustments[i],
+                within[i],
+            ]
+            for i in range(len(corrected))
+        ],
+        "summary": {
+            "count": count,
+            "pass_count": pass_count,
+            "max_abs_adjustment": max_abs_adjustment,
+            "quality": "pass" if pass_count == count else "fail",
+        },
+    }
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(f"batch: could not be serialized to JSON: {exc}") from exc

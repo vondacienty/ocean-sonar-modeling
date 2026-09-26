@@ -107,6 +107,21 @@ def test_batch_limit_finite_error(limit):
         tide.batch([0.5], [10.0], [0, 1], [1.0, 3.0], limit=limit)
 
 
+def test_batch_limit_huge_non_negative_int_accepted():
+    # Only floats are finiteness-checked; a huge non-negative int that
+    # cannot even be converted to float is a legal (permissive) limit.
+    document = decode(
+        tide.batch([0.0, 1.0], [10.0, 10.0], [0, 1], [0.0, 4.0], limit=10**10000)
+    )
+    assert document["results"] == [[10.0, 0.0, True], [6.0, -4.0, True]]
+    assert document["summary"]["quality"] == "pass"
+
+
+def test_batch_limit_huge_negative_int_rejected():
+    with pytest.raises(ValueError, match="limit must be >= 0"):
+        tide.batch([0.5], [10.0], [0, 1], [1.0, 3.0], limit=-(10**10000))
+
+
 def test_batch_limit_negative_error():
     with pytest.raises(ValueError, match="limit must be >= 0"):
         tide.batch([0.5], [10.0], [0, 1], [1.0, 3.0], limit=-0.5)

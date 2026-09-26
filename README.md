@@ -215,6 +215,22 @@ stdout 输出 `batch` 返回字节的 UTF-8 解码文本加一个换行，stderr
 ocean-sonar-modeling svp-batch request.json
 ```
 
+### `attitude-batch REQUEST`
+
+读取一份批量船姿改正请求 JSON 文件并**仅调用一次**
+`ocean_sonar.attitude.batch`。REQUEST 必须是按
+`batch(observations, limit=1.0)` 签名参数键序排列且无额外键、无重复键的
+JSON 对象（`observations` 必填，`limit` 可省略），非法内容抛
+`ValueError`。文件读取、输入文件不被修改、单次调用、成功时 stdout 输出
+`batch` 返回字节的 UTF-8 解码文本加一个换行、stderr 为空、退出码 0，以
+及错误时 stdout 为空、stderr 严格输出 `ERROR <异常类名>: <异常消息>` 加
+换行、退出码 1 的行为，均与 `tide-batch` 一致；参数缺失或多余属于参数
+解析错误，退出码 2 且不调用业务函数。
+
+```bash
+ocean-sonar-modeling attitude-batch request.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
