@@ -23,6 +23,7 @@ from .crosspoint import (
     serialize_comparison,
 )
 from .report import rank_files
+from .svp import batch, load_batch_request
 
 
 def _resolved_path(path):
@@ -130,6 +131,8 @@ def main(argv: list[str] | None = None) -> int:
     export_audit_report_trend_parser.add_argument("--output", required=True, help="output file atomically overwritten with the audit report trend JSON")
     render_audit_report_trend_parser = sub.add_parser("render-audit-report-trend", help="render one audit report trend JSON file as two summary lines")
     render_audit_report_trend_parser.add_argument("trend", metavar="TREND", help="audit report trend JSON file")
+    svp_batch_parser = sub.add_parser("svp-batch", help="trace one SVP batch request JSON file and print the batch JSON")
+    svp_batch_parser.add_argument("request", metavar="REQUEST", help="SVP batch request JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -249,6 +252,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "render-audit-report-trend":
         try:
             text = render_audit_report_trend(args.trend)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "svp-batch":
+        try:
+            request = load_batch_request(args.request)
+            data = batch(**request)
+            text = data.decode("utf-8")
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
