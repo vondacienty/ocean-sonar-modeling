@@ -262,6 +262,22 @@ stdout 输出 `batch` 返回字节的 UTF-8 解码文本加一个换行，stderr
 ocean-sonar-modeling strip-batch request.json
 ```
 
+### `grid-batch REQUEST`
+
+读取一份批量网格分箱请求 JSON 文件并**仅调用一次**
+`ocean_sonar.grid.batch`。REQUEST 必须是按 `batch(points, bounds,
+resolutions, min_coverage=1.0)` 签名参数键序排列、无重复键且
+无额外键的 JSON 对象（`points`、`bounds`、`resolutions` 必填，
+`min_coverage` 可省略），非法内容抛 `ValueError`。成功时
+stdout 输出 `batch` 返回字节的 UTF-8 解码文本加一个换行，stderr 为
+空，退出码 0；文件不存在、内容非法等错误时 stdout 为空，stderr 严格
+输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数缺失或多
+余属于参数解析错误，退出码 2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling grid-batch request.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
