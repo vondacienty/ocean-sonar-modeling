@@ -23,12 +23,14 @@ __all__ = [
     "dump_aggregate",
     "export",
     "export_aggregate",
+    "export_aggregate_report_trend",
     "load",
     "load_aggregate",
     "load_aggregate_report",
     "load_aggregate_report_trend",
     "render",
     "render_aggregate",
+    "render_aggregate_report_trend",
     "serialize_aggregate_report",
     "serialize_aggregate_report_trend",
 ]
@@ -1859,6 +1861,109 @@ def export_aggregate(path, output) -> bytes:
     """
     document = load_aggregate(path)
     data = _dump_aggregate_document(document)
+
+    if not isinstance(output, str):
+        raise TypeError("output must be a str")
+    if output == "":
+        raise ValueError("output must not be empty")
+
+    if _is_same_file(output, path):
+        raise ValueError(
+            f"output must not be the same file as an input: "
+            f"{output!r} and {path!r}"
+        )
+    _atomic_write_bytes(output, data)
+    return data
+
+
+def render_aggregate_report_trend(path) -> str:
+    """Render a :func:`load_aggregate_report_trend`-loaded trend as two lines.
+
+    Calls :func:`load_aggregate_report_trend` exactly once with ``path`` —
+    and no other loading or combining function — so its validation,
+    exceptions (propagated unchanged), canonical-byte checks and file
+    non-modification contract all apply here as well: a non-``str`` path
+    raises ``TypeError``, an empty ``str`` raises ``ValueError``, a
+    missing file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError``, every other ``OSError`` is propagated
+    unchanged and any parse, structure or canonical-byte violation
+    raises ``ValueError``. The file is not modified.
+
+    With ``T`` the dict returned by :func:`load_aggregate_report_trend`,
+    returns two lines joined by ``"\\n"`` with no trailing newline. The
+    first line is::
+
+        TREND=<count>,<changes>,<regressed>,<unknown_delta>,<unknown_ratio_delta>,<quality>
+
+    with the six values taken from ``T`` (``count``, ``changes``,
+    ``regressed``, ``unknown_delta``, ``unknown_ratio_delta``,
+    ``quality``). The second line is::
+
+        WORST=<i>,<du>,<dr>,<quality>
+
+    with the four items of ``T["worst"]`` in their stored order. Values
+    are taken with no recomputation or re-sorting: ints are formatted in
+    decimal, strings are copied as-is and floats use
+    ``format(v, ".6f")`` (negative zero rendered as ``"0.000000"``).
+    """
+    trend = load_aggregate_report_trend(path)
+    lines = [
+        "TREND="
+        + ",".join(
+            (
+                _format_rendered_value(trend["count"]),
+                _format_rendered_value(trend["changes"]),
+                _format_rendered_value(trend["regressed"]),
+                _format_rendered_value(trend["unknown_delta"]),
+                _format_rendered_value(trend["unknown_ratio_delta"]),
+                _format_rendered_value(trend["quality"]),
+            )
+        ),
+        "WORST="
+        + ",".join(_format_rendered_value(value) for value in trend["worst"]),
+    ]
+    return "\n".join(lines)
+
+
+def export_aggregate_report_trend(path, output) -> bytes:
+    """Load a substrate aggregate report trend and atomically write its bytes.
+
+    Calls :func:`load_aggregate_report_trend` exactly once with ``path``
+    — before any other work and no second time — so its validation,
+    first-error order, exceptions (propagated unchanged), canonical-byte
+    checks and file non-modification contract all apply here as well; in
+    particular a bad ``path`` value is reported before ``output`` is
+    inspected.
+
+    With ``T`` the dict returned by :func:`load_aggregate_report_trend`,
+    the bytes ``B`` are the canonical
+    :func:`serialize_aggregate_report_trend` re-serialization of ``T``
+    (its original key order and the same UTF-8 JSON settings:
+    ``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``, no BOM and no trailing newline, with the
+    ``worst`` tuple encoded as a four-item JSON array). ``output`` is
+    then validated: it must be a non-empty ``str`` (a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``), in that
+    order.
+
+    ``output`` must not name the same file as ``path``: when both sides
+    exist they are compared with ``os.path.samefile`` so soft and hard
+    links are recognized, and otherwise the normalized paths
+    ``os.path.normcase(os.path.realpath(os.path.abspath(path)))`` are
+    compared; an overlap raises ``ValueError``.
+
+    When there is no overlap, a temporary file is created in ``output``'s
+    directory, ``B`` is written to it in binary mode, ``flush()`` and
+    ``os.fsync()`` are called and the temporary file then atomically
+    replaces ``output`` via ``os.replace``. Any failure before the
+    replacement removes the temporary file and leaves an existing
+    ``output`` byte for byte unchanged; ``OSError`` is propagated
+    unchanged.
+
+    Returns the same ``bytes`` ``B`` that were written.
+    """
+    trend = load_aggregate_report_trend(path)
+    data = _dump_aggregate_report_trend(trend)
 
     if not isinstance(output, str):
         raise TypeError("output must be a str")
