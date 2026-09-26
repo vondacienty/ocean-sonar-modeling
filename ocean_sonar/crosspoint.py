@@ -58,6 +58,7 @@ __all__ = [
     "load_comparison",
     "audit_comparisons",
     "serialize_audit",
+    "load_audit",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -3745,6 +3746,211 @@ def serialize_audit(paths) -> bytes:
         return text.encode("utf-8")
     except (TypeError, ValueError, UnicodeError) as exc:
         raise ValueError(f"audit: could not be serialized to JSON: {exc}") from exc
+
+
+_AUDIT_KEYS = ("files", "changes", "failed", "worst", "quality")
+
+
+def _dump_audit(audit):
+    """Re-serialize a validated audit the way :func:`serialize_audit` would."""
+    document = {
+        "files": audit["files"],
+        "changes": audit["changes"],
+        "failed": audit["failed"],
+        "worst": list(audit["worst"]),
+        "quality": audit["quality"],
+    }
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(f"audit: could not be serialized to JSON: {exc}") from exc
+
+
+def _check_audit(audit):
+    """Validate a decoded audit document and return its normalized dict."""
+    prefix = "audit: "
+    if not isinstance(audit, dict):
+        raise TypeError("audit must be a dict")
+    if list(audit.keys()) != list(_AUDIT_KEYS):
+        raise TypeError(
+            "audit keys must be in the order files, changes, failed, worst, quality"
+        )
+
+    files = audit["files"]
+    if type(files) is not int:
+        raise TypeError(prefix + "files must be a non-bool int")
+    if files < 2:
+        raise ValueError(prefix + "files must be >= 2")
+
+    changes = audit["changes"]
+    if type(changes) is not int:
+        raise TypeError(prefix + "changes must be a non-bool int")
+    if changes < files:
+        raise ValueError(prefix + "changes must be >= files")
+
+    failed = audit["failed"]
+    if type(failed) is not int:
+        raise TypeError(prefix + "failed must be a non-bool int")
+    if not 0 <= failed <= changes:
+        raise ValueError(prefix + "failed must be in [0, changes]")
+
+    worst = audit["worst"]
+    worst_prefix = prefix + "worst: "
+    if not isinstance(worst, list):
+        raise TypeError(worst_prefix + "must be a list")
+    if len(worst) != 6:
+        raise ValueError(worst_prefix + "must have 6 elements")
+
+    file_index = worst[0]
+    if type(file_index) is not int:
+        raise TypeError(worst_prefix + "file_index must be a non-bool int")
+    if not 0 <= file_index < files:
+        raise ValueError(worst_prefix + "file_index must be in [0, files)")
+
+    index = worst[1]
+    if type(index) is not int:
+        raise TypeError(worst_prefix + "index must be a non-bool int")
+    if index < 1:
+        raise ValueError(worst_prefix + "index must be >= 1")
+
+    degraded_delta = worst[2]
+    if type(degraded_delta) is not int:
+        raise TypeError(worst_prefix + "degraded_delta must be a non-bool int")
+    if not -2 <= degraded_delta <= 2:
+        raise ValueError(worst_prefix + "degraded_delta must be in [-2, 2]")
+
+    _check_trend_float(
+        worst[3], "coverage_delta", -2, 2, worst_prefix
+    )
+    _check_trend_float(
+        worst[4], "score_delta", -200, 200, worst_prefix
+    )
+
+    worst_quality = worst[5]
+    if type(worst_quality) is not str:
+        raise TypeError(worst_prefix + "quality must be a str")
+    if worst_quality not in ("pass", "fail"):
+        raise ValueError(worst_prefix + "quality must be 'pass' or 'fail'")
+
+    quality = audit["quality"]
+    if type(quality) is not str:
+        raise TypeError(prefix + "quality must be a str")
+    if quality not in ("pass", "fail"):
+        raise ValueError(prefix + "quality must be 'pass' or 'fail'")
+    if failed == 0:
+        if quality != "pass":
+            raise ValueError(prefix + "quality must be 'pass' when failed is 0")
+        if worst_quality != "pass":
+            raise ValueError(
+                worst_prefix + "quality must be 'pass' when failed is 0"
+            )
+    elif quality != "fail":
+        raise ValueError(prefix + "quality must be 'fail' when failed is not 0")
+
+    return {
+        "files": int(files),
+        "changes": int(changes),
+        "failed": int(failed),
+        "worst": (
+            int(file_index),
+            int(index),
+            int(degraded_delta),
+            worst[3],
+            worst[4],
+            worst_quality,
+        ),
+        "quality": quality,
+    }
+
+
+def load_audit(path) -> dict:
+    """Load a :func:`serialize_audit`-produced JSON audit.
+
+    ``path`` must be a non-empty ``str``: a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``. The file
+    is opened in binary mode (``"rb"``) and read in full; a missing
+    file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError`` and every other ``OSError`` is propagated
+    unchanged. The file is not modified.
+
+    The bytes must be exactly those produced by
+    :func:`serialize_audit` for the same value: compact UTF-8 JSON
+    (``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``) with no BOM and no trailing newline. A BOM, a
+    trailing newline, a UTF-8 decoding failure or a JSON parsing
+    failure raises ``ValueError``; the ``NaN``/``Infinity`` constants,
+    any other non-finite token and duplicate object keys are rejected.
+
+    The decoded value must be a JSON object with top-level keys exactly
+    in the order ``files, changes, failed, worst, quality`` —
+    duplicated, missing or extra keys are rejected. ``files``,
+    ``changes`` and ``failed`` must be non-bool ints with
+    ``files >= 2``, ``changes >= files`` and
+    ``0 <= failed <= changes``. ``worst`` must be a six-item array
+    ``[file_index, index, degraded_delta, coverage_delta,
+    score_delta, quality]``: ``file_index``, ``index`` and
+    ``degraded_delta`` must be non-bool ints satisfying
+    ``0 <= file_index < files``, ``index >= 1`` and
+    ``-2 <= degraded_delta <= 2``; ``coverage_delta`` and
+    ``score_delta`` must be finite non-bool floats in ``[-2, 2]`` and
+    ``[-200, 200]`` respectively, each equal to
+    ``round(float(v), 6)`` with negative zero forbidden; and the
+    sixth item must be ``"pass"`` or ``"fail"``. The top-level
+    ``quality`` must be ``"pass"`` if and only if ``failed`` is ``0``,
+    in which case the ``worst`` quality must also be ``"pass"``. The
+    file bytes must also equal the canonical re-serialization of the
+    decoded value byte for byte; any key-order, type, range, relation,
+    parse or canonical-byte mismatch raises ``ValueError``.
+
+    Returns the audit as a dict with the keys in the order above; the
+    ``worst`` array is restored to a tuple and every other value is
+    returned unchanged. The file is never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_json_pairs,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        result = _check_audit(parsed)
+        canonical = _dump_audit(result)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"file does not contain a valid audit: {exc}") from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical serialize_audit output"
+        )
+
+    return result
 
 
 def render_trends(paths) -> str:
