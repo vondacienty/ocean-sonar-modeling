@@ -53,6 +53,8 @@ __all__ = [
     "export_trends",
     "load_trend_report",
     "compare_reports",
+    "serialize_comparison",
+    "render_comparison",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -3253,6 +3255,123 @@ def compare_reports(paths) -> dict:
         if all(change["quality"] == "pass" for change in changes)
         else "fail",
     }
+
+
+def serialize_comparison(paths) -> bytes:
+    """Serialize a :func:`compare_reports` result as UTF-8 JSON bytes.
+
+    Calls :func:`compare_reports` exactly once with ``paths`` — and no
+    other combining function — so its validation, first-error order,
+    exceptions (propagated unchanged) and ``"paths[i]: "`` index
+    prefixes all apply here as well. Inputs and the loaded files are not
+    modified.
+
+    With ``C`` the dict returned by :func:`compare_reports`, the encoded
+    object keeps ``C``'s keys and values: top-level keys exactly in the
+    order ``changes, worst, quality``, and each change item as well as
+    ``worst`` keeps its keys in the order ``index, degraded_delta,
+    coverage_delta, score_delta, quality``. The only structural
+    conversion is that the ``changes`` tuple is encoded as a JSON array;
+    every value is taken directly from ``C`` with no recomputation,
+    sorting or additional keys.
+
+    The object is encoded as UTF-8 JSON with ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation, no
+    BOM and no trailing newline, exactly as in :func:`dump_trends`.
+    Floats are first rounded with ``round(float(v), 6)`` and negative
+    zero is normalized to ``0.0``; ints are written in decimal and
+    strings are copied as-is. Any JSON or UTF-8 encoding failure raises
+    ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    result = compare_reports(paths)
+
+    def rounded_float(value):
+        value = round(float(value), 6)
+        return 0.0 if value == 0 else value
+
+    def change_item(change):
+        return {
+            "index": int(change["index"]),
+            "degraded_delta": int(change["degraded_delta"]),
+            "coverage_delta": rounded_float(change["coverage_delta"]),
+            "score_delta": rounded_float(change["score_delta"]),
+            "quality": change["quality"],
+        }
+
+    document = {
+        "changes": [change_item(change) for change in result["changes"]],
+        "worst": change_item(result["worst"]),
+        "quality": result["quality"],
+    }
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"comparison: could not be serialized to JSON: {exc}"
+        ) from exc
+
+
+def render_comparison(paths) -> str:
+    """Render a :func:`compare_reports` result as one line per change.
+
+    Calls :func:`compare_reports` exactly once with ``paths`` — and no
+    other combining function — so its validation, first-error order,
+    exceptions (propagated unchanged) and ``"paths[i]: "`` index
+    prefixes all apply here as well. Inputs and the loaded files are not
+    modified.
+
+    With ``C`` the dict returned by :func:`compare_reports` and ``n``
+    the number of its changes, returns lines joined by ``"\\n"`` with no
+    trailing newline::
+
+        QUALITY=<quality>;COUNT=<n>;WORST_INDEX=<index>
+        CHANGE[<index>]=<degraded_delta>,<coverage_delta>,<score_delta>,<quality>
+        ...
+
+    The first line takes ``C["quality"]`` and ``C["worst"]["index"]``;
+    it is followed by one line per change in ``C["changes"]`` original
+    order, whose four values are the change's ``degraded_delta``,
+    ``coverage_delta``, ``score_delta`` and ``quality``. All values are
+    taken directly from ``C`` with no recomputation: ints are formatted
+    in decimal, strings are copied as-is and floats use
+    ``format(v, ".6f")`` (negative zero rendered as ``"0.000000"``).
+    """
+    result = compare_reports(paths)
+    changes = result["changes"]
+
+    header = (
+        "QUALITY="
+        + _format_rendered_value(result["quality"])
+        + ";COUNT="
+        + _format_rendered_value(len(changes))
+        + ";WORST_INDEX="
+        + _format_rendered_value(result["worst"]["index"])
+    )
+    lines = [header]
+    for change in changes:
+        lines.append(
+            "CHANGE["
+            + _format_rendered_value(change["index"])
+            + "]="
+            + ",".join(
+                _format_rendered_value(change[key])
+                for key in (
+                    "degraded_delta",
+                    "coverage_delta",
+                    "score_delta",
+                    "quality",
+                )
+            )
+        )
+    return "\n".join(lines)
 
 
 def render_trends(paths) -> str:
