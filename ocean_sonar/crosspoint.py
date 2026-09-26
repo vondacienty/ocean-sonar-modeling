@@ -62,6 +62,7 @@ __all__ = [
     "serialize_audit",
     "load_audit",
     "export_audit",
+    "render_audit",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -4049,6 +4050,45 @@ def export_audit(paths, output) -> bytes:
     _reject_export_output_overlap(output, paths)
     _atomic_write_bytes(output, data)
     return data
+
+
+def render_audit(path) -> str:
+    """Render a :func:`load_audit` result as two text lines.
+
+    Calls :func:`load_audit` exactly once with ``path`` to get ``A``,
+    so its validation, first-error order, exceptions (propagated
+    unchanged) and file-handling rules all apply here as well; no other
+    loading or combining function is called. The input and the loaded
+    file are not modified.
+
+    With ``A`` the dict returned by :func:`load_audit`, returns two
+    lines joined by ``"\\n"`` with no trailing newline::
+
+        AUDIT=<files>,<changes>,<failed>,<quality>
+        WORST=<file_index>,<index>,<degraded_delta>,<coverage_delta>,<score_delta>,<quality>
+
+    The AUDIT values are ``A["files"]``, ``A["changes"]``,
+    ``A["failed"]`` and ``A["quality"]``; the WORST values are the six
+    items of ``A["worst"]`` in their original order. All values are
+    copied directly from ``A`` with no recomputation or re-sorting:
+    ints are formatted in decimal, strings are copied as-is and floats
+    use ``format(v, ".6f")`` (negative zero rendered as
+    ``"0.000000"``).
+    """
+    result = load_audit(path)
+
+    audit_line = "AUDIT=" + ",".join(
+        (
+            _format_rendered_value(result["files"]),
+            _format_rendered_value(result["changes"]),
+            _format_rendered_value(result["failed"]),
+            _format_rendered_value(result["quality"]),
+        )
+    )
+    worst_line = "WORST=" + ",".join(
+        _format_rendered_value(value) for value in result["worst"]
+    )
+    return "\n".join((audit_line, worst_line))
 
 
 def render_trends(paths) -> str:
