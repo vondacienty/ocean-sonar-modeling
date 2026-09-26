@@ -186,6 +186,20 @@ ocean-sonar-modeling render-audit-report audit_report.json
 ocean-sonar-modeling export-audit-report-trend audit_report_a.json audit_report_b.json [audit_report_c.json ...] --output audit_report_trend.json
 ```
 
+### `render-audit-report-trend TREND`
+
+把一份 `export-audit-report-trend` 生成的审计报告趋势 JSON 渲染为两行汇总
+文本。等价于**仅调用一次**
+`ocean_sonar.crosspoint.render_audit_report_trend(path)`：成功时 stdout
+输出其返回的两行文本（`TREND=...`、`WORST=...`）加一个换行，stderr 为
+空，退出码 0；文件不存在、内容损坏等错误时 stdout 为空，stderr 严格输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数缺失或多余属于参数
+解析错误，退出码 2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling render-audit-report-trend audit_report_trend.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -207,7 +221,7 @@ ocean-sonar-modeling export-audit-report-trend audit_report_a.json audit_report_
 `serialize_audit_report`、`load_audit_report`、
 `export_audit_report`、`render_audit_report`、
 `audit_report_trend`、`export_audit_report_trend`、
-`load_audit_report_trend`、
+`load_audit_report_trend`、`render_audit_report_trend`、
 `serialize_pair_gate_score_summary`、`render_pair_gate_score_summary`、
 `load_pair_gate_score_summary`。
 
@@ -1028,3 +1042,25 @@ float、`quality` 为 `"pass"`/`"fail"`。
 返回保持 `sources, trend` 键序的 `dict`：`sources` 为按存储顺序排列的路
 径字符串 list，`trend` 中仅 `worst` 还原为 tuple，其余值原样返回。文件
 始终不被修改。
+
+### `render_audit_report_trend(path) -> str`
+
+把一份审计报告趋势 JSON 渲染为两行汇总文本。
+
+执行时**仅调用一次** `load_audit_report_trend(path)` 得到 `R`，不调用任何
+其他加载或汇总函数；因此 `path` 的校验契约、读取行为与异常完全沿用
+`load_audit_report_trend`：非 `str` 抛 `TypeError`，空串抛 `ValueError`，
+文件缺失抛 `FileNotFoundError`，目录抛 `IsADirectoryError`，其余 `OSError`
+原样传播，解析、结构、规范字节非法或源报告复核失败抛 `ValueError`。输入文
+件不会被修改。
+
+记 `T = R["trend"]`、`W = T["worst"]`，返回以 `\n` 连接、无尾换行的两行：
+
+```
+TREND=<count>,<changes>,<regressed>,<failed_delta>,<pass_ratio_delta>,<quality>
+WORST=<i>,<df>,<dr>,<quality>
+```
+
+`TREND` 行六个值按 `T` 的同名键序取出，`WORST` 行四个值按 `W` 的原序取
+出。所有值直接取自 `R`，不重算、不排序、不改写：`int` 按十进制渲染，
+`str` 原样，`float` 用 `format(v, ".6f")`（负零渲染为 `0.000000`）。
