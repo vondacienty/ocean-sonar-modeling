@@ -52,6 +52,7 @@ __all__ = [
     "render_trends",
     "export_trends",
     "load_trend_report",
+    "compare_reports",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -3140,6 +3141,118 @@ def load_trend_report(path) -> dict:
         )
 
     return result
+
+
+def compare_reports(paths) -> dict:
+    """Compare successive :func:`load_trend_report` snapshots.
+
+    ``paths`` must be a list/tuple of at least two items; each item,
+    checked in index order, must be a non-empty ``str``. Validation
+    order (first error wins): the ``paths`` container, its length, then
+    each item in index order (type, then emptiness). A non-list/tuple
+    container or a non-str item raises ``TypeError``; fewer than two
+    items or an empty ``str`` raises ``ValueError``. Item errors are
+    prefixed with ``"paths[i]: "`` — exactly as in :func:`trend`.
+
+    :func:`load_trend_report` is then called exactly once per path, in
+    input order; any exception it raises is propagated unchanged.
+    Inputs and the loaded files are not modified.
+
+    Every loaded report must have a ``sources`` list equal, item by
+    item in the same order, to that of the first report; otherwise a
+    ``ValueError`` is raised.
+
+    For each adjacent pair ``i = 1..n-1`` of report summaries, the
+    unrounded deltas are
+    ``dd = degraded_i - degraded_(i-1)``,
+    ``dc = coverage_delta_i - coverage_delta_(i-1)`` and
+    ``ds = score_delta_i - score_delta_(i-1)``. The comparison is a
+    failure when ``dd > 0``, ``dc < 0``, ``ds < 0`` or the summary
+    ``quality`` changes from ``"pass"`` to ``"fail"``, and a pass
+    otherwise. Comparisons are not sorted, deduplicated or augmented.
+
+    Returns a dict with keys in the order ``changes, worst, quality``.
+    ``changes`` is a tuple with one dict per adjacent pair (in index
+    order), each with keys in the order
+    ``index, degraded_delta, coverage_delta, score_delta, quality``:
+    ``index`` is the int ``i`` and ``degraded_delta`` is the int
+    ``dd``; ``coverage_delta`` and ``score_delta`` are
+    ``round(float(v), 6)`` floats (negative zero normalized to
+    ``0.0``); and ``quality`` is ``"pass"`` or ``"fail"``. The worst
+    selection uses the *unrounded* values: ``worst`` is the change dict
+    whose tuple ``(ds, dc, -dd, i)`` is lexicographically smallest.
+    The top-level ``quality`` is ``"pass"`` only when every change
+    passes and ``"fail"`` otherwise.
+    """
+    if not isinstance(paths, (list, tuple)):
+        raise TypeError("paths must be a list or tuple")
+    if len(paths) < 2:
+        raise ValueError("paths must contain at least 2 items")
+    for i in range(len(paths)):
+        prefix = f"paths[{i}]: "
+        if not isinstance(paths[i], str):
+            raise TypeError(prefix + "must be a str")
+        if paths[i] == "":
+            raise ValueError(prefix + "must not be empty")
+
+    reports = [load_trend_report(path) for path in paths]
+
+    first_sources = reports[0]["sources"]
+    for i in range(1, len(reports)):
+        if reports[i]["sources"] != first_sources:
+            raise ValueError(
+                f"trend report at paths[{i}] sources "
+                f"{reports[i]['sources']!r} do not match {first_sources!r}"
+            )
+
+    changes = []
+    worst_position = None
+    worst_change = None
+    for i in range(1, len(reports)):
+        previous = reports[i - 1]["summary"]
+        current = reports[i]["summary"]
+        dd = current["degraded"] - previous["degraded"]
+        dc = current["coverage_delta"] - previous["coverage_delta"]
+        ds = current["score_delta"] - previous["score_delta"]
+
+        if (
+            dd > 0
+            or dc < 0
+            or ds < 0
+            or (previous["quality"] == "pass" and current["quality"] == "fail")
+        ):
+            quality = "fail"
+        else:
+            quality = "pass"
+
+        rounded_dc = round(float(dc), 6)
+        if rounded_dc == 0:
+            rounded_dc = 0.0
+        rounded_ds = round(float(ds), 6)
+        if rounded_ds == 0:
+            rounded_ds = 0.0
+
+        change = {
+            "index": int(i),
+            "degraded_delta": int(dd),
+            "coverage_delta": rounded_dc,
+            "score_delta": rounded_ds,
+            "quality": quality,
+        }
+        changes.append(change)
+
+        position = (ds, dc, -dd, i)
+        if worst_position is None or position < worst_position:
+            worst_position = position
+            worst_change = change
+
+    return {
+        "changes": tuple(changes),
+        "worst": worst_change,
+        "quality": "pass"
+        if all(change["quality"] == "pass" for change in changes)
+        else "fail",
+    }
 
 
 def render_trends(paths) -> str:
