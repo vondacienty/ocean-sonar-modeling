@@ -68,6 +68,8 @@ __all__ = [
     "export_audit_report",
     "render_audit_report",
     "audit_report_trend",
+    "export_audit_report_trend",
+    "load_audit_report_trend",
 ]
 
 _FIELDS = ("x", "y", "d1", "d2")
@@ -4742,6 +4744,311 @@ def audit_report_trend(paths) -> dict:
         "worst": (int(worst_i), int(worst_df), worst_dr, worst_quality),
         "quality": "pass" if regressed == 0 else "fail",
     }
+
+
+_AUDIT_REPORT_TREND_KEYS = ("sources", "trend")
+_AUDIT_REPORT_TREND_TREND_KEYS = (
+    "count",
+    "changes",
+    "regressed",
+    "failed_delta",
+    "pass_ratio_delta",
+    "worst",
+    "quality",
+)
+
+
+def _dump_audit_report_trend(report):
+    """Serialize a ``sources, trend`` audit report trend like the exporter."""
+    trend = report["trend"]
+    worst = trend["worst"]
+    document = {
+        "sources": list(report["sources"]),
+        "trend": {
+            "count": int(trend["count"]),
+            "changes": int(trend["changes"]),
+            "regressed": int(trend["regressed"]),
+            "failed_delta": int(trend["failed_delta"]),
+            "pass_ratio_delta": trend["pass_ratio_delta"],
+            "worst": [
+                int(worst[0]),
+                int(worst[1]),
+                worst[2],
+                worst[3],
+            ],
+            "quality": trend["quality"],
+        },
+    }
+    try:
+        text = json.dumps(
+            document,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"audit report trend: could not be serialized to JSON: {exc}"
+        ) from exc
+
+
+def export_audit_report_trend(paths, output) -> bytes:
+    """Serialize an :func:`audit_report_trend` report and atomically write it.
+
+    Calls :func:`audit_report_trend` exactly once with ``paths`` — before
+    any other work and no second time — so its validation, first-error
+    order, exceptions (propagated unchanged) and ``"paths[i]: "`` index
+    prefixes all apply here as well; in particular a bad ``paths`` value
+    is reported before ``output`` is inspected. Inputs and the loaded
+    files are not modified.
+
+    With ``T`` the dict returned by :func:`audit_report_trend`, ``output``
+    is then validated: it must be a non-empty ``str`` (a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``), in that
+    order.
+
+    The encoded object is compact UTF-8 JSON with top-level keys exactly
+    in the order ``sources, trend``: ``sources`` is the ``paths`` items in
+    their original order as a JSON array of strings, and ``trend`` is
+    ``T`` itself, with its keys ``count, changes, regressed, failed_delta,
+    pass_ratio_delta, worst, quality`` and values taken unchanged (its
+    ``worst`` tuple encoded as the four-item JSON array). Encoding
+    parameters (``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``), the absence of a BOM or trailing newline and the
+    ``ValueError`` raised on any JSON or UTF-8 encoding failure all follow
+    :func:`export_trends`.
+
+    ``output`` must not name the same file as any of the ``paths`` items,
+    and the write itself is atomic, both exactly as in
+    :func:`export_audit`: existing files are compared with
+    ``os.path.samefile`` so soft and hard links are recognized, otherwise
+    the normalized paths
+    ``os.path.normcase(os.path.realpath(os.path.abspath(path)))`` are
+    compared and an overlap raises ``ValueError``; when there is no
+    overlap a temporary file in ``output``'s directory receives the bytes,
+    is ``flush()``ed and ``os.fsync()``ed and atomically replaces
+    ``output`` via ``os.replace``. Any failure before the replacement
+    removes the temporary file and leaves an existing ``output`` byte for
+    byte unchanged; ``OSError`` is propagated unchanged.
+
+    Returns the same ``bytes`` that were written.
+    """
+    trend = audit_report_trend(paths)
+
+    if not isinstance(output, str):
+        raise TypeError("output must be a str")
+    if output == "":
+        raise ValueError("output must not be empty")
+
+    report = {"sources": list(paths), "trend": trend}
+    data = _dump_audit_report_trend(report)
+
+    _reject_export_output_overlap(output, paths)
+    _atomic_write_bytes(output, data)
+    return data
+
+
+def _check_audit_report_trend_trend(trend, source_count, prefix):
+    """Validate a decoded ``trend`` against the :func:`audit_report_trend` contract."""
+    if not isinstance(trend, dict):
+        raise TypeError(prefix + "must be a dict")
+    if list(trend.keys()) != list(_AUDIT_REPORT_TREND_TREND_KEYS):
+        raise TypeError(
+            prefix + "keys must be in the order count, changes, regressed, "
+            "failed_delta, pass_ratio_delta, worst, quality"
+        )
+
+    count = trend["count"]
+    _check_trend_int(
+        count,
+        "count",
+        lambda v: v == source_count,
+        f"{source_count} (the number of sources)",
+        prefix,
+    )
+
+    changes = trend["changes"]
+    _check_trend_int(
+        changes,
+        "changes",
+        lambda v: v == source_count - 1,
+        f"{source_count - 1} (count - 1)",
+        prefix,
+    )
+
+    _check_trend_int(
+        trend["regressed"],
+        "regressed",
+        lambda v: 0 <= v <= changes,
+        "in [0, changes]",
+        prefix,
+    )
+
+    failed_delta = trend["failed_delta"]
+    if type(failed_delta) is not int:
+        raise TypeError(prefix + "failed_delta must be a non-bool int")
+
+    _check_trend_float(
+        trend["pass_ratio_delta"], "pass_ratio_delta", -1, 1, prefix
+    )
+
+    worst = trend["worst"]
+    worst_prefix = prefix + "worst: "
+    if not isinstance(worst, list):
+        raise TypeError(worst_prefix + "must be a list")
+    if len(worst) != 4:
+        raise ValueError(worst_prefix + "must have 4 elements")
+
+    _check_trend_int(
+        worst[0], "i", lambda v: 1 <= v < count, "in [1, count)", worst_prefix
+    )
+    if type(worst[1]) is not int:
+        raise TypeError(worst_prefix + "df must be a non-bool int")
+    _check_trend_float(worst[2], "dr", -1, 1, worst_prefix)
+    worst_quality = worst[3]
+    if type(worst_quality) is not str:
+        raise TypeError(worst_prefix + "quality must be a str")
+    if worst_quality not in ("pass", "fail"):
+        raise ValueError(worst_prefix + "quality must be 'pass' or 'fail'")
+
+    quality = trend["quality"]
+    if type(quality) is not str:
+        raise TypeError(prefix + "quality must be a str")
+    if quality not in ("pass", "fail"):
+        raise ValueError(prefix + "quality must be 'pass' or 'fail'")
+    if (quality == "pass") != (trend["regressed"] == 0):
+        raise ValueError(
+            prefix + "quality must be 'pass' if and only if regressed is 0"
+        )
+
+
+def load_audit_report_trend(path) -> dict:
+    """Load an :func:`export_audit_report_trend`-produced JSON trend report.
+
+    ``path`` validation, binary (``"rb"``) reading and system exceptions
+    (a missing file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError`` and every other ``OSError`` is propagated
+    unchanged), the BOM and trailing-newline rejection, UTF-8/JSON
+    decoding, the rejection of ``NaN``/``Infinity`` and duplicate keys,
+    and the canonical byte-for-byte re-serialization check all follow
+    :func:`load_trend_report`; parse or decoding failures raise
+    ``ValueError``. The file is not modified.
+
+    The decoded value must be a JSON object with top-level keys exactly
+    in the order ``sources, trend`` — duplicated, missing or extra keys
+    are rejected. ``sources`` must be an array of at least two non-empty
+    strings. ``trend`` must satisfy the :func:`audit_report_trend`
+    return contract: keys exactly in the order ``count, changes,
+    regressed, failed_delta, pass_ratio_delta, worst, quality`` with
+    ``count`` equal to the number of ``sources`` and ``changes`` equal
+    to ``count - 1``; ``count``/``changes``/``failed_delta`` non-bool
+    ints, ``regressed`` a non-bool int in ``[0, changes]``,
+    ``pass_ratio_delta`` a finite non-bool float in ``[-1, 1]`` equal to
+    ``round(float(v), 6)`` with negative zero forbidden, ``worst`` the
+    four-item array ``[i, df, dr, quality]`` with ``i`` a non-bool int
+    in ``[1, count)``, ``df`` a non-bool int, ``dr`` a finite non-bool
+    float in ``[-1, 1]`` with the same rounding and negative-zero rules
+    and ``quality`` a ``"pass"``/``"fail"`` string, and the top-level
+    ``quality`` ``"pass"`` if and only if ``regressed`` is ``0``;
+    otherwise a ``ValueError`` is raised.
+
+    :func:`audit_report_trend` is then called exactly once with
+    ``sources`` to get ``E``; any exception it raises is propagated
+    unchanged. The stored ``trend`` must equal ``E`` field by field
+    (with ``worst`` compared as a tuple), otherwise a ``ValueError`` is
+    raised.
+
+    Returns a dict with keys in the order ``sources, trend``:
+    ``sources`` is a list of the path strings in their stored order and
+    only ``trend["worst"]`` is restored to a tuple. The file is never
+    modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_json_pairs,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        if not isinstance(parsed, dict):
+            raise TypeError("audit report trend must be a dict")
+        if list(parsed.keys()) != list(_AUDIT_REPORT_TREND_KEYS):
+            raise TypeError(
+                "audit report trend keys must be in the order sources, trend"
+            )
+
+        sources = parsed["sources"]
+        sources_prefix = "audit report trend: sources: "
+        if not isinstance(sources, list):
+            raise TypeError(sources_prefix + "must be a list")
+        if len(sources) < 2:
+            raise ValueError(sources_prefix + "must contain at least 2 items")
+        for i in range(len(sources)):
+            item_prefix = f"{sources_prefix}[{i}]: "
+            if not isinstance(sources[i], str):
+                raise TypeError(item_prefix + "must be a str")
+            if sources[i] == "":
+                raise ValueError(item_prefix + "must not be empty")
+
+        _check_audit_report_trend_trend(
+            parsed["trend"], len(sources), "audit report trend: trend: "
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid audit report trend: {exc}"
+        ) from exc
+
+    expected = audit_report_trend(list(sources))
+
+    trend = parsed["trend"]
+    result = {
+        "sources": list(sources),
+        "trend": {
+            "count": trend["count"],
+            "changes": trend["changes"],
+            "regressed": trend["regressed"],
+            "failed_delta": trend["failed_delta"],
+            "pass_ratio_delta": trend["pass_ratio_delta"],
+            "worst": tuple(trend["worst"]),
+            "quality": trend["quality"],
+        },
+    }
+    if result["trend"] != expected:
+        raise ValueError(
+            "audit report trend: trend does not match "
+            "audit_report_trend(sources)"
+        )
+
+    canonical = _dump_audit_report_trend(result)
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical "
+            "export_audit_report_trend output"
+        )
+
+    return result
 
 
 def render_trends(paths) -> str:

@@ -169,6 +169,24 @@ stderr 为空，退出码 0；文件不存在、内容损坏等错误时 stdout 
 ocean-sonar-modeling render-audit-report audit_report.json
 ```
 
+### `export-audit-report-trend REPORT REPORT [REPORT ...] --output OUTPUT`
+
+把多份 `serialize_audit_report`/`export-audit-report` 生成的审计报告 JSON
+沿路径序列比较后导出为一份趋势 JSON。路径按命令行顺序传入（至少两个），
+等价于**仅调用一次**
+`ocean_sonar.crosspoint.export_audit_report_trend(paths, output)`：成功时
+静默（stdout、stderr 均为空），退出码 0，并以临时文件加 `os.replace`
+原子覆写 `--output` 指定的文件；`--output` 不得与任一 REPORT 指向同一
+文件（双方都存在时用 `os.path.samefile` 识别软/硬链接，否则比较规范化
+路径），重合时抛 `ValueError`；文件不存在、内容损坏等错误时 stdout 为
+空，stderr 严格输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码 1；
+路径不足两个或缺少 `--output` 属于参数解析错误，退出码 2 且不调用业务
+函数。输入报告文件不会被修改。
+
+```bash
+ocean-sonar-modeling export-audit-report-trend report_a.json report_b.json [report_c.json ...] --output audit_report_trend.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -189,6 +207,7 @@ ocean-sonar-modeling render-audit-report audit_report.json
 `audit_comparisons`、`export_audit`、`render_audit`、
 `serialize_audit_report`、`load_audit_report`、
 `export_audit_report`、`render_audit_report`、
+`export_audit_report_trend`、`load_audit_report_trend`、
 `serialize_pair_gate_score_summary`、`render_pair_gate_score_summary`、
 `load_pair_gate_score_summary`。
 
@@ -921,3 +940,65 @@ WORST=<file_index>,<index>,<degraded_delta>,<coverage_delta>,<score_delta>,<qual
 算、不重新排序：`int` 按十进制渲染，`str` 原样（`source.path` 除外），
 `float` 用 `format(v, ".6f")`（负零渲染为 `0.000000`）。`source.path`
 以 `json.dumps(v, ensure_ascii=False, separators=(",", ":"))` 渲染。
+
+### `export_audit_report_trend(paths, output) -> bytes`
+
+把多份审计报告 JSON 的趋势比较结果序列化后原子写盘，并返回所写字节。
+
+执行时**先且仅调用一次** `audit_report_trend(paths)` 得到 `T`，在此之
+前不做任何其他工作、之后也不再调用第二次；因此 `paths` 的校验契约（容
+器、至少 2 项、逐项非空 `str`，错误前缀 `paths[i]: `）与异常（原样向
+上传播）完全沿用 `audit_report_trend`，且 `paths` 的错误先于 `output`
+报出。输入与文件均不被修改。
+
+随后才校验 `output`：必须为非空 `str`——非 `str` 抛 `TypeError`
+（`output must be a str`），空串抛 `ValueError`
+（`output must not be empty`）。
+
+编码对象为紧凑 UTF-8 JSON，顶层键序恰好为 `sources, trend`：`sources`
+为 `paths` 各项按原序组成的字符串数组；`trend` 为 `T` 本身，键序
+`count, changes, regressed, failed_delta, pass_ratio_delta, worst,
+quality`，各值原样保留（`worst` 元组编码为四元素 JSON 数组）。编码参
+数（`ensure_ascii=False`、`separators=(",", ":")`、`allow_nan=False`）、
+无 BOM、无尾换行以及编码失败抛 `ValueError` 的规则沿用 `export_trends`。
+
+`output` 不得与任一 `paths` 项指向同一文件：双方都存在时用
+`os.path.samefile` 识别软/硬链接，任一方不存在时比较
+`os.path.normcase(os.path.realpath(os.path.abspath(path)))`；重合时抛
+`ValueError`。非重合时在 `output` 同目录创建临时文件，以二进制写入字
+节，`flush()`、`os.fsync()` 后用 `os.replace` 原子替换 `output`；替换
+前发生失败会清除临时文件且既有 `output` 逐字节不变，`OSError` 原样传
+播（重合拒绝与原子写入契约均沿用 `export_audit`）。返回值与写入文件的
+字节为同一份 `bytes`。
+
+### `load_audit_report_trend(path) -> dict`
+
+读取一份 `export_audit_report_trend` 产出的趋势 JSON。
+
+`path` 校验、二进制（`"rb"`）读取与系统异常、BOM/尾换行拒绝、UTF-8/JSON
+解码、`NaN`/`Infinity` 与重复键拒绝以及逐字节规范重序列化核对，全部沿
+用 `load_trend_report`：非 `str` 抛 `TypeError`，空串抛 `ValueError`，
+文件缺失抛 `FileNotFoundError`，目录抛 `IsADirectoryError`，其余
+`OSError` 原样传播；解析、结构或规范字节不符一律抛 `ValueError`。文件
+不会被修改。
+
+解码值必须是 JSON 对象，顶层键序恰好为 `sources, trend`——重复、缺失
+或多余键均被拒绝。`sources` 为至少 2 项的非空 `str` 数组。`trend` 必须
+满足 `audit_report_trend` 的返回契约：键序恰好为 `count, changes,
+regressed, failed_delta, pass_ratio_delta, worst, quality`；`count` 等
+于 `sources` 个数、`changes` 等于 `count - 1`；`count`/`changes`/
+`failed_delta` 为非布尔 `int`，`regressed` 为落在 `[0, changes]` 的非
+布尔 `int`；`pass_ratio_delta` 为 `[-1, 1]` 内有限非布尔 `float`，等
+于 `round(float(v), 6)` 且禁止负零；`worst` 为四元素数组
+`[i, df, dr, quality]`，其中 `i` 为 `[1, count)` 内非布尔 `int`、`df`
+为非布尔 `int`、`dr` 为 `[-1, 1]` 内有限非布尔 `float`（同样的六位舍
+入与禁负零规则）、`quality` 为 `"pass"`/`"fail"`；顶层 `quality` 当且
+仅当 `regressed` 为 `0` 时为 `"pass"`。
+
+随后**仅调用一次** `audit_report_trend(sources)` 得到 `E`，其异常原样
+向上传播；存储的 `trend` 必须与 `E` 逐字段相等（`worst` 按元组比较），
+否则抛 `ValueError`。
+
+返回键序为 `sources, trend` 的 dict：`sources` 为按存储顺序的路径字符
+串 `list`，仅 `trend["worst"]` 还原为元组，其余值原样返回；文件始终不
+被修改。
