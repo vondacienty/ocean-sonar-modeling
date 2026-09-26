@@ -35,6 +35,7 @@ __all__ = [
     "metrics",
     "load",
     "quality_report",
+    "load_quality_report",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -57,6 +58,25 @@ _QUALITY_KEYS = (
 )
 _SUBSTRATE_KEYS = ("resolution", "nx", "ny", "classes", "counts")
 _QUALITY_VALUES = ("pass", "fail")
+_QUALITY_REPORT_KEYS = (
+    "layers",
+    "total",
+    "valid",
+    "coverage",
+    "terrain_exceed",
+    "unknown",
+    "worst",
+    "crosspoint",
+    "quality",
+)
+_QUALITY_REPORT_INT_KEYS = (
+    "layers",
+    "total",
+    "valid",
+    "terrain_exceed",
+    "unknown",
+    "worst",
+)
 
 
 def build(
@@ -906,6 +926,10 @@ def quality_report(path) -> bytes:
         "quality": product["overall"],
     }
 
+    return _dump_quality_report(report)
+
+
+def _dump_quality_report(report) -> bytes:
     try:
         text = json.dumps(
             _to_jsonable(report),
@@ -918,3 +942,167 @@ def quality_report(path) -> bytes:
         raise ValueError(
             f"quality report: could not be serialized to JSON: {exc}"
         ) from exc
+
+
+def _reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON object key {key!r}")
+        result[key] = value
+    return result
+
+
+def _check_quality_report(report):
+    if not isinstance(report, dict):
+        raise ValueError("quality report must be a JSON object")
+    if list(report.keys()) != list(_QUALITY_REPORT_KEYS):
+        raise ValueError(
+            "quality report keys must be in the order "
+            "layers, total, valid, coverage, terrain_exceed, unknown, "
+            "worst, crosspoint, quality"
+        )
+
+    for name in _QUALITY_REPORT_INT_KEYS:
+        value = report[name]
+        if type(value) is not int:
+            raise ValueError(f"quality report: {name} must be a non-bool int")
+
+    layers = report["layers"]
+    if not layers > 0:
+        raise ValueError("quality report: layers must be > 0")
+
+    total = report["total"]
+    if not total > 0:
+        raise ValueError("quality report: total must be > 0")
+
+    valid = report["valid"]
+    if not 0 <= valid <= total:
+        raise ValueError("quality report: valid must be in [0, total]")
+
+    terrain_exceed = report["terrain_exceed"]
+    if terrain_exceed < 0:
+        raise ValueError("quality report: terrain_exceed must be >= 0")
+
+    unknown = report["unknown"]
+    if unknown < 0:
+        raise ValueError("quality report: unknown must be >= 0")
+
+    worst = report["worst"]
+    if not 0 <= worst < layers:
+        raise ValueError("quality report: worst must be in [0, layers)")
+
+    coverage = report["coverage"]
+    if type(coverage) is not float:
+        raise ValueError("quality report: coverage must be a float")
+    if not math.isfinite(coverage):
+        raise ValueError("quality report: coverage must be finite")
+    expected_coverage = round(float(valid / total), 6)
+    if expected_coverage == 0:
+        expected_coverage = 0.0
+    if coverage != expected_coverage:
+        raise ValueError(
+            "quality report: coverage must equal round(float(valid / total), 6)"
+        )
+    if coverage == 0.0 and math.copysign(1.0, coverage) < 0:
+        raise ValueError("quality report: coverage must not be negative zero")
+
+    crosspoint = report["crosspoint"]
+    if type(crosspoint) is not str:
+        raise ValueError("quality report: crosspoint must be a str")
+    if crosspoint not in _QUALITY_VALUES:
+        raise ValueError("quality report: crosspoint must be 'pass' or 'fail'")
+
+    quality = report["quality"]
+    if type(quality) is not str:
+        raise ValueError("quality report: quality must be a str")
+    if quality not in _QUALITY_VALUES:
+        raise ValueError("quality report: quality must be 'pass' or 'fail'")
+
+    expected_quality = (
+        "pass"
+        if crosspoint == "pass" and terrain_exceed == 0 and unknown == 0
+        else "fail"
+    )
+    if quality != expected_quality:
+        raise ValueError(
+            "quality report: quality must be 'pass' exactly when "
+            "crosspoint is 'pass' and terrain_exceed and unknown are both 0"
+        )
+
+
+def load_quality_report(path) -> dict:
+    """Load a :func:`quality_report`-produced JSON quality report from ``path``.
+
+    ``path`` must be a non-empty ``str``: a non-str raises ``TypeError``
+    and an empty ``str`` raises ``ValueError``. The file is opened in
+    binary mode (``"rb"``) and read in full; a missing file raises
+    ``FileNotFoundError``, a directory raises ``IsADirectoryError`` and
+    every other ``OSError`` is propagated unchanged. The file is not
+    modified.
+
+    The bytes must be exactly those produced by :func:`quality_report`
+    for the same value: compact UTF-8 JSON with no BOM and no trailing
+    newline. A BOM, a trailing newline, a UTF-8 decoding failure, a JSON
+    parsing failure, a ``NaN``/``Infinity`` constant or a repeated JSON
+    object key raises ``ValueError``.
+
+    The decoded value must be a JSON object with keys exactly in the
+    order ``layers, total, valid, coverage, terrain_exceed, unknown,
+    worst, crosspoint, quality``. Every field except ``coverage`` and
+    the two quality fields must be a non-bool int: ``layers`` and
+    ``total`` must be ``> 0``, ``valid`` in ``[0, total]``,
+    ``terrain_exceed`` and ``unknown`` ``>= 0`` and ``worst`` in
+    ``[0, layers)``. ``coverage`` must be a finite non-bool float equal
+    to ``round(float(valid / total), 6)`` and must not be negative
+    zero; ``crosspoint`` and ``quality`` must each be ``"pass"`` or
+    ``"fail"``, and ``quality`` must be ``"pass"`` exactly when
+    ``crosspoint`` is ``"pass"`` and both exception counts are ``0``.
+    Finally the file bytes must equal the canonical re-encoding of the
+    decoded value byte for byte. Any key-order, type, range, relation,
+    parse or canonical-byte mismatch raises ``ValueError``.
+
+    Returns the report as a dict with the keys in the order above; the
+    file is never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_keys,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        _check_quality_report(parsed)
+        canonical = _dump_quality_report(parsed)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid quality report: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical quality_report output"
+        )
+
+    return parsed
