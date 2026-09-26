@@ -24,6 +24,7 @@ __all__ = [
     "export_aggregate",
     "load",
     "load_aggregate",
+    "load_aggregate_report",
     "render",
     "render_aggregate",
     "serialize_aggregate_report",
@@ -1130,6 +1131,271 @@ def serialize_aggregate_report(path) -> bytes:
         "quality": summary["quality"],
     }
     return _dump_aggregate_document(report)
+
+
+_AGGREGATE_REPORT_KEYS = ("schema_version", "source", "summary", "worst", "quality")
+_AGGREGATE_REPORT_SOURCE_KEYS = ("path", "kind")
+_AGGREGATE_REPORT_WORST_KEYS = ("index", "count", "unknown", "quality")
+
+
+def _check_aggregate_report_summary(summary, prefix):
+    """Check a report ``summary`` against the ``load_aggregate`` summary rules."""
+    if not isinstance(summary, dict):
+        raise TypeError(prefix + "must be a dict")
+    if list(summary.keys()) != list(_AGGREGATE_SUMMARY_KEYS):
+        raise TypeError(
+            prefix
+            + "keys must be in the order batch_count, result_count, unknown, "
+            "counts, unknown_ratio, worst_batch_index, quality"
+        )
+
+    batch_count = summary["batch_count"]
+    if type(batch_count) is not int:
+        raise TypeError(prefix + "batch_count must be a non-bool int")
+    if batch_count < 2:
+        raise ValueError(prefix + "batch_count must be >= 2")
+
+    result_count = summary["result_count"]
+    if type(result_count) is not int:
+        raise TypeError(prefix + "result_count must be a non-bool int")
+    if result_count < batch_count:
+        raise ValueError(prefix + "result_count must be >= batch_count")
+
+    unknown = summary["unknown"]
+    if type(unknown) is not int:
+        raise TypeError(prefix + "unknown must be a non-bool int")
+    if not 0 <= unknown <= result_count:
+        raise ValueError(prefix + "unknown must be in [0, result_count]")
+
+    counts = summary["counts"]
+    counts_prefix = prefix + "counts: "
+    if not isinstance(counts, dict):
+        raise TypeError(counts_prefix + "must be a dict")
+    if list(counts.keys()) != list(_AGGREGATE_COUNT_KEYS):
+        raise TypeError(
+            counts_prefix
+            + "keys must be in the order unknown, mud, sand, gravel, rock"
+        )
+    total = 0
+    for name in _AGGREGATE_COUNT_KEYS:
+        value = counts[name]
+        if type(value) is not int:
+            raise TypeError(counts_prefix + f"{name} must be a non-bool int")
+        if value < 0:
+            raise ValueError(counts_prefix + f"{name} must be >= 0")
+        total += value
+    if total != result_count:
+        raise ValueError(counts_prefix + "counts must sum to result_count")
+    if counts["unknown"] != unknown:
+        raise ValueError(
+            counts_prefix + "unknown must equal the unknown count"
+        )
+
+    ratio = summary["unknown_ratio"]
+    if type(ratio) is not float:
+        raise TypeError(prefix + "unknown_ratio must be a float")
+    if not math.isfinite(ratio):
+        raise ValueError(prefix + "unknown_ratio must be finite")
+    if ratio == 0 and math.copysign(1.0, ratio) < 0:
+        raise ValueError(prefix + "unknown_ratio must not be negative zero")
+    if ratio != _round6(unknown / result_count):
+        raise ValueError(
+            prefix
+            + "unknown_ratio must equal round(float(unknown / result_count), 6)"
+        )
+
+    worst = summary["worst_batch_index"]
+    if type(worst) is not int:
+        raise TypeError(prefix + "worst_batch_index must be a non-bool int")
+    if not 0 <= worst < batch_count:
+        raise ValueError(
+            prefix + "worst_batch_index must be in [0, batch_count)"
+        )
+
+    quality = summary["quality"]
+    if type(quality) is not str:
+        raise TypeError(prefix + "quality must be a str")
+    if quality not in ("pass", "fail"):
+        raise ValueError(prefix + "quality must be 'pass' or 'fail'")
+    if (quality == "pass") != (unknown == 0):
+        raise ValueError(
+            prefix + "quality must be 'pass' if and only if unknown is 0"
+        )
+
+
+def _check_aggregate_report(document):
+    prefix = "aggregate report: "
+    if not isinstance(document, dict):
+        raise TypeError("aggregate report must be a dict")
+    if list(document.keys()) != list(_AGGREGATE_REPORT_KEYS):
+        raise TypeError(
+            "aggregate report keys must be in the order "
+            "schema_version, source, summary, worst, quality"
+        )
+
+    schema_version = document["schema_version"]
+    if type(schema_version) is not int:
+        raise TypeError(prefix + "schema_version must be a non-bool int")
+    if schema_version != 1:
+        raise ValueError(prefix + "schema_version must be 1")
+
+    source = document["source"]
+    source_prefix = prefix + "source: "
+    if not isinstance(source, dict):
+        raise TypeError(source_prefix + "must be a dict")
+    if list(source.keys()) != list(_AGGREGATE_REPORT_SOURCE_KEYS):
+        raise TypeError(source_prefix + "keys must be in the order path, kind")
+    source_path = source["path"]
+    if not isinstance(source_path, str):
+        raise TypeError(source_prefix + "path must be a str")
+    if source_path == "":
+        raise ValueError(source_prefix + "path must not be empty")
+    kind = source["kind"]
+    if type(kind) is not str:
+        raise TypeError(source_prefix + "kind must be a str")
+    if kind != "substrate_aggregate":
+        raise ValueError(source_prefix + "kind must be 'substrate_aggregate'")
+
+    summary = document["summary"]
+    _check_aggregate_report_summary(summary, prefix + "summary: ")
+
+    worst = document["worst"]
+    worst_prefix = prefix + "worst: "
+    if not isinstance(worst, dict):
+        raise TypeError(worst_prefix + "must be a dict")
+    if list(worst.keys()) != list(_AGGREGATE_REPORT_WORST_KEYS):
+        raise TypeError(
+            worst_prefix
+            + "keys must be in the order index, count, unknown, quality"
+        )
+    index = worst["index"]
+    if type(index) is not int:
+        raise TypeError(worst_prefix + "index must be a non-bool int")
+    if index != summary["worst_batch_index"]:
+        raise ValueError(
+            worst_prefix + "index must equal summary.worst_batch_index"
+        )
+    count = worst["count"]
+    if type(count) is not int:
+        raise TypeError(worst_prefix + "count must be a non-bool int")
+    if not count > 0:
+        raise ValueError(worst_prefix + "count must be > 0")
+    unknown = worst["unknown"]
+    if type(unknown) is not int:
+        raise TypeError(worst_prefix + "unknown must be a non-bool int")
+    if not 0 <= unknown <= count:
+        raise ValueError(worst_prefix + "unknown must be in [0, count]")
+    worst_quality = worst["quality"]
+    if type(worst_quality) is not str:
+        raise TypeError(worst_prefix + "quality must be a str")
+    if worst_quality not in ("pass", "fail"):
+        raise ValueError(worst_prefix + "quality must be 'pass' or 'fail'")
+    if (worst_quality == "pass") != (unknown == 0):
+        raise ValueError(
+            worst_prefix
+            + "quality must be 'pass' if and only if unknown is 0"
+        )
+
+    quality = document["quality"]
+    if type(quality) is not str:
+        raise TypeError(prefix + "quality must be a str")
+    if quality != summary["quality"]:
+        raise ValueError(prefix + "quality must equal summary.quality")
+
+
+def load_aggregate_report(path) -> dict:
+    """Load a :func:`serialize_aggregate_report`-produced JSON report.
+
+    ``path`` must be a non-empty ``str``: a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``. The file
+    is opened in binary mode (``"rb"``) and read in full; a missing
+    file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError`` and every other ``OSError`` is propagated
+    unchanged. The file is not modified.
+
+    The bytes must be exactly those produced by
+    :func:`serialize_aggregate_report` for the same value: compact
+    UTF-8 JSON (``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``) with no BOM and no trailing newline. A BOM, a
+    trailing newline, a UTF-8 decoding failure or a JSON parsing
+    failure raises ``ValueError``; the ``NaN``/``Infinity`` constants,
+    any other non-finite token and duplicate object keys are rejected.
+
+    The decoded value must be a JSON object with top-level keys exactly
+    in the order ``schema_version, source, summary, worst, quality``.
+    ``schema_version`` must be the non-bool int ``1``. ``source`` must
+    have keys exactly in the order ``path, kind`` with ``path`` a
+    non-empty ``str`` and ``kind`` the fixed string
+    ``"substrate_aggregate"``. ``summary`` must satisfy the key order,
+    type, range, count, ratio and quality relations of the
+    :func:`load_aggregate` summary object: keys exactly in the order
+    ``batch_count, result_count, unknown, counts, unknown_ratio,
+    worst_batch_index, quality`` with ``batch_count`` a non-bool int
+    ``>= 2``, ``result_count`` a non-bool int ``>= batch_count``,
+    ``unknown`` a non-bool int in ``[0, result_count]``, ``counts`` a
+    dict with keys exactly in the order ``unknown, mud, sand, gravel,
+    rock`` mapping to non-bool ints ``>= 0`` that sum to
+    ``result_count`` and whose ``unknown`` entry equals ``unknown``,
+    ``unknown_ratio`` the float ``round(float(unknown / result_count),
+    6)`` (negative zero normalized to ``0.0``), ``worst_batch_index`` a
+    non-bool int in ``[0, batch_count)`` and ``quality`` ``"pass"`` if
+    and only if ``unknown`` is ``0``. ``worst`` must have keys exactly
+    in the order ``index, count, unknown, quality``: the first three
+    non-bool ints with ``index`` equal to ``summary``
+    ``worst_batch_index``, ``count > 0`` and ``unknown`` in
+    ``[0, count]``, and ``quality`` ``"pass"`` if and only if
+    ``worst`` ``unknown`` is ``0``. The top-level ``quality`` must
+    equal ``summary`` ``quality``. Every float must be finite, equal
+    ``round(float(v), 6)`` and not negative zero. The file bytes must
+    also equal the canonical re-serialization of the decoded value
+    byte for byte; any key-order, type, range, relation, parse or
+    canonical-byte mismatch raises ``ValueError``.
+
+    Returns the report as a dict with the keys in the order above; the
+    file is never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_json_pairs,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        _check_aggregate_report(parsed)
+        canonical = _dump_aggregate_document(parsed)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid aggregate report: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical "
+            "serialize_aggregate_report output"
+        )
+
+    return parsed
 
 
 def export_aggregate(path, output) -> bytes:
