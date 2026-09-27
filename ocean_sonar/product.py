@@ -54,6 +54,7 @@ __all__ = [
     "quality_dashboard",
     "serialize_overview",
     "load_overview",
+    "render_overview",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -2789,6 +2790,75 @@ def load_overview(path) -> dict:
         )
 
     return overview
+
+
+def render_overview(path) -> str:
+    """Render a :func:`load_overview`-loaded JSON overview as four text lines.
+
+    :func:`load_overview` is called exactly once with ``path``
+    unchanged and no other work happens before it; the ``path``
+    validation contract, the read behavior, every exception
+    (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`load_overview` therefore apply here
+    verbatim. The file is not modified.
+
+    Let ``O`` be the dict returned by that single call, ``P =
+    O["product"]``, ``S = O["substrate"]``, ``C = O["crosspoint"]
+    ["trend"]`` and ``M = O["summary"]``; returns four lines joined by
+    ``"\\n"`` with no trailing newline::
+
+        OVERVIEW=<O["quality"]>,<M["domain_count"]>,<M["pass_count"]>,<M["fail_count"]>
+        PRODUCT=<P["quality"]>,<P["summary"]["count"]>,<P["summary"]["passed"]>,<P["summary"]["failed"]>,<P["summary"]["coverage_delta"]>
+        SUBSTRATE=<S["quality"]>,<S["count"]>,<S["changes"]>,<S["regressed"]>,<S["unknown_delta"]>,<S["unknown_ratio_delta"]>
+        CROSSPOINT=<C["quality"]>,<C["count"]>,<C["changes"]>,<C["regressed"]>,<C["failed_delta"]>,<C["pass_ratio_delta"]>
+
+    Values are taken directly in the stated key order with no
+    recomputation or re-sorting: ints are formatted in decimal, strings
+    are copied as-is and floats use ``format(v, ".6f")`` with negative
+    zero rendered as ``"0.000000"``, following
+    :func:`render_quality_report_trend`.
+    """
+    overview = load_overview(path)
+    product = overview["product"]
+    substrate = overview["substrate"]
+    crosspoint_trend = overview["crosspoint"]["trend"]
+    summary = overview["summary"]
+    product_summary = product["summary"]
+
+    lines = (
+        "OVERVIEW={},{},{},{}".format(
+            _format_trend_value(overview["quality"]),
+            _format_trend_value(summary["domain_count"]),
+            _format_trend_value(summary["pass_count"]),
+            _format_trend_value(summary["fail_count"]),
+        ),
+        "PRODUCT={},{},{},{},{}".format(
+            _format_trend_value(product["quality"]),
+            _format_trend_value(product_summary["count"]),
+            _format_trend_value(product_summary["passed"]),
+            _format_trend_value(product_summary["failed"]),
+            _format_trend_value(product_summary["coverage_delta"]),
+        ),
+        "SUBSTRATE={},{},{},{},{},{}".format(
+            _format_trend_value(substrate["quality"]),
+            _format_trend_value(substrate["count"]),
+            _format_trend_value(substrate["changes"]),
+            _format_trend_value(substrate["regressed"]),
+            _format_trend_value(substrate["unknown_delta"]),
+            _format_trend_value(substrate["unknown_ratio_delta"]),
+        ),
+        "CROSSPOINT={},{},{},{},{},{}".format(
+            _format_trend_value(crosspoint_trend["quality"]),
+            _format_trend_value(crosspoint_trend["count"]),
+            _format_trend_value(crosspoint_trend["changes"]),
+            _format_trend_value(crosspoint_trend["regressed"]),
+            _format_trend_value(crosspoint_trend["failed_delta"]),
+            _format_trend_value(crosspoint_trend["pass_ratio_delta"]),
+        ),
+    )
+
+    return "\n".join(lines)
 
 
 def export_quality_report_trend(paths, output) -> bytes:
