@@ -15,6 +15,7 @@ import json
 import math
 
 from . import crosspoint, grid, quality, report, substrate, terrain
+from .crosspoint import _atomic_write_bytes, _reject_export_output_overlap
 from .report import (
     _check_crosspoint,
     _COUNT_KEYS,
@@ -40,6 +41,7 @@ __all__ = [
     "serialize_quality_trend",
     "load_quality_trend",
     "render_quality_trend",
+    "export_quality_trend",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -1512,3 +1514,48 @@ def render_quality_trend(path) -> str:
     second_line = f"CHANGES={change_fields}"
 
     return "\n".join((first_line, second_line))
+
+
+def export_quality_trend(paths, output) -> bytes:
+    """Serialize the :func:`quality_trend` comparison of ``paths`` and write it.
+
+    Exactly one call to :func:`serialize_quality_trend` is made with
+    ``paths`` — before any other work and no second time — so its
+    validation, first-error order, exceptions (propagated unchanged),
+    ``"paths[i]: "`` index prefixes, key order ``changes, worst,
+    quality`` and JSON byte specification all apply here as well; in
+    particular a bad ``paths`` value is reported before ``output`` is
+    inspected. Neither ``paths`` nor the loaded files are modified.
+
+    With ``B`` the ``bytes`` returned by
+    :func:`serialize_quality_trend`, ``output`` is then validated: it
+    must be a non-empty ``str`` (a non-str raises ``TypeError`` and an
+    empty ``str`` raises ``ValueError``), in that order.
+
+    ``output`` must not name the same file as any of the ``paths``
+    items: when both sides exist they are compared with
+    ``os.path.samefile`` so soft and hard links are recognized, and
+    otherwise the normalized paths
+    ``os.path.normcase(os.path.realpath(os.path.abspath(path)))`` are
+    compared; an overlap raises ``ValueError``.
+
+    When there is no overlap, a temporary file is created in
+    ``output``'s directory, ``B`` is written to it in binary mode,
+    ``flush()`` and ``os.fsync()`` are called and the temporary file
+    then atomically replaces ``output`` via ``os.replace``. Any failure
+    before the replacement removes the temporary file and leaves an
+    existing ``output`` byte for byte unchanged; ``OSError`` is
+    propagated unchanged.
+
+    Returns the same ``bytes`` ``B`` that were written.
+    """
+    data = serialize_quality_trend(paths)
+
+    if not isinstance(output, str):
+        raise TypeError("output must be a str")
+    if output == "":
+        raise ValueError("output must not be empty")
+
+    _reject_export_output_overlap(output, paths)
+    _atomic_write_bytes(output, data)
+    return data

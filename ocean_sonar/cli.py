@@ -26,6 +26,7 @@ from .crosspoint import (
 from .grid import batch as _grid_batch
 from .outlier import batch as _outlier_batch
 from .product import (
+    export_quality_trend as _export_quality_trend,
     quality_report as _product_quality_report,
     render_quality_trend as _render_quality_trend,
 )
@@ -521,6 +522,11 @@ def main(argv: list[str] | None = None) -> int:
     product_quality_parser.add_argument("product", metavar="PRODUCT", help="product JSON file")
     render_quality_trend_parser = sub.add_parser("render-quality-trend", help="render one quality trend JSON file as two summary lines")
     render_quality_trend_parser.add_argument("trend", metavar="TREND", help="quality trend JSON file")
+    export_quality_trend_parser = sub.add_parser("export-quality-trend", help="compare quality report JSON files and write one quality trend JSON")
+    export_quality_trend_parser.add_argument("report_first", metavar="REPORT", help="first quality report JSON file")
+    export_quality_trend_parser.add_argument("report_second", metavar="REPORT", help="second quality report JSON file")
+    export_quality_trend_parser.add_argument("report_rest", nargs="*", metavar="REPORT", help="additional quality report JSON files")
+    export_quality_trend_parser.add_argument("--output", required=True, help="output file atomically overwritten with the quality trend JSON")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -815,6 +821,19 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
         sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "export-quality-trend":
+        paths = [
+            args.report_first,
+            args.report_second,
+            *args.report_rest,
+        ]
+        try:
+            _export_quality_trend(paths, args.output)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
         return 0
 
     parser.print_help()
