@@ -53,6 +53,7 @@ __all__ = [
     "export_quality_report_trend",
     "quality_dashboard",
     "serialize_overview",
+    "load_overview",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -115,6 +116,19 @@ _QUALITY_REPORT_TREND_ITEM_KEYS = (
     "index",
     "failed_delta",
     "coverage_delta",
+    "quality",
+)
+_OVERVIEW_KEYS = (
+    "product",
+    "substrate",
+    "crosspoint",
+    "summary",
+    "quality",
+)
+_OVERVIEW_SUMMARY_KEYS = (
+    "domain_count",
+    "pass_count",
+    "fail_count",
     "quality",
 )
 
@@ -2402,12 +2416,14 @@ def serialize_overview(product_path, substrate_path, audit_path) -> bytes:
     here verbatim. None of the input files is modified.
 
     Let ``P``, ``S`` and ``C`` be the dicts returned by those three
-    calls. The domain qualities are ``P["quality"]``,
-    ``S["trend"]["quality"]`` and ``C["trend"]["quality"]``. The
-    overview is encoded with keys exactly in the order ``product,
-    substrate, crosspoint, summary, quality``: the first three values
-    are ``P``, ``S`` and ``C`` themselves, with every nested key order
-    and value unchanged; ``summary`` has keys exactly in the order
+    calls. The domain qualities are ``P["quality"]``, ``S["quality"]``
+    and ``C["trend"]["quality"]`` (the substrate trend is the flat dict
+    returned by :func:`substrate.load_aggregate_report_trend
+    <ocean_sonar.substrate.load_aggregate_report_trend>`). The overview
+    is encoded with keys exactly in the order ``product, substrate,
+    crosspoint, summary, quality``: the first three values are ``P``,
+    ``S`` and ``C`` themselves, with every nested key order and value
+    unchanged; ``summary`` has keys exactly in the order
     ``domain_count, pass_count, fail_count, quality`` with values the
     int ``3``, the number of domains whose quality is ``"pass"``, the
     number of remaining domains and ``"pass"`` only when all three
@@ -2432,7 +2448,7 @@ def serialize_overview(product_path, substrate_path, audit_path) -> bytes:
 
     domain_qualities = (
         product_result["quality"],
-        substrate_result["trend"]["quality"],
+        substrate_result["quality"],
         crosspoint_result["trend"]["quality"],
     )
     pass_count = 0
@@ -2455,6 +2471,11 @@ def serialize_overview(product_path, substrate_path, audit_path) -> bytes:
         "quality": quality,
     }
 
+    return _dump_overview(overview)
+
+
+def _dump_overview(overview) -> bytes:
+    """Re-encode a validated overview dict the way :func:`serialize_overview` does."""
     try:
         text = json.dumps(
             _to_jsonable(overview),
@@ -2467,6 +2488,296 @@ def serialize_overview(product_path, substrate_path, audit_path) -> bytes:
         raise ValueError(
             f"overview: could not be serialized to JSON: {exc}"
         ) from exc
+
+
+_OVERVIEW_DASHBOARD_KEYS = ("trend", "summary", "quality")
+_OVERVIEW_DASHBOARD_SUMMARY_KEYS = (
+    "count",
+    "passed",
+    "failed",
+    "coverage_delta",
+)
+
+
+def _check_overview_product(value):
+    """Validate the product domain against the :func:`quality_dashboard` contract."""
+    prefix = "overview: product: "
+    if not isinstance(value, dict):
+        raise ValueError(prefix + "must be a JSON object")
+    if list(value.keys()) != list(_OVERVIEW_DASHBOARD_KEYS):
+        raise ValueError(
+            prefix + "keys must be in the order trend, summary, quality"
+        )
+
+    trend = value["trend"]
+    _check_quality_report_trend(trend)
+
+    summary = value["summary"]
+    summary_prefix = prefix + "summary: "
+    if not isinstance(summary, dict):
+        raise ValueError(summary_prefix + "must be a JSON object")
+    if list(summary.keys()) != list(_OVERVIEW_DASHBOARD_SUMMARY_KEYS):
+        raise ValueError(
+            summary_prefix
+            + "keys must be in the order count, passed, failed, coverage_delta"
+        )
+
+    changes = trend["changes"]
+    count = len(changes)
+    passed = 0
+    for item in changes:
+        if item["quality"] == "pass":
+            passed += 1
+    expected_coverage = round(
+        float(
+            math.fsum(item["coverage_delta"] for item in changes) / count
+        ),
+        6,
+    )
+    if expected_coverage == 0:
+        expected_coverage = 0.0
+
+    for name, expected in (
+        ("count", count),
+        ("passed", passed),
+        ("failed", count - passed),
+    ):
+        item_value = summary[name]
+        if type(item_value) is not int:
+            raise ValueError(
+                summary_prefix + f"{name} must be a non-bool int"
+            )
+        if item_value != expected:
+            raise ValueError(
+                summary_prefix + f"{name} does not match the trend"
+            )
+
+    coverage_delta = summary["coverage_delta"]
+    if type(coverage_delta) is not float:
+        raise ValueError(summary_prefix + "coverage_delta must be a float")
+    if not math.isfinite(coverage_delta):
+        raise ValueError(summary_prefix + "coverage_delta must be finite")
+    if coverage_delta != expected_coverage:
+        raise ValueError(
+            summary_prefix
+            + "coverage_delta must equal round(float(sum(coverage_delta) "
+            "/ count), 6)"
+        )
+    if coverage_delta == 0.0 and math.copysign(1.0, coverage_delta) < 0:
+        raise ValueError(
+            summary_prefix + "coverage_delta must not be negative zero"
+        )
+
+    quality = value["quality"]
+    if type(quality) is not str:
+        raise ValueError(prefix + "quality must be a str")
+    if quality not in _QUALITY_VALUES:
+        raise ValueError(prefix + "quality must be 'pass' or 'fail'")
+    if quality != trend["quality"]:
+        raise ValueError(prefix + "quality must equal the trend quality")
+
+    worst = trend["worst"]
+    matched = None
+    for item in changes:
+        if item == worst:
+            matched = item
+            break
+
+    return {
+        "trend": {
+            "changes": tuple(changes),
+            "worst": matched,
+            "quality": trend["quality"],
+        },
+        "summary": {
+            "count": count,
+            "passed": passed,
+            "failed": count - passed,
+            "coverage_delta": expected_coverage,
+        },
+        "quality": quality,
+    }
+
+
+def _check_overview(document):
+    """Validate a decoded overview and return it with tuples restored."""
+    if not isinstance(document, dict):
+        raise ValueError("overview must be a JSON object")
+    if list(document.keys()) != list(_OVERVIEW_KEYS):
+        raise ValueError(
+            "overview keys must be in the order "
+            "product, substrate, crosspoint, summary, quality"
+        )
+
+    product_result = _check_overview_product(document["product"])
+    substrate_result = substrate._check_aggregate_report_trend(
+        document["substrate"]
+    )
+    crosspoint_result = crosspoint._check_audit_report_trend(
+        document["crosspoint"]
+    )
+
+    domain_qualities = (
+        product_result["quality"],
+        substrate_result["quality"],
+        crosspoint_result["trend"]["quality"],
+    )
+    pass_count = 0
+    for domain_quality in domain_qualities:
+        if domain_quality == "pass":
+            pass_count += 1
+    fail_count = 3 - pass_count
+    expected_quality = "pass" if pass_count == 3 else "fail"
+
+    summary = document["summary"]
+    summary_prefix = "overview: summary: "
+    if not isinstance(summary, dict):
+        raise ValueError(summary_prefix + "must be a JSON object")
+    if list(summary.keys()) != list(_OVERVIEW_SUMMARY_KEYS):
+        raise ValueError(
+            summary_prefix
+            + "keys must be in the order "
+            "domain_count, pass_count, fail_count, quality"
+        )
+
+    for name, expected in (
+        ("domain_count", 3),
+        ("pass_count", pass_count),
+        ("fail_count", fail_count),
+    ):
+        value = summary[name]
+        if type(value) is not int:
+            raise ValueError(summary_prefix + f"{name} must be a non-bool int")
+        if value != expected:
+            raise ValueError(
+                summary_prefix + f"{name} is inconsistent with the domains"
+            )
+
+    quality = summary["quality"]
+    if type(quality) is not str:
+        raise ValueError(summary_prefix + "quality must be a str")
+    if quality not in _QUALITY_VALUES:
+        raise ValueError(summary_prefix + "quality must be 'pass' or 'fail'")
+    if quality != expected_quality:
+        raise ValueError(
+            summary_prefix
+            + "quality must be 'pass' exactly when all three domains pass"
+        )
+
+    top_quality = document["quality"]
+    if type(top_quality) is not str:
+        raise ValueError("overview: quality must be a str")
+    if top_quality not in _QUALITY_VALUES:
+        raise ValueError("overview: quality must be 'pass' or 'fail'")
+    if top_quality != quality:
+        raise ValueError(
+            "overview: quality must equal the summary quality"
+        )
+
+    return {
+        "product": product_result,
+        "substrate": substrate_result,
+        "crosspoint": crosspoint_result,
+        "summary": {
+            "domain_count": 3,
+            "pass_count": pass_count,
+            "fail_count": fail_count,
+            "quality": quality,
+        },
+        "quality": top_quality,
+    }
+
+
+def load_overview(path) -> dict:
+    """Load a :func:`serialize_overview`-produced JSON overview from ``path``.
+
+    ``path`` must be a non-empty ``str``: a non-str raises ``TypeError``
+    and an empty ``str`` raises ``ValueError``. The file is opened in
+    binary mode (``"rb"``) and read in full; a missing file raises
+    ``FileNotFoundError``, a directory raises ``IsADirectoryError`` and
+    every other ``OSError`` is propagated unchanged. The file is not
+    modified.
+
+    The bytes must be exactly those produced by :func:`serialize_overview`
+    for the same value: compact UTF-8 JSON with no BOM and no trailing
+    newline. A BOM, a trailing newline, a UTF-8 decoding failure, a JSON
+    parsing failure, a ``NaN``/``Infinity`` constant or a repeated JSON
+    object key raises ``ValueError``.
+
+    The decoded value must be a JSON object with keys exactly in the
+    order ``product, substrate, crosspoint, summary, quality``. The
+    three domain values must conform, in that order, to the return
+    contracts of :func:`quality_dashboard`,
+    :func:`substrate.load_aggregate_report_trend
+    <ocean_sonar.substrate.load_aggregate_report_trend>` and
+    :func:`crosspoint.load_audit_report_trend
+    <ocean_sonar.crosspoint.load_audit_report_trend>`: the product
+    domain has keys ``trend, summary, quality`` with the trend the
+    ``changes, worst, quality`` quality-report-trend shape and the
+    summary counts and ``coverage_delta`` recomputed from that trend;
+    the substrate domain is the flat trend with keys ``count, changes,
+    regressed, unknown_delta, unknown_ratio_delta, worst, quality``;
+    the crosspoint domain has keys ``sources, trend`` with the full
+    audit trend under ``trend``. Every nested key order, tuple level
+    (restored from JSON arrays), field type/range and consistency rule
+    of those contracts applies. ``summary`` must have keys exactly in
+    the order ``domain_count, pass_count, fail_count, quality``: the
+    first three values non-bool ints with ``domain_count == 3``,
+    ``pass_count`` the number of domains whose quality is ``"pass"``
+    and ``fail_count == 3 - pass_count``; its ``quality`` is
+    ``"pass"`` exactly when all three domains pass and the top-level
+    ``quality`` equals it. Finally the file bytes must equal the
+    canonical re-encoding of the decoded value byte for byte, using
+    the :func:`serialize_overview` rules (compact UTF-8 JSON, tuples as
+    arrays, six-decimal float rounding and negative-zero
+    normalization). Every key-order, type, range, relation, parse or
+    canonical-byte mismatch raises ``ValueError``.
+
+    Returns the overview as a dict with the keys in the order above;
+    nested JSON arrays are restored to tuples exactly as the three
+    domain loaders restore them. The file is never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_keys,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        overview = _check_overview(parsed)
+        canonical = _dump_overview(overview)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid overview: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical serialize_overview output"
+        )
+
+    return overview
 
 
 def export_quality_report_trend(paths, output) -> bytes:
