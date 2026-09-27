@@ -47,8 +47,10 @@ __all__ = [
     "load_quality_report_trend",
     "render_quality_trend",
     "render_quality_trend_report",
+    "render_quality_report_trend",
     "export_quality_trend",
     "export_quality_trend_report",
+    "export_quality_report_trend",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -2274,5 +2276,98 @@ def export_quality_trend_report(path, output) -> bytes:
         raise ValueError("output must not be empty")
 
     _reject_export_output_overlap(output, [path])
+    _atomic_write_bytes(output, data)
+    return data
+
+
+def render_quality_report_trend(path) -> str:
+    """Render a :func:`load_quality_report_trend`-loaded JSON trend as text.
+
+    :func:`load_quality_report_trend` is called exactly once with
+    ``path`` unchanged and no other work happens before it; the ``path``
+    validation contract, the read behavior, every exception
+    (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`load_quality_report_trend` therefore apply
+    here verbatim. The file is not modified.
+
+    Let ``T`` be the dict returned by that single call and ``C =
+    T["changes"]``; returns one line per change plus a leading summary
+    line, joined by ``"\\n"`` with no trailing newline. The first line
+    is::
+
+        QUALITY=<T["quality"]>;COUNT=<len(C)>;WORST_INDEX=<T["worst"]["index"]>
+
+    followed by, for every item of ``C`` in its original order, a line::
+
+        CHANGE[<index>]=<failed_delta>,<coverage_delta>,<quality>
+
+    where the three values are taken in the item's key order ``index,
+    failed_delta, coverage_delta, quality`` with no re-sorting. Values
+    are copied directly from ``T``: ints are formatted in decimal,
+    strings are copied as-is and floats use ``format(v, ".6f")`` with
+    negative zero rendered as ``"0.000000"``.
+    """
+    trend = load_quality_report_trend(path)
+    changes = trend["changes"]
+
+    lines = [
+        f"QUALITY={_format_trend_value(trend['quality'])};"
+        f"COUNT={len(changes)};"
+        f"WORST_INDEX={_format_trend_value(trend['worst']['index'])}"
+    ]
+    for item in changes:
+        lines.append(
+            f"CHANGE[{_format_trend_value(item['index'])}]="
+            f"{_format_trend_value(item['failed_delta'])},"
+            f"{_format_trend_value(item['coverage_delta'])},"
+            f"{_format_trend_value(item['quality'])}"
+        )
+
+    return "\n".join(lines)
+
+
+def export_quality_report_trend(paths, output) -> bytes:
+    """Serialize the :func:`quality_report_trend` comparison of ``paths`` and write it.
+
+    Exactly one call to :func:`serialize_quality_report_trend` is made
+    with ``paths`` — before any other work and no second time — so its
+    validation, first-error order, exceptions (propagated unchanged),
+    ``"paths[i]: "`` index prefixes, key order ``changes, worst,
+    quality`` and JSON byte specification all apply here as well; in
+    particular a bad ``paths`` value is reported before ``output`` is
+    inspected. Neither ``paths`` nor the loaded files are modified.
+
+    With ``B`` the ``bytes`` returned by
+    :func:`serialize_quality_report_trend`, ``output`` is then
+    validated: it must be a non-empty ``str`` (a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``), in that
+    order.
+
+    ``output`` must not name the same file as any of the ``paths``
+    items: when both sides exist they are compared with
+    ``os.path.samefile`` so soft and hard links are recognized, and
+    otherwise the normalized paths
+    ``os.path.normcase(os.path.realpath(os.path.abspath(path)))`` are
+    compared; an overlap raises ``ValueError``.
+
+    When there is no overlap, a temporary file is created in
+    ``output``'s directory, ``B`` is written to it in binary mode,
+    ``flush()`` and ``os.fsync()`` are called and the temporary file
+    then atomically replaces ``output`` via ``os.replace``. Any failure
+    before the replacement removes the temporary file and leaves an
+    existing ``output`` byte for byte unchanged; ``OSError`` is
+    propagated unchanged.
+
+    Returns the same ``bytes`` ``B`` that were written.
+    """
+    data = serialize_quality_report_trend(paths)
+
+    if not isinstance(output, str):
+        raise TypeError("output must be a str")
+    if output == "":
+        raise ValueError("output must not be empty")
+
+    _reject_export_output_overlap(output, paths)
     _atomic_write_bytes(output, data)
     return data
