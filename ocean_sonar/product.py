@@ -57,6 +57,8 @@ __all__ = [
     "render_overview",
     "export_overview",
     "overview_trend",
+    "serialize_overview_trend",
+    "load_overview_trend",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -130,6 +132,19 @@ _OVERVIEW_SUMMARY_KEYS = (
 )
 _DASHBOARD_KEYS = ("trend", "summary", "quality")
 _DASHBOARD_SUMMARY_KEYS = ("count", "passed", "failed", "coverage_delta")
+_OVERVIEW_TREND_KEYS = (
+    "count",
+    "changes",
+    "regressed",
+    "worst",
+    "quality",
+)
+_OVERVIEW_TREND_ITEM_KEYS = (
+    "index",
+    "qualities",
+    "regressions",
+    "quality",
+)
 
 
 def build(
@@ -3017,6 +3032,280 @@ def overview_trend(paths) -> dict:
         "regressed": regressed,
         "worst": worst_item,
         "quality": "pass" if regressed == 0 else "fail",
+    }
+
+
+def _dump_overview_trend(trend) -> bytes:
+    try:
+        text = json.dumps(
+            _to_jsonable(trend),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"overview trend: could not be serialized to JSON: {exc}"
+        ) from exc
+
+
+def serialize_overview_trend(paths) -> bytes:
+    """Serialize the :func:`overview_trend` comparison of ``paths`` to bytes.
+
+    Exactly one call to :func:`overview_trend` is made with ``paths``
+    unchanged and no other work happens before it; the ``paths``
+    validation contract, the per-path :func:`load_overview` behavior,
+    every exception (propagated unchanged) and the input/file
+    invariance of :func:`overview_trend` therefore apply here verbatim.
+    Neither ``paths`` nor the loaded files are modified.
+
+    Let ``T`` be the dict returned by that single :func:`overview_trend`
+    call. It is encoded with keys exactly in the order ``count,
+    changes, regressed, worst, quality``; the ``changes`` tuple and the
+    per-item ``qualities`` and ``regressions`` tuples are converted to
+    JSON arrays and each item keeps its key order ``index, qualities,
+    regressions, quality``.
+
+    The JSON byte specification follows :func:`serialize_overview`:
+    UTF-8, ``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``, no indentation, no BOM and no trailing
+    newline; tuples are recursively converted to arrays. Any JSON or
+    UTF-8 encoding failure raises ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    trend = overview_trend(paths)
+    return _dump_overview_trend(trend)
+
+
+def _check_overview_trend_item(item, prefix):
+    if not isinstance(item, dict):
+        raise ValueError(prefix + "must be a JSON object")
+    if list(item.keys()) != list(_OVERVIEW_TREND_ITEM_KEYS):
+        raise ValueError(
+            prefix + "keys must be in the order index, qualities, "
+            "regressions, quality"
+        )
+
+    index = item["index"]
+    if type(index) is not int:
+        raise ValueError(prefix + "index must be a non-bool int")
+
+    qualities = item["qualities"]
+    if not isinstance(qualities, list):
+        raise ValueError(prefix + "qualities must be a JSON array")
+    if len(qualities) != 4:
+        raise ValueError(prefix + "qualities must have 4 elements")
+    for j in range(4):
+        value = qualities[j]
+        if type(value) is not str:
+            raise ValueError(prefix + f"qualities[{j}] must be a str")
+        if value not in _QUALITY_VALUES:
+            raise ValueError(
+                prefix + f"qualities[{j}] must be 'pass' or 'fail'"
+            )
+
+    regressions = item["regressions"]
+    if not isinstance(regressions, list):
+        raise ValueError(prefix + "regressions must be a JSON array")
+    if len(regressions) != 4:
+        raise ValueError(prefix + "regressions must have 4 elements")
+    any_regression = False
+    for j in range(4):
+        value = regressions[j]
+        if not isinstance(value, bool):
+            raise ValueError(prefix + f"regressions[{j}] must be a bool")
+        if value:
+            any_regression = True
+
+    quality = item["quality"]
+    if type(quality) is not str:
+        raise ValueError(prefix + "quality must be a str")
+    if quality not in _QUALITY_VALUES:
+        raise ValueError(prefix + "quality must be 'pass' or 'fail'")
+    expected_quality = "fail" if any_regression else "pass"
+    if quality != expected_quality:
+        raise ValueError(
+            prefix
+            + "quality must be 'fail' when any regression flag is true "
+            "and 'pass' otherwise"
+        )
+
+
+def _check_overview_trend(trend):
+    if not isinstance(trend, dict):
+        raise ValueError("overview trend must be a JSON object")
+    if list(trend.keys()) != list(_OVERVIEW_TREND_KEYS):
+        raise ValueError(
+            "overview trend keys must be in the order count, changes, "
+            "regressed, worst, quality"
+        )
+
+    count = trend["count"]
+    if type(count) is not int:
+        raise ValueError("overview trend: count must be a non-bool int")
+    if not count >= 2:
+        raise ValueError("overview trend: count must be >= 2")
+
+    changes = trend["changes"]
+    if not isinstance(changes, list):
+        raise ValueError("overview trend: changes must be a JSON array")
+    if len(changes) != count - 1:
+        raise ValueError(
+            "overview trend: changes must have count - 1 elements"
+        )
+
+    regressed_count = 0
+    worst_item = None
+    worst_count = -1
+    for i in range(len(changes)):
+        prefix = f"overview trend: changes[{i}]: "
+        item = changes[i]
+        _check_overview_trend_item(item, prefix)
+        if item["index"] != i + 1:
+            raise ValueError(prefix + "index must run consecutively from 1")
+        if item["quality"] == "fail":
+            regressed_count += 1
+        regression_count = 0
+        for flag in item["regressions"]:
+            if flag:
+                regression_count += 1
+        if regression_count > worst_count:
+            worst_count = regression_count
+            worst_item = item
+
+    regressed = trend["regressed"]
+    if type(regressed) is not int:
+        raise ValueError("overview trend: regressed must be a non-bool int")
+    if regressed != regressed_count:
+        raise ValueError(
+            "overview trend: regressed must equal the number of fail items"
+        )
+
+    worst = trend["worst"]
+    _check_overview_trend_item(worst, "overview trend: worst: ")
+    expected_worst_index = worst_item["index"]
+    if worst["index"] != expected_worst_index or worst != worst_item:
+        raise ValueError(
+            "overview trend: worst must be the item with the most "
+            "regression flags, ties broken by the smallest index"
+        )
+
+    quality = trend["quality"]
+    if type(quality) is not str:
+        raise ValueError("overview trend: quality must be a str")
+    if quality not in _QUALITY_VALUES:
+        raise ValueError("overview trend: quality must be 'pass' or 'fail'")
+    expected_quality = "pass" if regressed == 0 else "fail"
+    if quality != expected_quality:
+        raise ValueError(
+            "overview trend: quality must be 'pass' exactly when "
+            "regressed is 0"
+        )
+
+
+def load_overview_trend(path) -> dict:
+    """Load a :func:`serialize_overview_trend`-produced JSON trend from ``path``.
+
+    ``path`` must be a non-empty ``str``: a non-str raises ``TypeError``
+    and an empty ``str`` raises ``ValueError``. The file is opened in
+    binary mode (``"rb"``) and read in full; a missing file raises
+    ``FileNotFoundError``, a directory raises ``IsADirectoryError`` and
+    every other ``OSError`` is propagated unchanged. The file is not
+    modified.
+
+    The bytes must be exactly those produced by
+    :func:`serialize_overview_trend` for the same value: compact UTF-8
+    JSON with no BOM and no trailing newline. A BOM, a trailing
+    newline, a UTF-8 decoding failure, a JSON parsing failure, a
+    ``NaN``/``Infinity`` constant or a repeated JSON object key raises
+    ``ValueError``.
+
+    The decoded value must be a JSON object with keys exactly in the
+    order ``count, changes, regressed, worst, quality``. ``count`` must
+    be a non-bool int ``>= 2`` and ``changes`` a JSON array of exactly
+    ``count - 1`` items. Each item, like ``worst``, must be an object
+    with keys exactly in the order ``index, qualities, regressions,
+    quality``: ``index`` a non-bool int running consecutively from
+    ``1``; ``qualities`` an array of exactly four ``"pass"``/``"fail"``
+    strings; ``regressions`` an array of exactly four ``bool`` flags;
+    and the item ``quality`` must be ``"fail"`` when any regression
+    flag is ``True`` and ``"pass"`` otherwise. ``regressed`` must equal
+    the number of ``changes`` items whose ``quality`` is ``"fail"``;
+    ``worst`` must be the item with the most regression flags, ties
+    broken by the smallest index; and the top-level ``quality`` must be
+    ``"pass"`` exactly when ``regressed`` is ``0``. Finally the file
+    bytes must equal the canonical re-encoding of the decoded value
+    byte for byte. Every key-order, type, range, relation, parse or
+    canonical-byte mismatch raises ``ValueError``.
+
+    Returns the trend as a dict with the keys in the order ``count,
+    changes, regressed, worst, quality``, where ``changes`` is
+    converted to a tuple and each item's ``qualities`` and
+    ``regressions`` arrays are converted to tuples; ``worst`` is the
+    matching item of that tuple. The input and the file are never
+    modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_keys,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        _check_overview_trend(parsed)
+        canonical = _dump_overview_trend(parsed)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid overview trend: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical "
+            "serialize_overview_trend output"
+        )
+
+    changes = tuple(
+        {
+            "index": item["index"],
+            "qualities": tuple(item["qualities"]),
+            "regressions": tuple(item["regressions"]),
+            "quality": item["quality"],
+        }
+        for item in parsed["changes"]
+    )
+    worst_index = parsed["worst"]["index"]
+    worst_item = changes[worst_index - 1]
+
+    return {
+        "count": parsed["count"],
+        "changes": changes,
+        "regressed": parsed["regressed"],
+        "worst": worst_item,
+        "quality": parsed["quality"],
     }
 
 
