@@ -566,6 +566,30 @@ stderr 严格输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码
 ocean-sonar-modeling export-quality-trend-report quality_trend.json --output quality_trend_report.json
 ```
 
+### `render-quality-trend-report REPORT`
+
+把一份 `ocean_sonar.product.serialize_quality_trend_report` 生成的质量
+趋势报告 JSON 渲染为三行汇总文本，等价于**仅调用一次**
+`ocean_sonar.product.render_quality_trend_report(path)`：其
+`load_quality_trend_report` 的校验、异常（`TypeError`/`ValueError`/
+`FileNotFoundError`/`IsADirectoryError`/`OSError` 原样向上传播）与
+文件不变性完全沿用被调函数。记 `R` 为加载结果、`S = R["source"]`、
+`M = R["summary"]`、`W = R["worst"]`，成功时 stdout 输出三行文本加一
+个换行：第一行为
+`REPORT=<schema_version>,<JSON路径>,<kind>,<quality>`（路径为紧凑、
+`ensure_ascii=False` 的 JSON 字符串），第二行为
+`SUMMARY=<count>,<failed>,<coverage_delta>`，第三行为
+`WORST=<index>,<coverage_delta>,<terrain_exceed_delta>,<unknown_delta>,<quality>`；
+各值直接取自 `R`，int 十进制、str 原样、float 用 `format(v, ".6f")`
+且负零写作 `0.000000`，三行以 `\n` 连接、无尾换行。成功时 stderr 为
+空，退出码 0；文件不存在、内容非法等错误时 stdout 为空，stderr 严格
+输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数缺失或多
+余属于参数解析错误，退出码 2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling render-quality-trend-report quality_trend_report.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -608,7 +632,8 @@ ocean-sonar-modeling export-quality-trend-report quality_trend.json --output qua
 地形产品流水线接口位于 `ocean_sonar.product`，该模块导出：`build`、
 `dashboard`、`dashboard_summary`、`serialize`、`render`、`write`、
 `metrics`、`load`、`quality_report`、`render_quality_trend`、
-`export_quality_trend`、`export_quality_trend_report`。其中
+`render_quality_trend_report`、`export_quality_trend`、
+`export_quality_trend_report`。其中
 `quality_report` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`

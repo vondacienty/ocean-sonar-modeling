@@ -30,6 +30,7 @@ from .product import (
     export_quality_trend_report as _export_quality_trend_report,
     quality_report as _product_quality_report,
     render_quality_trend as _render_quality_trend,
+    render_quality_trend_report as _render_quality_trend_report,
 )
 from .report import rank_files
 from .strip import batch as _strip_batch
@@ -523,6 +524,8 @@ def main(argv: list[str] | None = None) -> int:
     product_quality_parser.add_argument("product", metavar="PRODUCT", help="product JSON file")
     render_quality_trend_parser = sub.add_parser("render-quality-trend", help="render one quality trend JSON file as two summary lines")
     render_quality_trend_parser.add_argument("trend", metavar="TREND", help="quality trend JSON file")
+    render_quality_trend_report_parser = sub.add_parser("render-quality-trend-report", help="render one quality trend report JSON file as three summary lines")
+    render_quality_trend_report_parser.add_argument("report", metavar="REPORT", help="quality trend report JSON file")
     export_quality_trend_parser = sub.add_parser("export-quality-trend", help="compare quality report JSON files and write one quality trend JSON")
     export_quality_trend_parser.add_argument("report_first", metavar="REPORT", help="first quality report JSON file")
     export_quality_trend_parser.add_argument("report_second", metavar="REPORT", help="second quality report JSON file")
@@ -821,6 +824,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "render-quality-trend":
         try:
             text = _render_quality_trend(args.trend)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "render-quality-trend-report":
+        try:
+            text = _render_quality_trend_report(args.report)
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
