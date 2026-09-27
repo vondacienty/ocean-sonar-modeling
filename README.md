@@ -693,6 +693,33 @@ O["summary"]`，成功时 stdout 输出以 `\n` 连接的四行文本并在末�
 ocean-sonar-modeling render-overview overview.json
 ```
 
+### `export-overview PRODUCT SUBSTRATE CROSSPOINT --output OUTPUT`
+
+把一份质量报告趋势 JSON（PRODUCT）、一份底质汇总报告趋势 JSON
+（SUBSTRATE）与一份交点审计报告趋势 JSON（CROSSPOINT）合并为一份三域
+质量总览 JSON 并写盘。等价于**仅调用一次**
+`ocean_sonar.product.export_overview(product_path, substrate_path,
+crosspoint_path, output)`：先且仅调用一次
+`serialize_overview(product_path, substrate_path, crosspoint_path)`
+得到字节串 `B`，其三路加载顺序、校验、异常、输入文件不变性、总览顶
+层键序（`product, substrate, crosspoint, summary, quality`）与 JSON
+字节规范完全沿用被调函数且先于 `output` 生效；成功时静默（stdout、
+stderr 均为空），退出码 0，并以同目录临时文件加 `flush()`、
+`os.fsync()`、`os.replace` 原子覆写 `--output` 指定的文件；
+`--output` 必须为非空字符串且不得与任一输入指向同一文件（双方都存
+在时用 `os.path.samefile` 识别软/硬链接，否则比较
+`os.path.normcase(os.path.realpath(os.path.abspath(path)))` 规范化路
+径），非 `str`/空串分别抛 `TypeError`/`ValueError`，重合抛
+`ValueError`；替换前发生失败会清除临时文件且既有 OUTPUT 逐字节不
+变，`OSError` 原样上抛；文件不存在、内容损坏等错误时 stdout 为空，
+stderr 严格输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码 1；缺
+少任一位置参数、缺少 `--output` 或参数多余属于参数解析错误，退出码
+2 且不调用业务函数。三个输入文件均不会被修改。
+
+```bash
+ocean-sonar-modeling export-overview quality_report_trend.json substrate_trend.json crosspoint_trend.json --output overview.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -739,7 +766,8 @@ ocean-sonar-modeling render-overview overview.json
 `export_quality_trend`、`export_quality_trend_report`、
 `render_quality_trend_report`、`render_quality_report_trend`、
 `export_quality_report_trend`、`quality_dashboard`、
-`serialize_overview`、`load_overview`、`render_overview`。其中
+`serialize_overview`、`load_overview`、`render_overview`、
+`export_overview`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
@@ -1263,6 +1291,34 @@ O["crosspoint"]["trend"]`、`M = O["summary"]`，返回以 `\n` 连接、
 所有值按列序直接取自 `O`，不重算、不重新排序：`int` 按十进制渲
 染，`str` 原样，`float` 用 `format(v, ".6f")`（负零渲染为
 `0.000000`），格式沿 `render_quality_report_trend`。
+
+### `product.export_overview(product_path, substrate_path, crosspoint_path, output) -> bytes`
+
+把三域质量总览序列化结果原子写盘，返回所写字节。
+
+执行时**先且仅调用一次**
+`serialize_overview(product_path, substrate_path, crosspoint_path)`
+得到字节串 `B`，在此之前不做任何其他工作、之后也不再调用第二次；
+因此三路加载器（`quality_dashboard`、
+`substrate.load_aggregate_report_trend`、
+`crosspoint.load_audit_report_trend`）的调用顺序、校验、首错顺序、
+异常（原样向上传播）与文件不变性完全沿用 `serialize_overview`，且
+输入路径的错误先于 `output` 报出。三个输入文件均不被修改。
+
+然后才校验 `output`：必须为非空 `str`——非 `str` 抛 `TypeError`
+（`output must be a str`），空串抛 `ValueError`
+（`output must not be empty`）。
+
+`output` 不得与 `product_path`、`substrate_path`、`crosspoint_path`
+中任一项指向同一文件：双方都存在时用 `os.path.samefile` 识别软/硬
+链接，任一方不存在时比较
+`os.path.normcase(os.path.realpath(os.path.abspath(path)))`；重合时
+抛 `ValueError`。
+
+非重合时在 `output` 同目录创建临时文件，以二进制写入 `B`，
+`flush()`、`os.fsync()` 后用 `os.replace` 原子替换 `output`。替换
+前发生失败会清除临时文件且既有 `output` 逐字节不变；`OSError` 原
+样传播。返回值与写入文件的字节为同一份 `bytes`。
 
 ### 通用约定
 
