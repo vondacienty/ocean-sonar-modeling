@@ -56,6 +56,7 @@ __all__ = [
     "load_overview",
     "render_overview",
     "export_overview",
+    "overview_trend",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -2911,6 +2912,112 @@ def export_overview(product_path, substrate_path, crosspoint_path, output) -> by
     )
     _atomic_write_bytes(output, data)
     return data
+
+
+def overview_trend(paths) -> dict:
+    """Compare successive :func:`load_overview` snapshots along ``paths``.
+
+    ``paths`` must be a list/tuple of at least two items; each item,
+    checked in index order, must be a non-empty ``str``. Validation
+    order (first error wins): the ``paths`` container, its length, then
+    each item in index order (type, then emptiness). A non-list/tuple
+    container or a non-str item raises ``TypeError``; fewer than two
+    items or an empty ``str`` raises ``ValueError``. Item errors are
+    prefixed with ``"paths[i]: "``.
+
+    :func:`load_overview` is then called exactly once per path, in
+    input order; any exception it raises is propagated unchanged. The input
+    and the loaded files are not modified.
+
+    For each successive pair ``i = 1..n-1`` the four domain qualities
+    of each snapshot are compared in the order ``product.quality``,
+    ``substrate.quality``, ``crosspoint.trend.quality`` and the
+    top-level ``quality``; only a change from ``"pass"`` to ``"fail"``
+    counts as a regression.
+
+    Returns a dict with keys in the order ``count, changes, regressed,
+    worst, quality``: ``count`` is the non-bool int ``n`` (the number
+    of snapshots); ``changes`` is a tuple with one dict per pair (in
+    ``i`` order), each with keys in the order ``index, qualities,
+    regressions, quality`` — ``index`` is the non-bool int ``i``,
+    ``qualities`` is the tuple of the later snapshot's four quality
+    strings in the order above, ``regressions`` is the same-order tuple
+    of four ``bool`` flags (``True`` exactly where the quality changed
+    from ``"pass"`` to ``"fail"``) and ``quality`` is ``"fail"`` when
+    any regression flag is ``True`` and ``"pass"`` otherwise.
+    ``regressed`` is the number of ``changes`` items whose ``quality``
+    is ``"fail"``. ``worst`` is the ``changes`` item with the most
+    regression flags (the same dict object, never a copy), ties broken
+    by the smaller ``index``; the top-level ``quality`` is ``"pass"``
+    exactly when ``regressed`` is ``0`` and ``"fail"`` otherwise. Items
+    are not sorted, values are not recomputed and no other keys are
+    added.
+    """
+    if not isinstance(paths, (list, tuple)):
+        raise TypeError("paths must be a list or tuple")
+    if len(paths) < 2:
+        raise ValueError("paths must contain at least 2 items")
+    for i in range(len(paths)):
+        prefix = f"paths[{i}]: "
+        if not isinstance(paths[i], str):
+            raise TypeError(prefix + "must be a str")
+        if paths[i] == "":
+            raise ValueError(prefix + "must not be empty")
+
+    overviews = [load_overview(path) for path in paths]
+
+    changes = []
+    regressed = 0
+    worst_item = None
+    worst_count = -1
+    for i in range(1, len(overviews)):
+        previous = overviews[i - 1]
+        current = overviews[i]
+        previous_qualities = (
+            previous["product"]["quality"],
+            previous["substrate"]["quality"],
+            previous["crosspoint"]["trend"]["quality"],
+            previous["quality"],
+        )
+        qualities = (
+            current["product"]["quality"],
+            current["substrate"]["quality"],
+            current["crosspoint"]["trend"]["quality"],
+            current["quality"],
+        )
+        regressions = tuple(
+            previous_qualities[j] == "pass" and qualities[j] == "fail"
+            for j in range(4)
+        )
+        regression_count = 0
+        for flag in regressions:
+            if flag:
+                regression_count += 1
+        if regression_count > 0:
+            verdict = "fail"
+            regressed += 1
+        else:
+            verdict = "pass"
+
+        item = {
+            "index": int(i),
+            "qualities": qualities,
+            "regressions": regressions,
+            "quality": verdict,
+        }
+        changes.append(item)
+
+        if regression_count > worst_count:
+            worst_count = regression_count
+            worst_item = item
+
+    return {
+        "count": len(paths),
+        "changes": tuple(changes),
+        "regressed": regressed,
+        "worst": worst_item,
+        "quality": "pass" if regressed == 0 else "fail",
+    }
 
 
 def export_quality_report_trend(paths, output) -> bytes:
