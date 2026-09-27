@@ -54,6 +54,7 @@ __all__ = [
     "quality_dashboard",
     "serialize_overview",
     "load_overview",
+    "overview_trend",
     "render_overview",
     "export_overview",
 ]
@@ -2791,6 +2792,110 @@ def load_overview(path) -> dict:
         )
 
     return overview
+
+
+def overview_trend(paths) -> dict:
+    """Compare successive :func:`load_overview` snapshots along ``paths``.
+
+    ``paths`` must be a list/tuple of at least two items; each item,
+    checked in index order, must be a non-empty ``str``. Validation
+    order (first error wins): the ``paths`` container, its length, then
+    each item in index order (type, then emptiness). A non-list/tuple
+    container or a non-str item raises ``TypeError``; fewer than two
+    items or an empty ``str`` raises ``ValueError``. Item errors are
+    prefixed with ``"paths[i]: "``.
+
+    :func:`load_overview` is then called exactly once per path, in
+    input order; any exception it raises is propagated unchanged. The
+    input and the loaded files are not modified.
+
+    For each successive pair ``i = 1..n-1`` the four qualities of the
+    later snapshot — the product quality, the substrate quality, the
+    crosspoint trend quality (``crosspoint.trend.quality``) and the
+    top-level overview quality, in that order — are each compared with
+    the corresponding quality of the previous snapshot. A quality is
+    recorded as a regression only when it changes from ``"pass"`` to
+    ``"fail"``; any other transition (including ``"fail"`` to
+    ``"pass"``) is not.
+
+    Returns a dict with keys in the order
+    ``count, changes, regressed, worst, quality``: ``count`` is the
+    snapshot count ``n``; ``changes`` is a tuple with one dict per pair
+    (in ``i`` order), each with keys in the order
+    ``index, qualities, regressions, quality`` — ``index`` is the
+    non-bool int ``i``, ``qualities`` is the tuple of the later
+    snapshot's four quality strings in the order above,
+    ``regressions`` is a tuple of four bools in the same order (``True``
+    exactly for a ``"pass"``→``"fail"`` regression) and ``quality`` is
+    ``"fail"`` when any of the four regressions is ``True`` and
+    ``"pass"`` otherwise. ``regressed`` is the number of ``changes``
+    items whose ``quality`` is ``"fail"``. ``worst`` is the ``changes``
+    item with the most regressions (the same dict object, never a
+    copy); on ties the item with the smallest ``index`` is kept. The
+    top-level ``quality`` is ``"pass"`` exactly when ``regressed`` is
+    ``0`` and ``"fail"`` otherwise. Items are neither sorted nor
+    reloaded and no other keys are added.
+    """
+    if not isinstance(paths, (list, tuple)):
+        raise TypeError("paths must be a list or tuple")
+    if len(paths) < 2:
+        raise ValueError("paths must contain at least 2 items")
+    for i in range(len(paths)):
+        prefix = f"paths[{i}]: "
+        if not isinstance(paths[i], str):
+            raise TypeError(prefix + "must be a str")
+        if paths[i] == "":
+            raise ValueError(prefix + "must not be empty")
+
+    overviews = [load_overview(path) for path in paths]
+
+    changes = []
+    regressed = 0
+    worst_item = None
+    worst_count = -1
+    for i in range(1, len(overviews)):
+        previous_overview = overviews[i - 1]
+        current_overview = overviews[i]
+        previous_qualities = (
+            previous_overview["product"]["quality"],
+            previous_overview["substrate"]["quality"],
+            previous_overview["crosspoint"]["trend"]["quality"],
+            previous_overview["quality"],
+        )
+        qualities = (
+            current_overview["product"]["quality"],
+            current_overview["substrate"]["quality"],
+            current_overview["crosspoint"]["trend"]["quality"],
+            current_overview["quality"],
+        )
+        regressions = tuple(
+            previous == "pass" and current == "fail"
+            for previous, current in zip(previous_qualities, qualities)
+        )
+        item_regressions = sum(1 for flag in regressions if flag)
+        item_quality = "fail" if item_regressions else "pass"
+        if item_regressions:
+            regressed += 1
+
+        item = {
+            "index": int(i),
+            "qualities": qualities,
+            "regressions": regressions,
+            "quality": item_quality,
+        }
+        changes.append(item)
+
+        if item_regressions > worst_count:
+            worst_count = item_regressions
+            worst_item = item
+
+    return {
+        "count": int(len(overviews)),
+        "changes": tuple(changes),
+        "regressed": int(regressed),
+        "worst": worst_item,
+        "quality": "pass" if regressed == 0 else "fail",
+    }
 
 
 def render_overview(path) -> str:
