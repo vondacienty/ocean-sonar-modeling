@@ -720,6 +720,28 @@ stderr 严格输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码
 ocean-sonar-modeling export-overview quality_report_trend.json substrate_trend.json crosspoint_trend.json --output overview.json
 ```
 
+### `export-overview-trend OVERVIEW OVERVIEW [OVERVIEW ...] --output OUTPUT`
+
+把多份 `ocean_sonar.product.serialize_overview` 生成的三域质量总览
+JSON 依次比较后导出为一份总览趋势 JSON。路径按命令行顺序传入（至少
+两个），等价于**仅调用一次**
+`ocean_sonar.product.export_overview_trend(paths, output)`：先且仅调
+用一次 `serialize_overview_trend(paths)` 得到字节串 `B`，其路径校验
+（至少两份、逐个非空字符串、`paths[i]: ` 前缀）、异常、趋势顶层键
+序（`count, changes, regressed, worst, quality`）与 JSON 字节规范
+完全沿用被调函数且先于 `output` 生效；成功时静默（stdout、stderr
+均为空），退出码 0，并以临时文件加 `os.replace` 原子覆写
+`--output` 指定的文件；`--output` 不得与任一 OVERVIEW 指向同一文
+件（双方都存在时用 `os.path.samefile` 识别软/硬链接，否则比较规
+范化路径），重合时抛 `ValueError`；文件不存在、内容损坏等错误时
+stdout 为空，stderr 严格输出 `ERROR <异常类名>: <异常消息>` 加换
+行，退出码 1；路径少于两个、缺少 `--output` 或参数多余属于参数解
+析错误，退出码 2 且不调用业务函数。输入总览文件不会被修改。
+
+```bash
+ocean-sonar-modeling export-overview-trend overview_a.json overview_b.json [overview_c.json ...] --output overview_trend.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -767,7 +789,7 @@ ocean-sonar-modeling export-overview quality_report_trend.json substrate_trend.j
 `render_quality_trend_report`、`render_quality_report_trend`、
 `export_quality_report_trend`、`quality_dashboard`、
 `serialize_overview`、`load_overview`、`render_overview`、
-`export_overview`。其中
+`export_overview`、`export_overview_trend`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
@@ -1312,6 +1334,33 @@ O["crosspoint"]["trend"]`、`M = O["summary"]`，返回以 `\n` 连接、
 `output` 不得与 `product_path`、`substrate_path`、`crosspoint_path`
 中任一项指向同一文件：双方都存在时用 `os.path.samefile` 识别软/硬
 链接，任一方不存在时比较
+`os.path.normcase(os.path.realpath(os.path.abspath(path)))`；重合时
+抛 `ValueError`。
+
+非重合时在 `output` 同目录创建临时文件，以二进制写入 `B`，
+`flush()`、`os.fsync()` 后用 `os.replace` 原子替换 `output`。替换
+前发生失败会清除临时文件且既有 `output` 逐字节不变；`OSError` 原
+样传播。返回值与写入文件的字节为同一份 `bytes`。
+
+### `product.export_overview_trend(paths, output) -> bytes`
+
+把多份总览快照的趋势比较结果原子写盘，返回所写字节。
+
+执行时**先且仅调用一次** `serialize_overview_trend(paths)` 得到字
+节串 `B`，在此之前不做任何其他工作、之后也不再调用第二次；因此
+`paths` 的校验契约（必须为至少两项的 list/tuple，逐项为非空
+`str`，错误带 `paths[i]: ` 前缀）、每份总览的 `load_overview`
+读取行为、首错顺序、异常（原样向上传播）、趋势键序（`count,
+changes, regressed, worst, quality`）与 JSON 字节规范完全沿用
+`serialize_overview_trend`，且 `paths` 的错误先于 `output` 报出。
+输入 `paths` 与各输入文件均不被修改。
+
+然后才校验 `output`：必须为非空 `str`——非 `str` 抛 `TypeError`
+（`output must be a str`），空串抛 `ValueError`
+（`output must not be empty`）。
+
+`output` 不得与 `paths` 中任一项指向同一文件：双方都存在时用
+`os.path.samefile` 识别软/硬链接，任一方不存在时比较
 `os.path.normcase(os.path.realpath(os.path.abspath(path)))`；重合时
 抛 `ValueError`。
 
