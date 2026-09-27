@@ -518,6 +518,33 @@ unknown_delta, quality`；int 十进制、str 原样、float 用六位小数且�
 ocean-sonar-modeling render-quality-trend quality_trend.json
 ```
 
+### `export-quality-trend REPORT REPORT [REPORT ...] --output OUTPUT`
+
+把多份 `ocean_sonar.product.quality_report` 生成的质量报告 JSON 按命令行
+原序比较为一份质量趋势 JSON 原子写盘。等价于**仅调用一次**
+`ocean_sonar.product.export_quality_trend(paths, output)`；其内部**仅调用
+一次** `ocean_sonar.product.serialize_quality_trend(paths)` 得到字节串
+`B`（路径按命令行顺序传入，不预读、不排序、不修改输入）：其路径校验
+（容器为 list/tuple、至少两份、逐项非空字符串，错误前缀
+`paths[i]: `）、加载异常、趋势顶层键序（`changes, worst, quality`）与
+JSON 字节规范（UTF-8、`ensure_ascii=False`、`separators=(",", ":")`、
+`allow_nan=False`、无缩进、无 BOM、无尾换行）完全沿用被调函数且先于任何
+输出生效。随后才校验 `--output`：必须为非空 `str`，非 `str` 抛
+`TypeError`、空串抛 `ValueError`；`--output` 不得与任一 REPORT 指向同
+一文件（双方都存在时用 `os.path.samefile` 识别软/硬链接，否则比较
+`os.path.normcase(os.path.realpath(os.path.abspath(path)))` 规范化路
+径），重合抛 `ValueError`；非重合时在 OUTPUT 同目录建临时文件，二进制写
+入 `B` 并 `flush()`、`os.fsync()` 后以 `os.replace` 原子替换，替换前发
+生失败会清除临时文件且既有 OUTPUT 逐字节不变，`OSError` 原样上抛。成功
+时静默（stdout、stderr 均为空），退出码 0；文件不存在、内容损坏等错误
+时 stdout 为空，stderr 严格输出 `ERROR <异常类名>: <异常消息>` 加换
+行，退出码 1；缺少 REPORT、REPORT 不足两份、缺少 `--output` 或参数多余
+属于参数解析错误，退出码 2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling export-quality-trend report_a.json report_b.json [report_c.json ...] --output quality_trend.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -559,8 +586,9 @@ ocean-sonar-modeling render-quality-trend quality_trend.json
 
 地形产品流水线接口位于 `ocean_sonar.product`，该模块导出：`build`、
 `dashboard`、`dashboard_summary`、`serialize`、`render`、`write`、
-`metrics`、`load`、`quality_report`、`render_quality_trend`。其中
-`quality_report` 的契约如下。
+`metrics`、`load`、`quality_report`、`render_quality_trend`、
+`export_quality_trend`。其中 `quality_report`、`export_quality_trend`
+的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
 
@@ -866,6 +894,34 @@ terrain_exceed, unknown, worst, crosspoint, quality`：
 `separators=(",", ":")`、`allow_nan=False`，无缩进、无 BOM、无尾换
 行；浮点数经 `round(float(v), 6)` 且负零归一化为 `0.0`。任何 JSON 或
 UTF-8 编码失败抛 `ValueError`。返回 `bytes`。
+
+### `product.export_quality_trend(paths, output) -> bytes`
+
+把多份质量报告 JSON 的质量趋势序列化后原子写盘，并返回所写字节。
+
+执行时**先且仅调用一次** `serialize_quality_trend(paths)` 得到字节串
+`B`，在此之前不做任何其他工作、之后也不再调用第二次；因此 `paths` 的
+校验契约（容器为 list/tuple、至少 2 项、逐项非空 `str`，错误前缀
+`paths[i]: `）、逐路径 `load_quality_report` 的行为与异常（原样向上
+传播）、趋势顶层键序（`changes, worst, quality`）与 JSON 字节规范
+（UTF-8、`ensure_ascii=False`、`separators=(",", ":")`、
+`allow_nan=False`，无缩进、无 BOM、无尾换行）完全沿用
+`serialize_quality_trend`，且 `paths` 的错误先于 `output` 报出。输入
+与文件均不被修改。
+
+随后才校验 `output`：必须为非空 `str`——非 `str` 抛 `TypeError`
+（`output must be a str`），空串抛 `ValueError`
+（`output must not be empty`）。
+
+`output` 不得与任一 `paths` 项指向同一文件：双方都存在时用
+`os.path.samefile` 识别软/硬链接，任一方不存在时比较
+`os.path.normcase(os.path.realpath(os.path.abspath(path)))`；重合时抛
+`ValueError`。
+
+非重合时在 `output` 同目录创建临时文件，以二进制写入 `B`，`flush()`、
+`os.fsync()` 后用 `os.replace` 原子替换 `output`。替换前发生失败会清除
+临时文件且既有 `output` 逐字节不变；`OSError` 原样传播。返回值与写入
+文件的字节为同一份 `bytes`。
 
 ### 通用约定
 

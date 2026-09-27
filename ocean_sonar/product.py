@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import tempfile
 
 from . import crosspoint, grid, quality, report, substrate, terrain
 from .report import (
@@ -38,6 +40,7 @@ __all__ = [
     "load_quality_report",
     "quality_trend",
     "serialize_quality_trend",
+    "export_quality_trend",
     "load_quality_trend",
     "render_quality_trend",
 ]
@@ -1276,6 +1279,103 @@ def serialize_quality_trend(paths) -> bytes:
     """
     trend = quality_trend(paths)
     return _dump_quality_trend(trend)
+
+
+def _resolved_export_path(path):
+    """Normalized absolute path with symlinks resolved, for non-existing files."""
+    return os.path.normcase(os.path.realpath(os.path.abspath(path)))
+
+
+def _is_same_file(output, path):
+    """Whether ``output`` and ``path`` name the same file.
+
+    Existing files are compared with ``os.path.samefile`` so soft and hard
+    links are recognized; when either side does not exist, the normalized
+    ``realpath`` strings are compared instead.
+    """
+    if os.path.exists(output) and os.path.exists(path):
+        return os.path.samefile(output, path)
+    return _resolved_export_path(output) == _resolved_export_path(path)
+
+
+def _reject_export_output_overlap(output, paths):
+    """Reject ``output`` naming the same file as any of ``paths``."""
+    for path in paths:
+        if _is_same_file(output, path):
+            raise ValueError(
+                f"output must not be the same file as an input: "
+                f"{output!r} and {path!r}"
+            )
+
+
+def _atomic_write_bytes(output, data):
+    """Write ``data`` to ``output`` via a fsynced temp file and ``os.replace``.
+
+    The temporary file lives in ``output``'s directory. On any failure before
+    the replacement the temporary file is removed and an existing ``output``
+    is left untouched.
+    """
+    directory = os.path.dirname(os.path.abspath(output)) or "."
+    fd, tmp_path = tempfile.mkstemp(
+        dir=directory, prefix="." + os.path.basename(output) + ".", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, output)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def export_quality_trend(paths, output) -> bytes:
+    """Serialize a quality trend of report files and atomically write it to disk.
+
+    Calls :func:`serialize_quality_trend` exactly once with ``paths`` —
+    before any other work and no second time — so its validation,
+    first-error order, exceptions (propagated unchanged), ``"paths[i]: "``
+    index prefixes, the top-level key order ``changes, worst, quality``
+    and the JSON byte specification all apply here as well; in particular
+    a bad ``paths`` value or file is reported before ``output`` is
+    inspected. Inputs and the loaded files are not modified.
+
+    With ``B`` the ``bytes`` returned by :func:`serialize_quality_trend`,
+    ``output`` is then validated: it must be a non-empty ``str`` (a
+    non-str raises ``TypeError`` and an empty ``str`` raises
+    ``ValueError``), in that order.
+
+    ``output`` must not name the same file as any of the ``paths``
+    items: when both sides exist they are compared with
+    ``os.path.samefile`` so soft and hard links are recognized, and
+    otherwise the normalized paths
+    ``os.path.normcase(os.path.realpath(os.path.abspath(path)))`` are
+    compared; an overlap raises ``ValueError``.
+
+    When there is no overlap, a temporary file is created in
+    ``output``'s directory, ``B`` is written to it in binary mode,
+    ``flush()`` and ``os.fsync()`` are called and the temporary file
+    then atomically replaces ``output`` via ``os.replace``. Any failure
+    before the replacement removes the temporary file and leaves an
+    existing ``output`` byte for byte unchanged; ``OSError`` is
+    propagated unchanged.
+
+    Returns the same ``bytes`` ``B`` that were written.
+    """
+    data = serialize_quality_trend(paths)
+
+    if not isinstance(output, str):
+        raise TypeError("output must be a str")
+    if output == "":
+        raise ValueError("output must not be empty")
+
+    _reject_export_output_overlap(output, paths)
+    _atomic_write_bytes(output, data)
+    return data
 
 
 def _check_quality_trend_item(item, prefix):
