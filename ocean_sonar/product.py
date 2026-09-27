@@ -61,6 +61,7 @@ __all__ = [
     "load_overview_trend",
     "render_overview_trend",
     "export_overview_trend",
+    "export_overview_trend_report",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -146,6 +147,20 @@ _OVERVIEW_TREND_ITEM_KEYS = (
     "qualities",
     "regressions",
     "quality",
+)
+_OVERVIEW_TREND_REPORT_KEYS = (
+    "schema_version",
+    "source",
+    "summary",
+    "worst",
+    "quality",
+)
+_OVERVIEW_TREND_REPORT_SOURCE_KEYS = ("path", "kind")
+_OVERVIEW_TREND_REPORT_SUMMARY_KEYS = (
+    "count",
+    "changes",
+    "regressed",
+    "passed",
 )
 
 
@@ -3471,5 +3486,95 @@ def export_overview_trend(paths, output) -> bytes:
         raise ValueError("output must not be empty")
 
     _reject_export_output_overlap(output, paths)
+    _atomic_write_bytes(output, data)
+    return data
+
+
+def export_overview_trend_report(path, output) -> bytes:
+    """Serialize an overview trend report for ``path`` and write it.
+
+    Exactly one call to :func:`load_overview_trend` is made with
+    ``path`` unchanged and no other work happens before it; the
+    ``path`` validation contract, the read behavior, every exception
+    (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`load_overview_trend` therefore apply here
+    verbatim. The input file is not modified.
+
+    Let ``T`` be the dict returned by that single call and ``W =
+    T["worst"]``. The report is computed from ``T`` alone, without
+    modifying it and without recomputing ``worst``, and built with keys
+    exactly in the order ``schema_version, source, summary, worst,
+    quality``:
+
+    - ``schema_version``: the non-bool int ``1``.
+    - ``source``: keys in the order ``path, kind``, with ``path`` the
+      original ``path`` argument and ``kind`` the string
+      ``"overview_trend"``.
+    - ``summary``: keys in the order ``count, changes, regressed,
+      passed``, with values ``T["count"]``, ``len(T["changes"])``,
+      ``T["regressed"]`` and ``len(T["changes"]) - T["regressed"]``.
+    - ``worst``: keys in the order ``index, qualities, regressions,
+      quality``, each value taken from ``W`` in that order; the
+      ``qualities`` and ``regressions`` four-element tuples become
+      arrays.
+    - ``quality``: ``T["quality"]``.
+
+    ``schema_version`` and the summary values are ``int``; every other
+    value keeps the type it has in ``T``. The JSON byte specification
+    follows :func:`serialize_overview_trend`: UTF-8,
+    ``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``, no indentation, no BOM and no trailing
+    newline; tuples are recursively converted to arrays. Any JSON or
+    UTF-8 encoding failure raises ``ValueError``.
+
+    With ``B`` the encoded ``bytes``, ``output`` is validated only
+    after the encoding: it must be a non-empty ``str`` (a non-str
+    raises ``TypeError`` and an empty ``str`` raises ``ValueError``),
+    in that order.
+
+    ``output`` must not name the same file as ``path``: when both
+    sides exist they are compared with ``os.path.samefile`` so soft and
+    hard links are recognized, and otherwise the normalized paths
+    ``os.path.normcase(os.path.realpath(os.path.abspath(path)))`` are
+    compared; an overlap raises ``ValueError``.
+
+    When there is no overlap, a temporary file is created in
+    ``output``'s directory, ``B`` is written to it in binary mode,
+    ``flush()`` and ``os.fsync()`` are called and the temporary file
+    then atomically replaces ``output`` via ``os.replace``. Any failure
+    before the replacement removes the temporary file and leaves an
+    existing ``output`` byte for byte unchanged; ``OSError`` is
+    propagated unchanged.
+
+    Returns the same ``bytes`` ``B`` that were written.
+    """
+    trend = load_overview_trend(path)
+    worst = trend["worst"]
+
+    report = {
+        "schema_version": 1,
+        "source": {
+            "path": path,
+            "kind": "overview_trend",
+        },
+        "summary": {
+            "count": trend["count"],
+            "changes": len(trend["changes"]),
+            "regressed": trend["regressed"],
+            "passed": len(trend["changes"]) - trend["regressed"],
+        },
+        "worst": {name: worst[name] for name in _OVERVIEW_TREND_ITEM_KEYS},
+        "quality": trend["quality"],
+    }
+
+    data = _dump_overview_trend(report)
+
+    if not isinstance(output, str):
+        raise TypeError("output must be a str")
+    if output == "":
+        raise ValueError("output must not be empty")
+
+    _reject_export_output_overlap(output, [path])
     _atomic_write_bytes(output, data)
     return data
