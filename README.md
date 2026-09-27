@@ -630,10 +630,11 @@ ocean-sonar-modeling render-quality-trend-report quality_trend_report.json
 
 地形产品流水线接口位于 `ocean_sonar.product`，该模块导出：`build`、
 `dashboard`、`dashboard_summary`、`serialize`、`render`、`write`、
-`metrics`、`load`、`quality_report`、`render_quality_trend`、
+`metrics`、`load`、`quality_report`、`quality_report_trend`、
+`render_quality_trend`、
 `export_quality_trend`、`export_quality_trend_report`、
 `render_quality_trend_report`。其中
-`quality_report` 的契约如下。
+`quality_report` 与 `quality_report_trend` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
 
@@ -939,6 +940,48 @@ terrain_exceed, unknown, worst, crosspoint, quality`：
 `separators=(",", ":")`、`allow_nan=False`，无缩进、无 BOM、无尾换
 行；浮点数经 `round(float(v), 6)` 且负零归一化为 `0.0`。任何 JSON 或
 UTF-8 编码失败抛 `ValueError`。返回 `bytes`。
+
+### `product.quality_report_trend(paths) -> dict`
+
+把多份 `product.serialize_quality_trend_report` 生成的质量趋势报告
+JSON 依次比较，返回趋势判定字典。
+
+`paths` 必须为至少含 2 项的 `list`/`tuple`，各项按下标顺序必须为非空
+`str`。校验顺序（先报错者胜出）：先校验 `paths` 容器，再校验长度，最
+后按各项下标顺序逐项校验（先类型后非空）。非 `list`/`tuple` 容器或非
+`str` 项抛 `TypeError`（`paths must be a list or tuple`、
+`paths[i]: must be a str`），少于 2 项或空串抛 `ValueError`
+（`paths must contain at least 2 items`、`paths[i]: must not be
+empty`），项级错误均带 `paths[i]: ` 前缀。
+
+随后按输入顺序对每个路径**仅调用一次**
+`load_quality_trend_report(path)`；它抛出的任何异常（`TypeError`/
+`ValueError`/`FileNotFoundError`/`IsADirectoryError`/`OSError`）原样向
+上传播。输入与所加载的文件均不被修改。
+
+每份加载报告的 `summary.count` 必须与第一份相同，否则抛
+`ValueError`（`quality trend report at paths[i] summary.count <值>
+does not match <首值>`）。
+
+对每个相邻对 `i = 1..n-1`，取未舍入差值
+`df = summary.failed_i - summary.failed_(i-1)` 与
+`dc = summary.coverage_delta_i - summary.coverage_delta_(i-1)`；当
+`df > 0`、`dc < 0` 或报告 `quality` 由 `"pass"` 变为 `"fail"` 时判定
+为 `"fail"`，否则为 `"pass"`。
+
+返回键序恰为 `changes, worst, quality` 的 `dict`：
+
+- `changes`：`tuple`，按 `i` 顺序每个相邻对一个 `dict`，键序恰为
+  `index, failed_delta, coverage_delta, quality`；`index` 为非布尔
+  `int` 型的 `i`，`failed_delta` 为未舍入非布尔 `int` 型的 `df`，
+  `coverage_delta` 为 `round(float(dc), 6)`（负零归一化为 `0.0`）的
+  `float`，`quality` 为该项判定；
+- `worst`：使**未舍入**元组 `(dc, -df, i)` 字典序最小的
+  `changes` 原 `dict` 对象本身（不复制、不排序）；
+- `quality`：仅当所有变化项均为 `"pass"` 时为 `"pass"`，否则为
+  `"fail"`。
+
+不排序、不重新加载、不重算数值、不新增键。
 
 ### `product.export_quality_trend(paths, output) -> bytes`
 
