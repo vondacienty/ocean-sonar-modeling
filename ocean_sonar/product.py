@@ -44,6 +44,7 @@ __all__ = [
     "load_quality_trend_report",
     "render_quality_trend",
     "render_quality_trend_report",
+    "quality_report_trend",
     "export_quality_trend",
     "export_quality_trend_report",
 ]
@@ -104,6 +105,12 @@ _QUALITY_TREND_REPORT_KEYS = (
 )
 _QUALITY_TREND_REPORT_SOURCE_KEYS = ("path", "kind")
 _QUALITY_TREND_REPORT_SUMMARY_KEYS = ("count", "failed", "coverage_delta")
+_QUALITY_REPORT_TREND_ITEM_KEYS = (
+    "index",
+    "failed_delta",
+    "coverage_delta",
+    "quality",
+)
 
 
 def build(
@@ -1745,6 +1752,111 @@ def load_quality_trend_report(path) -> dict:
         )
 
     return parsed
+
+
+def quality_report_trend(paths) -> dict:
+    """Compare successive :func:`load_quality_trend_report` files along ``paths``.
+
+    ``paths`` must be a list/tuple of at least two items; each item,
+    checked in index order, must be a non-empty ``str``. Validation
+    order (first error wins): the ``paths`` container, its length, then
+    each item in index order (type, then emptiness). A non-list/tuple
+    container or a non-str item raises ``TypeError``; fewer than two
+    items or an empty ``str`` raises ``ValueError``. Item errors are
+    prefixed with ``"paths[i]: "``.
+
+    :func:`load_quality_trend_report` is then called exactly once per
+    path, in input order; any exception it raises is propagated
+    unchanged. The input and the loaded files are not modified.
+
+    Every loaded report must have the same ``summary.count`` value as
+    the first one; otherwise a ``ValueError`` is raised.
+
+    For each successive pair ``i = 1..n-1`` the unrounded deltas are
+    ``df = failed_i - failed_(i-1)`` and
+    ``dc = coverage_delta_i - coverage_delta_(i-1)``, taken from the
+    reports' ``summary``; a comparison fails (``q`` is ``"fail"``) when
+    ``df > 0``, ``dc < 0`` or the top-level quality changes from
+    ``"pass"`` to ``"fail"``, and is ``"pass"`` otherwise.
+
+    Returns a dict with keys in the order ``changes, worst, quality``:
+    ``changes`` is a tuple with one dict per pair (in ``i`` order), each
+    with keys in the order ``index, failed_delta, coverage_delta,
+    quality`` — ``index`` is ``i``, ``failed_delta`` is the unrounded
+    ``df`` and ``coverage_delta`` is ``round(float(dc), 6)`` (negative
+    zero normalized to ``0.0``). ``index`` and ``df`` are non-bool ints
+    and ``coverage_delta`` is a float. ``worst`` is the ``changes``
+    item (the same object, not a copy) minimizing the *unrounded* tuple
+    ``(dc, -df, i)``; ``quality`` is ``"pass"`` exactly when every ``q``
+    is ``"pass"`` and ``"fail"`` otherwise. Items are not sorted, values
+    are not recomputed and no other keys are added.
+    """
+    if not isinstance(paths, (list, tuple)):
+        raise TypeError("paths must be a list or tuple")
+    if len(paths) < 2:
+        raise ValueError("paths must contain at least 2 items")
+    for i in range(len(paths)):
+        prefix = f"paths[{i}]: "
+        if not isinstance(paths[i], str):
+            raise TypeError(prefix + "must be a str")
+        if paths[i] == "":
+            raise ValueError(prefix + "must not be empty")
+
+    reports = [load_quality_trend_report(path) for path in paths]
+
+    first_count = reports[0]["summary"]["count"]
+    for i in range(1, len(reports)):
+        if reports[i]["summary"]["count"] != first_count:
+            raise ValueError(
+                f"quality trend report at paths[{i}] summary.count "
+                f"{reports[i]['summary']['count']} does not match "
+                f"{first_count}"
+            )
+
+    changes = []
+    worst_item = None
+    worst_key = None
+    overall = "pass"
+    for i in range(1, len(reports)):
+        previous = reports[i - 1]
+        current = reports[i]
+        df = current["summary"]["failed"] - previous["summary"]["failed"]
+        dc = (
+            current["summary"]["coverage_delta"]
+            - previous["summary"]["coverage_delta"]
+        )
+        if (
+            df > 0
+            or dc < 0
+            or (previous["quality"] == "pass" and current["quality"] == "fail")
+        ):
+            verdict = "fail"
+            overall = "fail"
+        else:
+            verdict = "pass"
+
+        coverage_delta = round(float(dc), 6)
+        if coverage_delta == 0:
+            coverage_delta = 0.0
+
+        item = {
+            "index": int(i),
+            "failed_delta": int(df),
+            "coverage_delta": coverage_delta,
+            "quality": verdict,
+        }
+        changes.append(item)
+
+        key = (dc, -df, i)
+        if worst_key is None or key < worst_key:
+            worst_key = key
+            worst_item = item
+
+    return {
+        "changes": tuple(changes),
+        "worst": worst_item,
+        "quality": overall,
+    }
 
 
 def _format_trend_value(value):

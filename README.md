@@ -630,9 +630,9 @@ ocean-sonar-modeling render-quality-trend-report quality_trend_report.json
 
 地形产品流水线接口位于 `ocean_sonar.product`，该模块导出：`build`、
 `dashboard`、`dashboard_summary`、`serialize`、`render`、`write`、
-`metrics`、`load`、`quality_report`、`render_quality_trend`、
-`export_quality_trend`、`export_quality_trend_report`、
-`render_quality_trend_report`。其中
+`metrics`、`load`、`quality_report`、`quality_report_trend`、
+`render_quality_trend`、`export_quality_trend`、
+`export_quality_trend_report`、`render_quality_trend_report`。其中
 `quality_report` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
@@ -939,6 +939,35 @@ terrain_exceed, unknown, worst, crosspoint, quality`：
 `separators=(",", ":")`、`allow_nan=False`，无缩进、无 BOM、无尾换
 行；浮点数经 `round(float(v), 6)` 且负零归一化为 `0.0`。任何 JSON 或
 UTF-8 编码失败抛 `ValueError`。返回 `bytes`。
+
+### `product.quality_report_trend(paths) -> dict`
+
+把多份质量趋势报告 JSON（`serialize_quality_trend_report` 产物）依次
+加载并比较相邻快照。
+
+`paths` 必须为至少两项的 `list`/`tuple`，各项按下标顺序必须为非空
+`str`。校验顺序（先报错者胜出）：`paths` 容器、长度、逐项（先类型后
+非空）；非 `list`/`tuple` 容器或非 `str` 项抛 `TypeError`，少于两项或
+空串抛 `ValueError`，项级错误带 `paths[i]: ` 前缀。
+
+随后按输入顺序对每个路径**仅调用一次**
+`load_quality_trend_report`，其异常原样向上传播；输入与所加载的文件
+均不被修改。各报告的 `summary.count` 必须与第一份相同，否则抛
+`ValueError`。
+
+对每个相邻对 `i = 1..n-1`，取未舍入的
+`df = summary.failed_i - summary.failed_(i-1)`、
+`dc = summary.coverage_delta_i - summary.coverage_delta_(i-1)`；当
+`df > 0`、`dc < 0` 或顶层 `quality` 由 `"pass"` 变 `"fail"` 时该对判
+`"fail"`，否则判 `"pass"`。
+
+返回 dict 键序为 `changes, worst, quality`：`changes` 为 tuple，每项
+键序为 `index, failed_delta, coverage_delta, quality`，值依次为 `i`、
+`df`、`round(float(dc), 6)`（负零归一化为 `0.0`）与判定；前两者为
+`int`，delta 为 `float`。`worst` 为使未舍入元组 `(dc, -df, i)` 字典序
+最小的 `changes` 原 dict（同一对象，不复制）；`quality` 仅在全部项均
+`"pass"` 时为 `"pass"`。不排序、不重新加载、不复制 `worst`、不增加
+键。
 
 ### `product.export_quality_trend(paths, output) -> bytes`
 
