@@ -659,6 +659,34 @@ ocean-sonar-modeling export-quality-report-trend report_a.json report_b.json [re
 ocean-sonar-modeling quality-dashboard quality_report_trend.json
 ```
 
+### `render-overview OVERVIEW`
+
+把一份 `ocean_sonar.product.serialize_overview` 生成的三域质量总览
+JSON 文件渲染为四行汇总文本，等价于**仅调用一次**
+`ocean_sonar.product.render_overview(path)`：其 `load_overview` 的校
+验、异常（`TypeError`/`ValueError`/`FileNotFoundError`/
+`IsADirectoryError`/`OSError` 原样向上传播）与文件不变性完全沿用被
+调函数。记加载结果为 `O`、`P = O["product"]`、`S =
+O["substrate"]`、`C = O["crosspoint"]["trend"]`、`M =
+O["summary"]`，成功时 stdout 输出四行文本加一个换行：第一行为
+`OVERVIEW=<O.quality>,<M的domain_count,pass_count,fail_count>`，第
+二行为
+`PRODUCT=<P.quality>,<P.summary的count,passed,failed,coverage_delta>`，
+第三行为
+`SUBSTRATE=<S的quality,count,changes,regressed,unknown_delta,unknown_ratio_delta>`，
+第四行为
+`CROSSPOINT=<C的quality,count,changes,regressed,failed_delta,pass_ratio_delta>`
+（各值按各列键序直接取自 `O`，不重算、不重新排序；int 十进制、str
+原样、float 用 `format(v, ".6f")` 且负零写作 `0.000000`），stderr
+为空，退出码 0；文件不存在、内容非法等错误时 stdout 为空，stderr
+严格输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数缺失
+或多余属于参数解析错误，退出码 2 且不调用业务函数。输入文件不会被
+修改。
+
+```bash
+ocean-sonar-modeling render-overview overview.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -704,7 +732,8 @@ ocean-sonar-modeling quality-dashboard quality_report_trend.json
 `render_quality_trend`、
 `export_quality_trend`、`export_quality_trend_report`、
 `render_quality_trend_report`、`render_quality_report_trend`、
-`export_quality_report_trend`、`quality_dashboard`。其中
+`export_quality_report_trend`、`quality_dashboard`、
+`render_overview`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
@@ -1197,6 +1226,30 @@ quality` 的字典：`trend` 即 `T` 原对象（保持同一性）；`summary`
 `p`、`n - p`、`c`；`quality` 为 `T["quality"]`。`count`、
 `passed`、`failed` 为 `int`，`coverage_delta` 为 `float`；worst
 不被重算，也不添加其他键。
+
+### `product.render_overview(path) -> str`
+
+把一份三域质量总览 JSON 渲染为四行纯文本。
+
+执行时**仅调用一次** `load_overview(path)` 得到 `O`，在此之前不做
+任何其他工作、之后也不再调用第二次；因此 `path` 的校验契约、读取
+行为、异常（`TypeError`/`ValueError`/`FileNotFoundError`/
+`IsADirectoryError`/`OSError`，原样向上传播）与文件不变性完全沿用
+`load_overview`。输入文件不会被修改，`O` 也不会被修改。
+
+设 `P = O["product"]`、`S = O["substrate"]`、`C =
+O["crosspoint"]["trend"]`、`M = O["summary"]`，返回以 `\n` 连接、
+无尾换行的四行文本：
+
+1. `OVERVIEW=<O["quality"]>,<M 的 domain_count,pass_count,fail_count>`；
+2. `PRODUCT=<P["quality"]>,<P["summary"] 的 count,passed,failed,coverage_delta>`；
+3. `SUBSTRATE=<S["quality"]>,<S 的 count,changes,regressed,unknown_delta,unknown_ratio_delta>`；
+4. `CROSSPOINT=<C["quality"]>,<C 的 count,changes,regressed,failed_delta,pass_ratio_delta>`。
+
+各值按上述列序直接取自 `O` 的对应字段，不重算、不重新排序。所有
+值直接取自 `O`：`int` 按十进制渲染，`str` 原样，`float` 用
+`format(v, ".6f")`（负零渲染为 `0.000000`），格式沿
+`render_quality_report_trend`。
 
 ### 通用约定
 

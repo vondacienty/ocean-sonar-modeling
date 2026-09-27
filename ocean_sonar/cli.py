@@ -32,6 +32,7 @@ from .product import (
     export_quality_trend_report as _export_quality_trend_report,
     quality_dashboard as _quality_dashboard,
     quality_report as _product_quality_report,
+    render_overview as _render_overview,
     render_quality_report_trend as _render_quality_report_trend,
     render_quality_trend as _render_quality_trend,
     render_quality_trend_report as _render_quality_trend_report,
@@ -547,6 +548,8 @@ def main(argv: list[str] | None = None) -> int:
     export_quality_report_trend_parser.add_argument("--output", required=True, help="output file atomically overwritten with the quality report trend JSON")
     quality_dashboard_parser = sub.add_parser("quality-dashboard", help="summarize one quality report trend JSON file as two dashboard lines")
     quality_dashboard_parser.add_argument("trend", metavar="TREND", help="quality report trend JSON file")
+    render_overview_parser = sub.add_parser("render-overview", help="render one combined overview JSON file as four summary lines")
+    render_overview_parser.add_argument("overview", metavar="OVERVIEW", help="combined overview JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -919,6 +922,15 @@ def main(argv: list[str] | None = None) -> int:
             ),
         )
         sys.stdout.write("\n".join(lines) + "\n")
+        return 0
+
+    if args.command == "render-overview":
+        try:
+            text = _render_overview(args.overview)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
         return 0
 
     parser.print_help()

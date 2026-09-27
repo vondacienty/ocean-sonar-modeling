@@ -54,6 +54,7 @@ __all__ = [
     "quality_dashboard",
     "serialize_overview",
     "load_overview",
+    "render_overview",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -124,6 +125,20 @@ _OVERVIEW_SUMMARY_KEYS = (
     "pass_count",
     "fail_count",
     "quality",
+)
+_OVERVIEW_SUBSTRATE_COLUMNS = (
+    "count",
+    "changes",
+    "regressed",
+    "unknown_delta",
+    "unknown_ratio_delta",
+)
+_OVERVIEW_CROSSPOINT_COLUMNS = (
+    "count",
+    "changes",
+    "regressed",
+    "failed_delta",
+    "pass_ratio_delta",
 )
 _DASHBOARD_KEYS = ("trend", "summary", "quality")
 _DASHBOARD_SUMMARY_KEYS = ("count", "passed", "failed", "coverage_delta")
@@ -2789,6 +2804,84 @@ def load_overview(path) -> dict:
         )
 
     return overview
+
+
+def render_overview(path) -> str:
+    """Render a :func:`load_overview`-loaded JSON overview as four lines.
+
+    :func:`load_overview` is called exactly once with ``path``
+    unchanged and no other work happens before it; the ``path``
+    validation contract, the read behavior, every exception
+    (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`load_overview` therefore apply here
+    verbatim. The file is not modified.
+
+    Let ``O`` be the dict returned by that single call, ``P =
+    O["product"]``, ``S = O["substrate"]``, ``C = O["crosspoint"]
+    ["trend"]`` and ``M = O["summary"]``; returns four lines joined by
+    ``"\\n"`` with no trailing newline::
+
+        OVERVIEW=<O["quality"]>,<M domain_count,pass_count,fail_count>
+        PRODUCT=<P["quality"]>,<P["summary"] count,passed,failed,coverage_delta>
+        SUBSTRATE=<S["quality"]>,<S count,changes,regressed,unknown_delta,unknown_ratio_delta>
+        CROSSPOINT=<C["quality"]>,<C count,changes,regressed,failed_delta,pass_ratio_delta>
+
+    The values after the leading ``quality`` are taken directly from
+    each section in its stored key order (``M`` contributes
+    ``domain_count, pass_count, fail_count``; the ``P["summary"]``
+    fields ``count, passed, failed, coverage_delta``; the ``S`` fields
+    ``count, changes, regressed, unknown_delta,
+    unknown_ratio_delta``; and the ``C`` fields ``count, changes,
+    regressed, failed_delta, pass_ratio_delta``) with no recomputation
+    or re-sorting. Values are copied directly from ``O``: ints are
+    formatted in decimal, strings are copied as-is and floats use
+    ``format(v, ".6f")`` with negative zero rendered as
+    ``"0.000000"``, following :func:`render_quality_report_trend`.
+    """
+    overview = load_overview(path)
+    product = overview["product"]
+    substrate = overview["substrate"]
+    crosspoint_trend = overview["crosspoint"]["trend"]
+    summary = overview["summary"]
+
+    lines = [
+        "OVERVIEW="
+        + ",".join(
+            (
+                _format_trend_value(overview["quality"]),
+                _format_trend_value(summary["domain_count"]),
+                _format_trend_value(summary["pass_count"]),
+                _format_trend_value(summary["fail_count"]),
+            )
+        ),
+        "PRODUCT="
+        + ",".join(
+            [_format_trend_value(product["quality"])]
+            + [
+                _format_trend_value(product["summary"][name])
+                for name in _DASHBOARD_SUMMARY_KEYS
+            ]
+        ),
+        "SUBSTRATE="
+        + ",".join(
+            [_format_trend_value(substrate["quality"])]
+            + [
+                _format_trend_value(substrate[name])
+                for name in _OVERVIEW_SUBSTRATE_COLUMNS
+            ]
+        ),
+        "CROSSPOINT="
+        + ",".join(
+            [_format_trend_value(crosspoint_trend["quality"])]
+            + [
+                _format_trend_value(crosspoint_trend[name])
+                for name in _OVERVIEW_CROSSPOINT_COLUMNS
+            ]
+        ),
+    ]
+
+    return "\n".join(lines)
 
 
 def export_quality_report_trend(paths, output) -> bytes:
