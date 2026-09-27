@@ -52,6 +52,7 @@ __all__ = [
     "export_quality_trend_report",
     "export_quality_report_trend",
     "quality_dashboard",
+    "serialize_overview",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -2379,6 +2380,93 @@ def quality_dashboard(path) -> dict:
         },
         "quality": trend["quality"],
     }
+
+
+def serialize_overview(product_path, substrate_path, audit_path) -> bytes:
+    """Serialize a combined three-domain quality overview to JSON bytes.
+
+    The three domain loaders run strictly in this order, each exactly
+    once and with no interleaving, and every exception from any of them
+    short-circuits and is propagated unchanged:
+
+    1. :func:`quality_dashboard` is called with ``product_path``.
+    2. :func:`substrate.load_aggregate_report_trend
+       <ocean_sonar.substrate.load_aggregate_report_trend>` is called
+       with ``substrate_path``.
+    3. :func:`crosspoint.load_audit_report_trend
+       <ocean_sonar.crosspoint.load_audit_report_trend>` is called with
+       ``audit_path``.
+
+    No file is pre-read or reloaded; the validation, first-error order,
+    exceptions and file invariance of the three loaders therefore apply
+    here verbatim. None of the input files is modified.
+
+    Let ``P``, ``S`` and ``C`` be the dicts returned by those three
+    calls. The domain qualities are ``P["quality"]``,
+    ``S["trend"]["quality"]`` and ``C["trend"]["quality"]``. The
+    overview is encoded with keys exactly in the order ``product,
+    substrate, crosspoint, summary, quality``: the first three values
+    are ``P``, ``S`` and ``C`` themselves, with every nested key order
+    and value unchanged; ``summary`` has keys exactly in the order
+    ``domain_count, pass_count, fail_count, quality`` with values the
+    int ``3``, the number of domains whose quality is ``"pass"``, the
+    number of remaining domains and ``"pass"`` only when all three
+    domains pass (``"fail"`` otherwise); and the top-level ``quality``
+    equals the ``summary`` quality. ``domain_count``, ``pass_count``
+    and ``fail_count`` are non-bool ints. Neither ``P``, ``S`` nor
+    ``C`` is modified and no domain statistic is recomputed.
+
+    The JSON byte specification follows :func:`serialize`: UTF-8,
+    ``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``, no indentation, no BOM and no trailing
+    newline; floats are rounded with ``round(float(v), 6)`` and
+    negative zero is normalized to ``0.0``; tuples are recursively
+    converted to arrays. Any JSON or UTF-8 encoding failure raises
+    ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    product_result = quality_dashboard(product_path)
+    substrate_result = substrate.load_aggregate_report_trend(substrate_path)
+    crosspoint_result = crosspoint.load_audit_report_trend(audit_path)
+
+    domain_qualities = (
+        product_result["quality"],
+        substrate_result["trend"]["quality"],
+        crosspoint_result["trend"]["quality"],
+    )
+    pass_count = 0
+    for domain_quality in domain_qualities:
+        if domain_quality == "pass":
+            pass_count += 1
+    fail_count = 3 - pass_count
+    quality = "pass" if pass_count == 3 else "fail"
+
+    overview = {
+        "product": product_result,
+        "substrate": substrate_result,
+        "crosspoint": crosspoint_result,
+        "summary": {
+            "domain_count": 3,
+            "pass_count": pass_count,
+            "fail_count": fail_count,
+            "quality": quality,
+        },
+        "quality": quality,
+    }
+
+    try:
+        text = json.dumps(
+            _to_jsonable(overview),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"overview: could not be serialized to JSON: {exc}"
+        ) from exc
 
 
 def export_quality_report_trend(paths, output) -> bytes:
