@@ -26,9 +26,11 @@ from .crosspoint import (
 from .grid import batch as _grid_batch
 from .outlier import batch as _outlier_batch
 from .product import (
+    _format_trend_value as _format_trend_value,
     export_quality_report_trend as _export_quality_report_trend,
     export_quality_trend as _export_quality_trend,
     export_quality_trend_report as _export_quality_trend_report,
+    quality_dashboard as _quality_dashboard,
     quality_report as _product_quality_report,
     render_quality_report_trend as _render_quality_report_trend,
     render_quality_trend as _render_quality_trend,
@@ -543,6 +545,8 @@ def main(argv: list[str] | None = None) -> int:
     export_quality_report_trend_parser.add_argument("report_second", metavar="REPORT", help="second quality trend report JSON file")
     export_quality_report_trend_parser.add_argument("report_rest", nargs="*", metavar="REPORT", help="additional quality trend report JSON files")
     export_quality_report_trend_parser.add_argument("--output", required=True, help="output file atomically overwritten with the quality report trend JSON")
+    quality_dashboard_parser = sub.add_parser("quality-dashboard", help="summarize one quality report trend JSON file as two dashboard lines")
+    quality_dashboard_parser.add_argument("trend", metavar="TREND", help="quality report trend JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -889,6 +893,32 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
+        return 0
+
+    if args.command == "quality-dashboard":
+        try:
+            dashboard = _quality_dashboard(args.trend)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        summary = dashboard["summary"]
+        worst = dashboard["trend"]["worst"]
+        lines = (
+            "DASHBOARD={},{},{},{},{}".format(
+                summary["count"],
+                summary["passed"],
+                summary["failed"],
+                _format_trend_value(summary["coverage_delta"]),
+                dashboard["quality"],
+            ),
+            "WORST={},{},{},{}".format(
+                worst["index"],
+                worst["failed_delta"],
+                _format_trend_value(worst["coverage_delta"]),
+                worst["quality"],
+            ),
+        )
+        sys.stdout.write("\n".join(lines) + "\n")
         return 0
 
     parser.print_help()
