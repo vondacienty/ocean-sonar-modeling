@@ -40,6 +40,7 @@ __all__ = [
     "quality_trend",
     "serialize_quality_trend",
     "load_quality_trend",
+    "serialize_quality_trend_report",
     "render_quality_trend",
     "export_quality_trend",
 ]
@@ -91,6 +92,15 @@ _QUALITY_TREND_ITEM_KEYS = (
     "unknown_delta",
     "quality",
 )
+_QUALITY_TREND_REPORT_KEYS = (
+    "schema_version",
+    "source",
+    "summary",
+    "worst",
+    "quality",
+)
+_QUALITY_TREND_REPORT_SOURCE_KEYS = ("path", "kind")
+_QUALITY_TREND_REPORT_SUMMARY_KEYS = ("count", "failed", "coverage_delta")
 
 
 def build(
@@ -1457,6 +1467,96 @@ def load_quality_trend(path) -> dict:
         "worst": matched,
         "quality": parsed["quality"],
     }
+
+
+def _dump_quality_trend_report(report) -> bytes:
+    try:
+        text = json.dumps(
+            _to_jsonable(report),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"quality trend report: could not be serialized to JSON: {exc}"
+        ) from exc
+
+
+def serialize_quality_trend_report(path) -> bytes:
+    """Serialize a summary report of a loaded quality trend file to bytes.
+
+    :func:`load_quality_trend` is called exactly once with ``path``
+    unchanged and no other work happens before it; the ``path``
+    validation contract, the read behavior, every exception
+    (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`load_quality_trend` therefore apply here
+    verbatim. The file is not modified.
+
+    Let ``T`` be the dict returned by that single call, ``C =
+    T["changes"]`` and ``W = T["worst"]``. The report is computed from
+    ``T`` alone, without modifying it, and encoded with keys exactly in
+    the order ``schema_version, source, summary, worst, quality``:
+
+    - ``schema_version``: the non-bool int ``1``.
+    - ``source``: keys in the order ``path, kind``; ``path`` is the
+      original ``path`` argument and ``kind`` is ``"quality_trend"``.
+    - ``summary``: keys in the order ``count, failed, coverage_delta``;
+      ``count`` is ``len(C)``, ``failed`` is the number of ``C`` items
+      whose ``quality`` is ``"fail"`` and ``coverage_delta`` is
+      ``round(math.fsum(c["coverage_delta"] for c in C) / len(C), 6)``
+      (negative zero, if any, is normalized only when written).
+    - ``worst``: a dict with keys in the order ``index, coverage_delta,
+      terrain_exceed_delta, unknown_delta, quality``, each value taken
+      directly from ``W`` in that order.
+    - ``quality``: ``T["quality"]``.
+
+    ``count`` and ``failed`` are non-bool ints; the other values keep
+    exactly the types they have in ``T`` (the worst values are not
+    recomputed). Items are not sorted and no other keys are added.
+
+    The JSON byte specification follows
+    :func:`serialize_quality_trend`: UTF-8, ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation, no
+    BOM and no trailing newline; every float is rounded with
+    ``round(float(v), 6)`` only when written out and negative zero is
+    normalized to ``0.0``; tuples are recursively converted to arrays.
+    Any JSON or UTF-8 encoding failure raises ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    trend = load_quality_trend(path)
+    changes = trend["changes"]
+    worst = trend["worst"]
+
+    count = len(changes)
+    failed = 0
+    for item in changes:
+        if item["quality"] == "fail":
+            failed += 1
+
+    coverage_delta = round(
+        math.fsum(item["coverage_delta"] for item in changes) / count, 6
+    )
+
+    report = {
+        "schema_version": 1,
+        "source": {
+            "path": path,
+            "kind": "quality_trend",
+        },
+        "summary": {
+            "count": count,
+            "failed": failed,
+            "coverage_delta": coverage_delta,
+        },
+        "worst": {key: worst[key] for key in _QUALITY_TREND_ITEM_KEYS},
+        "quality": trend["quality"],
+    }
+
+    return _dump_quality_trend_report(report)
 
 
 def _format_trend_value(value):
