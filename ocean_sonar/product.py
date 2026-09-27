@@ -62,6 +62,7 @@ __all__ = [
     "render_overview_trend",
     "export_overview_trend",
     "export_overview_trend_report",
+    "load_overview_trend_report",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -147,6 +148,12 @@ _OVERVIEW_TREND_ITEM_KEYS = (
     "qualities",
     "regressions",
     "quality",
+)
+_OVERVIEW_TREND_REPORT_SUMMARY_KEYS = (
+    "count",
+    "changes",
+    "regressed",
+    "passed",
 )
 
 
@@ -3308,6 +3315,231 @@ def load_overview_trend(path) -> dict:
         "changes": changes,
         "regressed": parsed["regressed"],
         "worst": worst_item,
+        "quality": parsed["quality"],
+    }
+
+
+def _check_overview_trend_report(report):
+    if not isinstance(report, dict):
+        raise ValueError("overview trend report must be a JSON object")
+    if list(report.keys()) != list(_QUALITY_TREND_REPORT_KEYS):
+        raise ValueError(
+            "overview trend report keys must be in the order "
+            "schema_version, source, summary, worst, quality"
+        )
+
+    schema_version = report["schema_version"]
+    if type(schema_version) is not int:
+        raise ValueError(
+            "overview trend report: schema_version must be a non-bool int"
+        )
+    if schema_version != 1:
+        raise ValueError("overview trend report: schema_version must be 1")
+
+    source = report["source"]
+    if not isinstance(source, dict):
+        raise ValueError(
+            "overview trend report: source must be a JSON object"
+        )
+    if list(source.keys()) != list(_QUALITY_TREND_REPORT_SOURCE_KEYS):
+        raise ValueError(
+            "overview trend report: source keys must be in the order path, kind"
+        )
+    source_path = source["path"]
+    if type(source_path) is not str:
+        raise ValueError("overview trend report: source.path must be a str")
+    if source_path == "":
+        raise ValueError(
+            "overview trend report: source.path must not be empty"
+        )
+    if source["kind"] != "overview_trend":
+        raise ValueError(
+            "overview trend report: source.kind must be 'overview_trend'"
+        )
+
+    summary = report["summary"]
+    if not isinstance(summary, dict):
+        raise ValueError(
+            "overview trend report: summary must be a JSON object"
+        )
+    if list(summary.keys()) != list(_OVERVIEW_TREND_REPORT_SUMMARY_KEYS):
+        raise ValueError(
+            "overview trend report: summary keys must be in the order "
+            "count, changes, regressed, passed"
+        )
+
+    count = summary["count"]
+    if type(count) is not int:
+        raise ValueError(
+            "overview trend report: summary.count must be a non-bool int"
+        )
+    if not count >= 2:
+        raise ValueError("overview trend report: summary.count must be >= 2")
+
+    changes = summary["changes"]
+    if type(changes) is not int:
+        raise ValueError(
+            "overview trend report: summary.changes must be a non-bool int"
+        )
+    if changes != count - 1:
+        raise ValueError(
+            "overview trend report: summary.changes must equal "
+            "summary.count - 1"
+        )
+
+    regressed = summary["regressed"]
+    if type(regressed) is not int:
+        raise ValueError(
+            "overview trend report: summary.regressed must be a non-bool int"
+        )
+    if not 0 <= regressed <= changes:
+        raise ValueError(
+            "overview trend report: summary.regressed must be in "
+            "[0, summary.changes]"
+        )
+
+    passed = summary["passed"]
+    if type(passed) is not int:
+        raise ValueError(
+            "overview trend report: summary.passed must be a non-bool int"
+        )
+    if passed != changes - regressed:
+        raise ValueError(
+            "overview trend report: summary.passed must equal "
+            "summary.changes - summary.regressed"
+        )
+
+    worst = report["worst"]
+    _check_overview_trend_item(worst, "overview trend report: worst: ")
+    if not 1 <= worst["index"] <= changes:
+        raise ValueError(
+            "overview trend report: worst.index must be in "
+            "[1, summary.changes]"
+        )
+
+    quality = report["quality"]
+    if type(quality) is not str:
+        raise ValueError("overview trend report: quality must be a str")
+    if quality not in _QUALITY_VALUES:
+        raise ValueError(
+            "overview trend report: quality must be 'pass' or 'fail'"
+        )
+    expected = "pass" if regressed == 0 else "fail"
+    if quality != expected:
+        raise ValueError(
+            "overview trend report: quality must be 'pass' exactly when "
+            "summary.regressed is 0"
+        )
+    if quality != worst["quality"]:
+        raise ValueError(
+            "overview trend report: quality must equal worst.quality"
+        )
+
+
+def load_overview_trend_report(path) -> dict:
+    """Load an :func:`export_overview_trend_report`-produced JSON report from ``path``.
+
+    ``path`` must be a non-empty ``str``: a non-str raises ``TypeError``
+    and an empty ``str`` raises ``ValueError``. The file is opened in
+    binary mode (``"rb"``) and read in full; a missing file raises
+    ``FileNotFoundError``, a directory raises ``IsADirectoryError`` and
+    every other ``OSError`` is propagated unchanged. The file is not
+    modified.
+
+    The bytes must be exactly those produced by
+    :func:`export_overview_trend_report` for the same value: compact
+    UTF-8 JSON with no BOM and no trailing newline. A BOM, a trailing
+    newline, a UTF-8 decoding failure, a JSON parsing failure, a
+    ``NaN``/``Infinity`` constant or a repeated JSON object key raises
+    ``ValueError``.
+
+    The decoded value must be a JSON object with keys exactly in the
+    order ``schema_version, source, summary, worst, quality``:
+    ``schema_version`` is the non-bool int ``1``; ``source`` is an
+    object with keys exactly in the order ``path, kind`` whose values
+    are a non-empty ``str`` and the string ``"overview_trend"``;
+    ``summary`` is an object with keys exactly in the order ``count,
+    changes, regressed, passed`` whose values are all non-bool ints
+    with ``count >= 2``, ``changes == count - 1``,
+    ``0 <= regressed <= changes`` and ``passed == changes -
+    regressed``; ``worst`` is an object with keys exactly in the order
+    ``index, qualities, regressions, quality`` where ``index`` is a
+    non-bool int in ``[1, changes]``, ``qualities`` an array of exactly
+    four ``"pass"``/``"fail"`` strings, ``regressions`` an array of
+    exactly four ``bool`` flags and the item ``quality`` is
+    ``"fail"`` when any regression flag is ``True`` and ``"pass"``
+    otherwise; and the top-level ``quality`` is ``"pass"`` exactly when
+    ``regressed`` is ``0`` and must equal ``worst.quality``. Finally
+    the file bytes must equal the canonical re-encoding of the decoded
+    value byte for byte. Every key-order, type, range, relation, parse
+    or canonical-byte mismatch raises ``ValueError``.
+
+    Returns the report as a dict with the keys in the order above,
+    where ``worst``'s ``qualities`` and ``regressions`` arrays are
+    converted to tuples; the file is never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_keys,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        _check_overview_trend_report(parsed)
+        canonical = _dump_overview_trend(parsed)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid overview trend report: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical "
+            "export_overview_trend_report output"
+        )
+
+    parsed_worst = parsed["worst"]
+    worst = {
+        "index": parsed_worst["index"],
+        "qualities": tuple(parsed_worst["qualities"]),
+        "regressions": tuple(parsed_worst["regressions"]),
+        "quality": parsed_worst["quality"],
+    }
+
+    return {
+        "schema_version": parsed["schema_version"],
+        "source": {
+            "path": parsed["source"]["path"],
+            "kind": parsed["source"]["kind"],
+        },
+        "summary": {
+            "count": parsed["summary"]["count"],
+            "changes": parsed["summary"]["changes"],
+            "regressed": parsed["summary"]["regressed"],
+            "passed": parsed["summary"]["passed"],
+        },
+        "worst": worst,
         "quality": parsed["quality"],
     }
 
