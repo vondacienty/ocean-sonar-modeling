@@ -61,6 +61,7 @@ __all__ = [
     "load_overview_trend",
     "render_overview_trend",
     "export_overview_trend",
+    "export_overview_trend_report",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -3471,5 +3472,91 @@ def export_overview_trend(paths, output) -> bytes:
         raise ValueError("output must not be empty")
 
     _reject_export_output_overlap(output, paths)
+    _atomic_write_bytes(output, data)
+    return data
+
+
+def export_overview_trend_report(path, output) -> bytes:
+    """Serialize an overview trend report for ``path`` and write it.
+
+    Exactly one call to :func:`load_overview_trend` is made with
+    ``path`` — before any other work and no second time — so its
+    validation, first-error order, exceptions (propagated unchanged),
+    read behavior and file invariance apply here verbatim; in
+    particular a bad ``path`` value is reported before ``output`` is
+    inspected. The input file is not modified.
+
+    Let ``T`` be the dict returned by that single call. The report is
+    computed from ``T`` alone, without modifying it or recomputing
+    ``worst``, and its keys are exactly in the order ``schema_version,
+    source, summary, worst, quality``:
+
+    - ``schema_version``: the non-bool int ``1``.
+    - ``source``: keys in the order ``path, kind``, with ``path`` the
+      original ``path`` argument and ``kind`` the string
+      ``"overview_trend"``.
+    - ``summary``: keys in the order ``count, changes, regressed,
+      passed`` with values ``T["count"]``, ``len(T["changes"])``,
+      ``T["regressed"]`` and ``len(T["changes"]) - T["regressed"]``.
+    - ``worst``: an object with keys in the order ``index, qualities,
+      regressions, quality``, each value taken from ``T["worst"]`` in
+      that order; its two four-element tuples are encoded as JSON
+      arrays.
+    - ``quality``: ``T["quality"]``.
+
+    The report is encoded to ``bytes`` ``B`` following the
+    :func:`serialize_overview_trend` JSON byte specification: UTF-8,
+    ``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``, no indentation, no BOM and no trailing
+    newline; tuples are recursively converted to arrays. Any JSON or
+    UTF-8 encoding failure raises ``ValueError``. Only after ``B`` has
+    been encoded is ``output`` validated: it must be a non-empty
+    ``str`` (a non-str raises ``TypeError`` and an empty ``str`` raises
+    ``ValueError``), in that order.
+
+    ``output`` must not name the same file as ``path``: when both
+    sides exist they are compared with ``os.path.samefile`` so soft and
+    hard links are recognized, and otherwise the normalized paths
+    ``os.path.normcase(os.path.realpath(os.path.abspath(path)))`` are
+    compared; an overlap raises ``ValueError``.
+
+    When there is no overlap, a temporary file is created in
+    ``output``'s directory, ``B`` is written to it in binary mode,
+    ``flush()`` and ``os.fsync()`` are called and the temporary file
+    then atomically replaces ``output`` via ``os.replace``. Any failure
+    before the replacement removes the temporary file and leaves an
+    existing ``output`` byte for byte unchanged; ``OSError`` is
+    propagated unchanged.
+
+    Returns the same ``bytes`` ``B`` that were written.
+    """
+    trend = load_overview_trend(path)
+    changes = trend["changes"]
+    worst = trend["worst"]
+
+    report = {
+        "schema_version": 1,
+        "source": {
+            "path": path,
+            "kind": "overview_trend",
+        },
+        "summary": {
+            "count": trend["count"],
+            "changes": len(changes),
+            "regressed": trend["regressed"],
+            "passed": len(changes) - trend["regressed"],
+        },
+        "worst": {name: worst[name] for name in _OVERVIEW_TREND_ITEM_KEYS},
+        "quality": trend["quality"],
+    }
+
+    data = _dump_overview_trend(report)
+
+    if not isinstance(output, str):
+        raise TypeError("output must be a str")
+    if output == "":
+        raise ValueError("output must not be empty")
+
+    _reject_export_output_overlap(output, [path])
     _atomic_write_bytes(output, data)
     return data
