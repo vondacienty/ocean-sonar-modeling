@@ -60,6 +60,7 @@ __all__ = [
     "serialize_overview_trend",
     "load_overview_trend",
     "export_overview_trend",
+    "render_overview_trend",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -3400,3 +3401,88 @@ def export_overview_trend(paths, output) -> bytes:
     _reject_export_output_overlap(output, paths)
     _atomic_write_bytes(output, data)
     return data
+
+
+def _format_overview_trend_value(value):
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, int):
+        return str(value)
+    return value
+
+
+def render_overview_trend(path) -> str:
+    """Render a :func:`load_overview_trend`-loaded JSON trend as text.
+
+    :func:`load_overview_trend` is called exactly once with ``path``
+    unchanged and no other work happens before it; the ``path``
+    validation contract, the read behavior, every exception
+    (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`load_overview_trend` therefore apply here
+    verbatim. The file is not modified.
+
+    Let ``T`` be the dict returned by that single call and ``C =
+    T["changes"]``; returns one summary line, one ``WORST`` line and
+    then one line per change, all joined by ``"\\n"`` with no trailing
+    newline::
+
+        TREND=<T["count"]>,<len(C)>,<T["regressed"]>,<T["quality"]>
+        WORST=<i>;<q0,q1,q2,q3>;<b0,b1,b2,b3>;<quality>
+        CHANGE[<i>]=<q0,q1,q2,q3>;<b0,b1,b2,b3>;<quality>
+        ...
+
+    The WORST line renders ``T["worst"]`` and the CHANGE lines render
+    the items of ``C`` in its original order with no re-sorting. For
+    each item ``i`` is its ``index``; ``q0``..``q3`` are its
+    ``qualities`` in stored order (the product, substrate, crosspoint
+    and overall qualities) and ``b0``..``b3`` are its ``regressions``
+    in the same order, rendered strictly as ``"True"``/``"False"``.
+    Values are copied directly from ``T`` with no recomputation: ints
+    are formatted in decimal and strings are copied as-is.
+    """
+    trend = load_overview_trend(path)
+    changes = trend["changes"]
+    worst = trend["worst"]
+
+    lines = [
+        "TREND={},{},{},{}".format(
+            _format_overview_trend_value(trend["count"]),
+            len(changes),
+            _format_overview_trend_value(trend["regressed"]),
+            _format_overview_trend_value(trend["quality"]),
+        )
+    ]
+
+    lines.append(
+        "WORST={};{},{},{},{};{},{},{},{};{}".format(
+            _format_overview_trend_value(worst["index"]),
+            _format_overview_trend_value(worst["qualities"][0]),
+            _format_overview_trend_value(worst["qualities"][1]),
+            _format_overview_trend_value(worst["qualities"][2]),
+            _format_overview_trend_value(worst["qualities"][3]),
+            _format_overview_trend_value(worst["regressions"][0]),
+            _format_overview_trend_value(worst["regressions"][1]),
+            _format_overview_trend_value(worst["regressions"][2]),
+            _format_overview_trend_value(worst["regressions"][3]),
+            _format_overview_trend_value(worst["quality"]),
+        )
+    )
+
+    for item in changes:
+        lines.append(
+            "CHANGE[{}]={},{},{},{};{},{},{},{};{}".format(
+                _format_overview_trend_value(item["index"]),
+                _format_overview_trend_value(item["qualities"][0]),
+                _format_overview_trend_value(item["qualities"][1]),
+                _format_overview_trend_value(item["qualities"][2]),
+                _format_overview_trend_value(item["qualities"][3]),
+                _format_overview_trend_value(item["regressions"][0]),
+                _format_overview_trend_value(item["regressions"][1]),
+                _format_overview_trend_value(item["regressions"][2]),
+                _format_overview_trend_value(item["regressions"][3]),
+                _format_overview_trend_value(item["quality"]),
+            )
+        )
+
+    return "\n".join(lines)

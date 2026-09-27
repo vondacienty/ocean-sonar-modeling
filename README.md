@@ -746,6 +746,33 @@ OVERVIEW 不足两个、缺少 `--output` 或参数多余属于参数解析错�
 ocean-sonar-modeling export-overview-trend overview_a.json overview_b.json [overview_c.json ...] --output overview_trend.json
 ```
 
+### `render-overview-trend TREND`
+
+把一份 `ocean_sonar.product.serialize_overview_trend` 生成的总览趋势
+JSON 文件渲染为汇总行、最差行与逐变化行文本，等价于**仅调用一次**
+`ocean_sonar.product.render_overview_trend(path)`：其
+`load_overview_trend` 的校验、异常（`TypeError`/`ValueError`/
+`FileNotFoundError`/`IsADirectoryError`/`OSError` 原样向上传播）与
+文件不变性完全沿用被调函数。记加载结果为 `T`、`C = T["changes"]`，
+成功时 stdout 输出以 `\n` 连接的文本并在末尾加一个换行：首行为
+`TREND=<count>,<len(C)>,<regressed>,<quality>`（依次取自 `T` 的
+`count`、变化数 `len(C)`、`regressed` 与 `quality`）；第二行为
+`WORST=<i>;<q0,q1,q2,q3>;<b0,b1,b2,b3>;<quality>`，渲染
+`T["worst"]`；其后按 `C` 原序逐行为
+`CHANGE[<i>]=<q0,q1,q2,q3>;<b0,b1,b2,b3>;<quality>`，不重新排
+序。每行 `i` 取变化项的 `index`；`q0` 至 `q3` 依次为该项
+`qualities` 中 product、substrate、crosspoint、overall 的质量字符
+串，`b0` 至 `b3` 为同序 `regressions` 标志，严格写作 `True`/
+`False`。各值直接取自 `T`，不重算、不重新排序；`int` 十进制、
+`str` 原样；stderr 为空，退出码 0；文件不存在、内容非法等错误时
+stdout 为空，stderr 严格输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数缺失或多余属
+于参数解析错误，退出码 2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling render-overview-trend overview_trend.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -793,7 +820,7 @@ ocean-sonar-modeling export-overview-trend overview_a.json overview_b.json [over
 `render_quality_trend_report`、`render_quality_report_trend`、
 `export_quality_report_trend`、`quality_dashboard`、
 `serialize_overview`、`load_overview`、`render_overview`、
-`export_overview`、`export_overview_trend`。其中
+`export_overview`、`export_overview_trend`、`render_overview_trend`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
@@ -1372,6 +1399,33 @@ O["crosspoint"]["trend"]`、`M = O["summary"]`，返回以 `\n` 连接、
 `flush()`、`os.fsync()` 后用 `os.replace` 原子替换 `output`。替换
 前发生失败会清除临时文件且既有 `output` 逐字节不变；`OSError` 原
 样传播。返回值与写入文件的字节为同一份 `bytes`。
+
+### `product.render_overview_trend(path) -> str`
+
+把一份总览趋势 JSON 渲染为纯文本。
+
+执行时**仅调用一次** `load_overview_trend(path)` 得到 `T`，在此之
+前不做任何其他工作、之后也不再调用第二次；因此 `path` 的校验契
+约、读取行为、异常（`TypeError`/`ValueError`/`FileNotFoundError`/
+`IsADirectoryError`/`OSError`，原样向上传播）与文件不变性完全沿
+用 `load_overview_trend`。输入文件不会被修改，`T` 也不会被修
+改。
+
+记 `C = T["changes"]`，返回以 `\n` 连接、无尾换行的文本：
+
+```text
+TREND=<T["count"]>,<len(C)>,<T["regressed"]>,<T["quality"]>
+WORST=<i>;<q0,q1,q2,q3>;<b0,b1,b2,b3>;<quality>
+CHANGE[<i>]=<q0,q1,q2,q3>;<b0,b1,b2,b3>;<quality>
+...
+```
+
+第二行渲染 `T["worst"]`；其后按 `C` 原序逐行渲染每个变化项，不
+重新排序。每行 `i` 取该项 `index`；`q0` 至 `q3` 依次取该项
+`qualities` 中 product、substrate、crosspoint、overall 的质量字符
+串，`b0` 至 `b3` 取同序 `regressions`，严格写作 `True`/
+`False`；末值为该项 `quality`。所有值直接取自 `T`，不重算、不
+重新排序：`int` 按十进制渲染，`str` 原样。
 
 ### 通用约定
 
