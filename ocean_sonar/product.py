@@ -43,6 +43,8 @@ __all__ = [
     "serialize_quality_trend_report",
     "load_quality_trend_report",
     "quality_report_trend",
+    "serialize_quality_report_trend",
+    "load_quality_report_trend",
     "render_quality_trend",
     "render_quality_trend_report",
     "export_quality_trend",
@@ -105,6 +107,12 @@ _QUALITY_TREND_REPORT_KEYS = (
 )
 _QUALITY_TREND_REPORT_SOURCE_KEYS = ("path", "kind")
 _QUALITY_TREND_REPORT_SUMMARY_KEYS = ("count", "failed", "coverage_delta")
+_QUALITY_REPORT_TREND_ITEM_KEYS = (
+    "index",
+    "failed_delta",
+    "coverage_delta",
+    "quality",
+)
 
 
 def build(
@@ -1853,6 +1861,218 @@ def quality_report_trend(paths) -> dict:
         "changes": tuple(changes),
         "worst": worst_item,
         "quality": overall,
+    }
+
+
+def serialize_quality_report_trend(paths) -> bytes:
+    """Serialize the :func:`quality_report_trend` comparison of ``paths`` to bytes.
+
+    Exactly one call to :func:`quality_report_trend` is made with
+    ``paths`` unchanged and no other work happens before it; the
+    ``paths`` validation contract, the per-path
+    :func:`load_quality_trend_report` behavior, every exception
+    (propagated unchanged) and the input/file invariance of
+    :func:`quality_report_trend` therefore apply here verbatim.
+    Neither ``paths`` nor the loaded files are modified.
+
+    Let ``T`` be the dict returned by that single
+    :func:`quality_report_trend` call. It is encoded with keys exactly
+    in the order ``changes, worst, quality``; the ``changes`` tuple is
+    converted to a JSON array and each item, like ``worst``, keeps its
+    key order ``index, failed_delta, coverage_delta, quality``. Values
+    are not recomputed and no keys are added or removed.
+
+    The JSON byte specification follows
+    :func:`serialize_quality_trend`: UTF-8, ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation, no
+    BOM and no trailing newline; floats are rounded with
+    ``round(float(v), 6)`` and negative zero is normalized to ``0.0``;
+    tuples are recursively converted to arrays. Any JSON or UTF-8
+    encoding failure raises ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    trend = quality_report_trend(paths)
+    return _dump_quality_trend(trend)
+
+
+def _check_quality_report_trend_item(item, prefix):
+    if not isinstance(item, dict):
+        raise ValueError(prefix + "must be a JSON object")
+    if list(item.keys()) != list(_QUALITY_REPORT_TREND_ITEM_KEYS):
+        raise ValueError(
+            prefix + "keys must be in the order index, failed_delta, "
+            "coverage_delta, quality"
+        )
+
+    index = item["index"]
+    if type(index) is not int:
+        raise ValueError(prefix + "index must be a non-bool int")
+
+    failed_delta = item["failed_delta"]
+    if type(failed_delta) is not int:
+        raise ValueError(prefix + "failed_delta must be a non-bool int")
+
+    coverage_delta = item["coverage_delta"]
+    if type(coverage_delta) is not float:
+        raise ValueError(prefix + "coverage_delta must be a float")
+    if not math.isfinite(coverage_delta):
+        raise ValueError(prefix + "coverage_delta must be finite")
+    if not -2.0 <= coverage_delta <= 2.0:
+        raise ValueError(prefix + "coverage_delta must be in [-2, 2]")
+    if coverage_delta != round(coverage_delta, 6):
+        raise ValueError(
+            prefix + "coverage_delta must have at most 6 decimals"
+        )
+    if coverage_delta == 0.0 and math.copysign(1.0, coverage_delta) < 0:
+        raise ValueError(prefix + "coverage_delta must not be negative zero")
+
+    quality = item["quality"]
+    if type(quality) is not str:
+        raise ValueError(prefix + "quality must be a str")
+    if quality not in _QUALITY_VALUES:
+        raise ValueError(prefix + "quality must be 'pass' or 'fail'")
+
+
+def _check_quality_report_trend(trend):
+    if not isinstance(trend, dict):
+        raise ValueError("quality report trend must be a JSON object")
+    if list(trend.keys()) != list(_QUALITY_TREND_KEYS):
+        raise ValueError(
+            "quality report trend keys must be in the order "
+            "changes, worst, quality"
+        )
+
+    changes = trend["changes"]
+    if not isinstance(changes, list):
+        raise ValueError("quality report trend: changes must be a JSON array")
+    if len(changes) == 0:
+        raise ValueError("quality report trend: changes must be non-empty")
+    for i in range(len(changes)):
+        prefix = f"quality report trend: changes[{i}]: "
+        item = changes[i]
+        _check_quality_report_trend_item(item, prefix)
+        if item["index"] != i + 1:
+            raise ValueError(
+                prefix + "index must run consecutively from 1"
+            )
+
+    worst = trend["worst"]
+    _check_quality_report_trend_item(worst, "quality report trend: worst: ")
+    if worst not in changes:
+        raise ValueError(
+            "quality report trend: worst must equal one of the changes items"
+        )
+
+    quality = trend["quality"]
+    if type(quality) is not str:
+        raise ValueError("quality report trend: quality must be a str")
+    if quality not in _QUALITY_VALUES:
+        raise ValueError(
+            "quality report trend: quality must be 'pass' or 'fail'"
+        )
+    expected = (
+        "pass"
+        if all(item["quality"] == "pass" for item in changes)
+        else "fail"
+    )
+    if quality != expected:
+        raise ValueError(
+            "quality report trend: quality must be 'pass' exactly when "
+            "every changes item is 'pass'"
+        )
+
+
+def load_quality_report_trend(path) -> dict:
+    """Load a :func:`serialize_quality_report_trend`-produced JSON trend from ``path``.
+
+    ``path`` must be a non-empty ``str``: a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``. The file
+    is opened in binary mode (``"rb"``) and read in full; a missing
+    file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError`` and every other ``OSError`` is propagated
+    unchanged. The file is not modified.
+
+    The bytes must be exactly those produced by
+    :func:`serialize_quality_report_trend` for the same value: compact
+    UTF-8 JSON with no BOM and no trailing newline. A BOM, a trailing
+    newline, a UTF-8 decoding failure, a JSON parsing failure, a
+    ``NaN``/``Infinity`` constant or a repeated JSON object key raises
+    ``ValueError``.
+
+    The decoded value must be a JSON object with keys exactly in the
+    order ``changes, worst, quality``. ``changes`` must be a non-empty
+    JSON array whose items, like ``worst``, are objects with keys
+    exactly in the order ``index, failed_delta, coverage_delta,
+    quality``: ``index`` a non-bool int running consecutively from
+    ``1``; ``failed_delta`` a non-bool int; ``coverage_delta`` a finite
+    non-bool float in ``[-2, 2]`` with at most six decimals and not
+    negative zero; ``quality`` either ``"pass"`` or ``"fail"``.
+    ``worst`` must equal one of the ``changes`` items and the
+    top-level ``quality`` must be ``"pass"`` exactly when every
+    ``changes`` item is ``"pass"``. Finally the file bytes must equal
+    the canonical re-encoding of the decoded value byte for byte.
+    Every key-order, type, range, relation, parse or canonical-byte
+    mismatch raises ``ValueError``.
+
+    Returns the trend as a dict with the keys in the order ``changes,
+    worst, quality``, where ``changes`` is converted to a tuple and
+    ``worst`` is the matching item of that tuple; the file is never
+    modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_keys,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        _check_quality_report_trend(parsed)
+        canonical = _dump_quality_trend(parsed)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid quality report trend: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical "
+            "serialize_quality_report_trend output"
+        )
+
+    changes = parsed["changes"]
+    worst = parsed["worst"]
+    matched = None
+    for item in changes:
+        if item == worst:
+            matched = item
+            break
+
+    return {
+        "changes": tuple(changes),
+        "worst": matched,
+        "quality": parsed["quality"],
     }
 
 
