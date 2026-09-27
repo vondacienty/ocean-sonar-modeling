@@ -55,6 +55,7 @@ __all__ = [
     "serialize_overview",
     "load_overview",
     "render_overview",
+    "export_overview",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -2859,6 +2860,56 @@ def render_overview(path) -> str:
     )
 
     return "\n".join(lines)
+
+
+def export_overview(product_path, substrate_path, crosspoint_path, output) -> bytes:
+    """Serialize the combined three-domain overview and atomically write it.
+
+    Exactly one call to :func:`serialize_overview` is made with
+    ``product_path``, ``substrate_path`` and ``crosspoint_path`` —
+    before any other work and no second time — so its loader order,
+    validation, first-error order, exceptions (propagated unchanged),
+    read behavior, overview key order ``product, substrate, crosspoint,
+    summary, quality`` and JSON byte specification all apply here as
+    well; in particular a bad input value or file is reported before
+    ``output`` is inspected. None of the three input files is modified.
+
+    With ``B`` the ``bytes`` returned by :func:`serialize_overview`,
+    ``output`` is then validated: it must be a non-empty ``str`` (a
+    non-str raises ``TypeError`` and an empty ``str`` raises
+    ``ValueError``), in that order.
+
+    ``output`` must not name the same file as any of the three input
+    paths: when both sides exist they are compared with
+    ``os.path.samefile`` so soft and hard links are recognized, and
+    otherwise the normalized paths
+    ``os.path.normcase(os.path.realpath(os.path.abspath(path)))`` are
+    compared; an overlap raises ``ValueError``.
+
+    When there is no overlap, a temporary file is created in
+    ``output``'s directory, ``B`` is written to it in binary mode,
+    ``flush()`` and ``os.fsync()`` are called and the temporary file
+    then atomically replaces ``output`` via ``os.replace``. Any failure
+    before the replacement removes the temporary file and leaves an
+    existing ``output`` byte for byte unchanged; ``OSError`` is
+    propagated unchanged.
+
+    Returns the same ``bytes`` ``B`` that were written.
+    """
+    data = serialize_overview(
+        product_path, substrate_path, crosspoint_path
+    )
+
+    if not isinstance(output, str):
+        raise TypeError("output must be a str")
+    if output == "":
+        raise ValueError("output must not be empty")
+
+    _reject_export_output_overlap(
+        output, [product_path, substrate_path, crosspoint_path]
+    )
+    _atomic_write_bytes(output, data)
+    return data
 
 
 def export_quality_report_trend(paths, output) -> bytes:
