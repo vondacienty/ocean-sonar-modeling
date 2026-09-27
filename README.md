@@ -518,6 +518,30 @@ unknown_delta, quality`；int 十进制、str 原样、float 用六位小数且�
 ocean-sonar-modeling render-quality-trend quality_trend.json
 ```
 
+### `render-quality-report-trend TREND`
+
+把一份 `ocean_sonar.product.serialize_quality_report_trend` 生成的
+质量报告趋势 JSON 文件渲染为汇总文本，等价于**仅调用一次**
+`ocean_sonar.product.render_quality_report_trend(path)`：其
+`load_quality_report_trend` 的校验、异常（`TypeError`/`ValueError`/
+`FileNotFoundError`/`IsADirectoryError`/`OSError` 原样向上传播）与
+文件不变性完全沿用被调函数。记 `T` 为加载结果、`C = T["changes"]`、
+`W = T["worst"]`，成功时 stdout 输出 `1 + len(C)` 行文本加一个换
+行：首行为
+`QUALITY=<quality>;COUNT=<len(C)>;WORST_INDEX=<W.index>`，其后按
+`C` 原序逐行输出
+`CHANGE[<index>]=<failed_delta>,<coverage_delta>,<quality>`（字段
+取键序 `index, failed_delta, coverage_delta, quality`；int 十进
+制、str 原样、float 用六位小数且负零写作 `0.000000`），stderr 为
+空，退出码 0；文件不存在、内容非法等错误时 stdout 为空，stderr
+严格输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数缺
+失或多余属于参数解析错误，退出码 2 且不调用业务函数。输入文件不
+会被修改。
+
+```bash
+ocean-sonar-modeling render-quality-report-trend quality_report_trend.json
+```
+
 ### `export-quality-trend REPORT REPORT [REPORT ...] --output OUTPUT`
 
 把多份 `ocean_sonar.product.quality_report` 生成的质量报告 JSON 依次
@@ -538,6 +562,28 @@ ocean-sonar-modeling render-quality-trend quality_trend.json
 
 ```bash
 ocean-sonar-modeling export-quality-trend report_a.json report_b.json [report_c.json ...] --output quality_trend.json
+```
+
+### `export-quality-report-trend REPORT REPORT [REPORT ...] --output OUTPUT`
+
+把多份 `ocean_sonar.product.serialize_quality_trend_report` 生成的
+质量趋势报告 JSON 依次比较后导出为一份质量报告趋势 JSON。路径按
+命令行顺序传入（至少两个），等价于**仅调用一次**
+`ocean_sonar.product.export_quality_report_trend(paths, output)`：
+先且仅调用一次 `serialize_quality_report_trend(paths)` 得到字节串
+`B`，其路径校验（至少两份、逐个非空字符串、`paths[i]: ` 前缀）、
+异常、趋势顶层键序（`changes, worst, quality`）与 JSON 字节规范完
+全沿用被调函数且先于 `output` 生效；成功时静默（stdout、stderr 均
+为空），退出码 0，并以临时文件加 `os.replace` 原子覆写
+`--output` 指定的文件；`--output` 不得与任一 REPORT 指向同一文件
+（双方都存在时用 `os.path.samefile` 识别软/硬链接，否则比较规范
+化路径），重合时抛 `ValueError`；文件不存在、内容损坏等错误时
+stdout 为空，stderr 严格输出 `ERROR <异常类名>: <异常消息>` 加换
+行，退出码 1；路径不足两个、缺少 `--output` 或参数多余属于参数解
+析错误，退出码 2 且不调用业务函数。输入报告文件不会被修改。
+
+```bash
+ocean-sonar-modeling export-quality-report-trend trend_report_a.json trend_report_b.json [trend_report_c.json ...] --output quality_report_trend.json
 ```
 
 ### `export-quality-trend-report TREND --output OUTPUT`
@@ -633,8 +679,11 @@ ocean-sonar-modeling render-quality-trend-report quality_trend_report.json
 `metrics`、`load`、`quality_report`、`quality_report_trend`、
 `render_quality_trend`、
 `export_quality_trend`、`export_quality_trend_report`、
-`render_quality_trend_report`。其中
-`quality_report` 与 `quality_report_trend` 的契约如下。
+`render_quality_trend_report`、`render_quality_report_trend`、
+`export_quality_report_trend`。其中
+`quality_report`、`quality_report_trend`、
+`render_quality_report_trend` 与 `export_quality_report_trend` 的
+契约如下。
 
 ### `substrate.export(path, output) -> bytes`
 
@@ -983,6 +1032,30 @@ does not match <首值>`）。
 
 不排序、不重新加载、不重算数值、不新增键。
 
+### `product.render_quality_report_trend(path) -> str`
+
+把一份质量报告趋势 JSON 渲染为 `1 + 变化数` 行汇总文本。
+
+执行时**仅调用一次** `load_quality_report_trend(path)` 得到 `T`，在
+此之前不做任何其他工作、之后也不再调用第二次；因此 `path` 的校验
+契约、读取行为、异常（`TypeError`/`ValueError`/
+`FileNotFoundError`/`IsADirectoryError`/`OSError`，原样向上传播）
+与文件不变性完全沿用 `load_quality_report_trend`，异常直传。输入
+文件不会被修改，`T` 也不会被修改。
+
+记 `C = T["changes"]`、`W = T["worst"]`，返回以 `\n` 连接、无尾
+换行的文本：首行为
+`QUALITY=<quality>;COUNT=<len(C)>;WORST_INDEX=<W.index>`（
+`<quality>` 取自 `T["quality"]`，`WORST_INDEX` 取自
+`W["index"]`）；其后按 `C` 原序逐行输出
+`CHANGE[<index>]=<failed_delta>,<coverage_delta>,<quality>`，各值
+依次取自该变化项的同名字段（键序 `index, failed_delta,
+coverage_delta, quality`）。
+
+所有值直接取自 `T`，不重算、不重新排序：`int` 按十进制渲染，
+`str` 原样，`float` 用 `format(v, ".6f")`（负零渲染为
+`0.000000`）。
+
 ### `product.export_quality_trend(paths, output) -> bytes`
 
 把多份质量报告 JSON 的趋势比较结果序列化并原子写盘，返回所写字节。
@@ -1035,6 +1108,33 @@ JSON 字节规范完全沿用 `serialize_quality_trend_report`，且 `path`
 、`os.fsync()` 后用 `os.replace` 原子替换 `output`。替换前发生失败会
 清除临时文件且既有 `output` 逐字节不变；`OSError` 原样传播。返回值与
 写入文件的字节为同一份 `bytes`。
+
+### `product.export_quality_report_trend(paths, output) -> bytes`
+
+把多份质量趋势报告 JSON 的质量报告趋势比较结果序列化并原子写盘，
+返回所写字节。
+
+执行时**先且仅调用一次** `serialize_quality_report_trend(paths)`
+得到字节串 `B`，在此之前不做任何其他工作、之后也不再调用第二次；
+因此 `paths` 的校验契约（至少两项、逐项非空 `str`、`paths[i]: `
+下标前缀）、逐路径 `load_quality_trend_report` 的行为、异常（原样
+向上传播）、趋势顶层键序（`changes, worst, quality`）与 JSON 字
+节规范完全沿用 `serialize_quality_report_trend`，且 `paths` 的错
+误先于 `output` 报出。输入与所加载的文件均不被修改。
+
+然后才校验 `output`：必须为非空 `str`——非 `str` 抛 `TypeError`
+（`output must be a str`），空串抛 `ValueError`
+（`output must not be empty`）。
+
+`output` 不得与任一 `paths` 项指向同一文件：双方都存在时用
+`os.path.samefile` 识别软/硬链接，任一方不存在时比较
+`os.path.normcase(os.path.realpath(os.path.abspath(path)))`；重合
+时抛 `ValueError`。
+
+非重合时在 `output` 同目录创建临时文件，以二进制写入 `B`，
+`flush()`、`os.fsync()` 后用 `os.replace` 原子替换 `output`。替
+换前发生失败会清除临时文件且既有 `output` 逐字节不变；`OSError`
+原样传播。返回值与写入文件的字节为同一份 `bytes`。
 
 ### `product.render_quality_trend_report(path) -> str`
 

@@ -26,9 +26,11 @@ from .crosspoint import (
 from .grid import batch as _grid_batch
 from .outlier import batch as _outlier_batch
 from .product import (
+    export_quality_report_trend as _export_quality_report_trend,
     export_quality_trend as _export_quality_trend,
     export_quality_trend_report as _export_quality_trend_report,
     quality_report as _product_quality_report,
+    render_quality_report_trend as _render_quality_report_trend,
     render_quality_trend as _render_quality_trend,
     render_quality_trend_report as _render_quality_trend_report,
 )
@@ -524,11 +526,18 @@ def main(argv: list[str] | None = None) -> int:
     product_quality_parser.add_argument("product", metavar="PRODUCT", help="product JSON file")
     render_quality_trend_parser = sub.add_parser("render-quality-trend", help="render one quality trend JSON file as two summary lines")
     render_quality_trend_parser.add_argument("trend", metavar="TREND", help="quality trend JSON file")
+    render_quality_report_trend_parser = sub.add_parser("render-quality-report-trend", help="render one quality report trend JSON file as summary lines")
+    render_quality_report_trend_parser.add_argument("trend", metavar="TREND", help="quality report trend JSON file")
     export_quality_trend_parser = sub.add_parser("export-quality-trend", help="compare quality report JSON files and write one quality trend JSON")
     export_quality_trend_parser.add_argument("report_first", metavar="REPORT", help="first quality report JSON file")
     export_quality_trend_parser.add_argument("report_second", metavar="REPORT", help="second quality report JSON file")
     export_quality_trend_parser.add_argument("report_rest", nargs="*", metavar="REPORT", help="additional quality report JSON files")
     export_quality_trend_parser.add_argument("--output", required=True, help="output file atomically overwritten with the quality trend JSON")
+    export_quality_report_trend_parser = sub.add_parser("export-quality-report-trend", help="compare quality trend report JSON files and write one quality report trend JSON")
+    export_quality_report_trend_parser.add_argument("report_first", metavar="REPORT", help="first quality trend report JSON file")
+    export_quality_report_trend_parser.add_argument("report_second", metavar="REPORT", help="second quality trend report JSON file")
+    export_quality_report_trend_parser.add_argument("report_rest", nargs="*", metavar="REPORT", help="additional quality trend report JSON files")
+    export_quality_report_trend_parser.add_argument("--output", required=True, help="output file atomically overwritten with the quality report trend JSON")
     export_quality_trend_report_parser = sub.add_parser("export-quality-trend-report", help="serialize one quality trend JSON file into a report JSON")
     export_quality_trend_report_parser.add_argument("trend", metavar="TREND", help="quality trend JSON file")
     export_quality_trend_report_parser.add_argument("--output", required=True, help="output file atomically overwritten with the quality trend report JSON")
@@ -830,6 +839,15 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(text + "\n")
         return 0
 
+    if args.command == "render-quality-report-trend":
+        try:
+            text = _render_quality_report_trend(args.trend)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
+        return 0
+
     if args.command == "export-quality-trend":
         paths = [
             args.report_first,
@@ -838,6 +856,19 @@ def main(argv: list[str] | None = None) -> int:
         ]
         try:
             _export_quality_trend(paths, args.output)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        return 0
+
+    if args.command == "export-quality-report-trend":
+        paths = [
+            args.report_first,
+            args.report_second,
+            *args.report_rest,
+        ]
+        try:
+            _export_quality_report_trend(paths, args.output)
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
