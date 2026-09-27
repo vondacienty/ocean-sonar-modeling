@@ -59,6 +59,7 @@ __all__ = [
     "overview_trend",
     "serialize_overview_trend",
     "load_overview_trend",
+    "render_overview_trend",
     "export_overview_trend",
 ]
 
@@ -3308,6 +3309,78 @@ def load_overview_trend(path) -> dict:
         "worst": worst_item,
         "quality": parsed["quality"],
     }
+
+
+def render_overview_trend(path) -> str:
+    """Render a :func:`load_overview_trend`-loaded JSON trend as text.
+
+    :func:`load_overview_trend` is called exactly once with ``path``
+    unchanged and no other work happens before it; the ``path``
+    validation contract, the read behavior, every exception
+    (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`load_overview_trend` therefore apply here
+    verbatim. The file is not modified.
+
+    Let ``T`` be the dict returned by that single call, ``C =
+    T["changes"]`` and ``W = T["worst"]``; returns a leading summary
+    line, a ``WORST`` line and then one line per change, joined by
+    ``"\\n"`` with no trailing newline::
+
+        TREND=<count>,<len(C)>,<regressed>,<quality>
+        WORST=<i>;<q0,q1,q2,q3>;<b0,b1,b2,b3>;<quality>
+        CHANGE[<i>]=<q0,q1,q2,q3>;<b0,b1,b2,b3>;<quality>
+
+    The first line takes ``T["count"]``, ``len(C)``,
+    ``T["regressed"]`` and ``T["quality"]`` in that order. In the
+    ``WORST`` line and each ``CHANGE`` line ``i`` is the item's
+    ``index``; ``q0``..``q3`` are the item's ``qualities`` in order
+    (product, substrate, crosspoint, overall) and ``b0``..``b3`` are
+    the item's ``regressions`` in the same order, rendered strictly
+    as ``"True"``/``"False"``; the trailing ``quality`` is the item's
+    ``quality``. ``CHANGE`` lines follow the original order of ``C``
+    with no re-sorting. Values are copied directly from ``T`` with no
+    recomputation: ints are formatted in decimal, strings are copied
+    as-is and bools use ``str(value)``, following
+    :func:`render_quality_report_trend`.
+    """
+    trend = load_overview_trend(path)
+    changes = trend["changes"]
+    worst = trend["worst"]
+
+    lines = [
+        f"TREND={_format_trend_value(trend['count'])},"
+        f"{len(changes)},"
+        f"{_format_trend_value(trend['regressed'])},"
+        f"{_format_trend_value(trend['quality'])}"
+    ]
+
+    worst_qualities = ",".join(
+        _format_trend_value(value) for value in worst["qualities"]
+    )
+    worst_regressions = ",".join(
+        _format_trend_value(value) for value in worst["regressions"]
+    )
+    lines.append(
+        f"WORST={_format_trend_value(worst['index'])};"
+        f"{worst_qualities};{worst_regressions};"
+        f"{_format_trend_value(worst['quality'])}"
+    )
+
+    for item in changes:
+        qualities = ",".join(
+            _format_trend_value(value) for value in item["qualities"]
+        )
+        regressions = ",".join(
+            _format_trend_value(value) for value in item["regressions"]
+        )
+        lines.append(
+            f"CHANGE[{_format_trend_value(item['index'])}]="
+            f"{qualities};{regressions};"
+            f"{_format_trend_value(item['quality'])}"
+        )
+
+    return "\n".join(lines)
 
 
 def export_quality_report_trend(paths, output) -> bytes:
