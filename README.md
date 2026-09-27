@@ -496,6 +496,25 @@ terrain_exceed, unknown, worst, crosspoint, quality` 的紧凑 JSON）加一
 ocean-sonar-modeling product-quality product.json
 ```
 
+### `render-quality-trend TREND`
+
+把一份 `ocean_sonar.product.serialize_quality_trend` 生成的产品质量趋势
+JSON 渲染为两行汇总文本。等价于**仅调用一次**
+`ocean_sonar.product.render_quality_trend(path)`：其
+`load_quality_trend` 校验、异常与文件不变性完全沿用被调函数。成功时
+stdout 输出其返回的两行文本（首行
+`TREND=<len(C)>,<quality>;WORST=<i>,<c>,<t>,<u>,<q>`，次行
+`CHANGES=<i>:<c>:<t>:<u>:<q>|...`，其中 `i,c,t,u,q` 依次为变化项的
+`index, coverage_delta, terrain_exceed_delta, unknown_delta, quality`，
+按 `changes` 原序连接）加一个换行，stderr 为空，退出码 0；文件不存在、
+内容损坏等错误时 stdout 为空，stderr 严格输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数缺失或多余属于
+参数解析错误，退出码 2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling render-quality-trend trend.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -537,7 +556,8 @@ ocean-sonar-modeling product-quality product.json
 
 地形产品流水线接口位于 `ocean_sonar.product`，该模块导出：`build`、
 `dashboard`、`dashboard_summary`、`serialize`、`render`、`write`、
-`metrics`、`load`、`quality_report`。其中 `quality_report` 的契约如下。
+`metrics`、`load`、`quality_report`、`render_quality_trend`。其中
+`quality_report` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
 

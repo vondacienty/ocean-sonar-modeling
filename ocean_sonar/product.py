@@ -39,6 +39,7 @@ __all__ = [
     "quality_trend",
     "serialize_quality_trend",
     "load_quality_trend",
+    "render_quality_trend",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -1454,3 +1455,67 @@ def load_quality_trend(path) -> dict:
         "worst": matched,
         "quality": parsed["quality"],
     }
+
+
+def _format_trend_value(value):
+    """Format one trend value for :func:`render_quality_trend`."""
+    if isinstance(value, float):
+        return format(0.0 if value == 0 else value, ".6f")
+    if isinstance(value, int):
+        return str(value)
+    return value
+
+
+def _trend_item_fields(item):
+    """The five rendered fields of one quality trend item, in key order."""
+    return (
+        _format_trend_value(item["index"]),
+        _format_trend_value(item["coverage_delta"]),
+        _format_trend_value(item["terrain_exceed_delta"]),
+        _format_trend_value(item["unknown_delta"]),
+        _format_trend_value(item["quality"]),
+    )
+
+
+def render_quality_trend(path) -> str:
+    """Render a :func:`load_quality_trend`-loaded quality trend as two lines.
+
+    Calls :func:`load_quality_trend` exactly once with ``path`` — and no
+    other loading or combining function — so its validation, exceptions
+    (propagated unchanged), canonical-byte checks and file
+    non-modification contract all apply here as well: a non-``str`` path
+    raises ``TypeError``, an empty ``str`` raises ``ValueError``, a
+    missing file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError``, every other ``OSError`` is propagated
+    unchanged and any parse, structure or canonical-byte violation
+    raises ``ValueError``. The file is not modified.
+
+    With ``T`` the dict returned by :func:`load_quality_trend`, ``C``
+    its ``changes`` tuple and ``W`` its ``worst`` item, returns two
+    lines joined by ``"\\n"`` with no trailing newline. Denoting the
+    item keys ``index, coverage_delta, terrain_exceed_delta,
+    unknown_delta, quality`` by ``i, c, t, u, q``, the first line is::
+
+        TREND=<len(C)>,<T.quality>;WORST=<W.i>,<W.c>,<W.t>,<W.u>,<W.q>
+
+    and the second line is::
+
+        CHANGES=<i>:<c>:<t>:<u>:<q>|...
+
+    with one ``:``-joined group per ``C`` item, concatenated by ``|``
+    in the original ``C`` order. Values are taken with no recomputation
+    or re-sorting: ints are formatted in decimal, strings are copied
+    as-is and floats use ``format(v, ".6f")`` (negative zero rendered
+    as ``"0.000000"``).
+    """
+    trend = load_quality_trend(path)
+    changes = trend["changes"]
+    worst = trend["worst"]
+
+    lines = [
+        f"TREND={len(changes)},{_format_trend_value(trend['quality'])}"
+        ";WORST=" + ",".join(_trend_item_fields(worst)),
+        "CHANGES="
+        + "|".join(":".join(_trend_item_fields(item)) for item in changes),
+    ]
+    return "\n".join(lines)

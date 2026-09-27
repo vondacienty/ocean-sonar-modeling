@@ -26,6 +26,7 @@ from .crosspoint import (
 from .grid import batch as _grid_batch
 from .outlier import batch as _outlier_batch
 from .product import quality_report as _product_quality_report
+from .product import render_quality_trend as _product_render_quality_trend
 from .report import rank_files
 from .strip import batch as _strip_batch
 from .substrate import (
@@ -516,6 +517,8 @@ def main(argv: list[str] | None = None) -> int:
     build_substrate_report_trend_parser.add_argument("--output", required=True, help="output file atomically overwritten with the substrate aggregate report trend JSON")
     product_quality_parser = sub.add_parser("product-quality", help="summarize a serialized product JSON file and print the quality report JSON")
     product_quality_parser.add_argument("product", metavar="PRODUCT", help="product JSON file")
+    render_quality_trend_parser = sub.add_parser("render-quality-trend", help="render one product quality trend JSON file as two summary lines")
+    render_quality_trend_parser.add_argument("trend", metavar="TREND", help="product quality trend JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -801,6 +804,15 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
         sys.stdout.write(data.decode("utf-8") + "\n")
+        return 0
+
+    if args.command == "render-quality-trend":
+        try:
+            text = _product_render_quality_trend(args.trend)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
         return 0
 
     parser.print_help()
