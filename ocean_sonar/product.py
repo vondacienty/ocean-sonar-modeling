@@ -39,6 +39,7 @@ __all__ = [
     "quality_trend",
     "serialize_quality_trend",
     "load_quality_trend",
+    "render_quality_trend",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -1454,3 +1455,60 @@ def load_quality_trend(path) -> dict:
         "worst": matched,
         "quality": parsed["quality"],
     }
+
+
+def _format_trend_value(value):
+    if isinstance(value, float):
+        return format(0.0 if value == 0 else value, ".6f")
+    if isinstance(value, int):
+        return str(value)
+    return value
+
+
+def render_quality_trend(path) -> str:
+    """Render a :func:`load_quality_trend`-loaded JSON trend as two lines.
+
+    :func:`load_quality_trend` is called exactly once with ``path``
+    unchanged and no other work happens before it; the ``path``
+    validation contract, the read behavior, every exception
+    (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`load_quality_trend` therefore apply here
+    verbatim. The file is not modified.
+
+    Let ``T`` be the dict returned by that single call, ``C =
+    T["changes"]`` and ``W = T["worst"]``; returns two lines joined by
+    ``"\\n"`` with no trailing newline::
+
+        TREND=<len(C)>,<T["quality"]>;WORST=<i>,<c>,<t>,<u>,<q>
+        CHANGES=<i>:<c>:<t>:<u>:<q>|...
+
+    The WORST values and each CHANGES item are taken in the key order
+    ``index, coverage_delta, terrain_exceed_delta, unknown_delta,
+    quality`` (denoted ``i, c, t, u, q``); CHANGES items are joined by
+    ``"|"`` in ``C`` order with no re-sorting. Values are copied
+    directly from ``T``: ints are formatted in decimal, strings are
+    copied as-is and floats use ``format(v, ".6f")`` with negative zero
+    rendered as ``"0.000000"``.
+    """
+    trend = load_quality_trend(path)
+    changes = trend["changes"]
+    worst = trend["worst"]
+
+    worst_fields = ",".join(
+        _format_trend_value(worst[name]) for name in _QUALITY_TREND_ITEM_KEYS
+    )
+    first_line = (
+        f"TREND={len(changes)},{_format_trend_value(trend['quality'])};"
+        f"WORST={worst_fields}"
+    )
+
+    change_fields = "|".join(
+        ":".join(
+            _format_trend_value(item[name]) for name in _QUALITY_TREND_ITEM_KEYS
+        )
+        for item in changes
+    )
+    second_line = f"CHANGES={change_fields}"
+
+    return "\n".join((first_line, second_line))
