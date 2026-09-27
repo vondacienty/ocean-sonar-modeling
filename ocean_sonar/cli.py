@@ -30,6 +30,7 @@ from .product import (
     export_quality_trend_report as _export_quality_trend_report,
     quality_report as _product_quality_report,
     render_quality_trend as _render_quality_trend,
+    render_quality_trend_report as _render_quality_trend_report,
 )
 from .report import rank_files
 from .strip import batch as _strip_batch
@@ -531,6 +532,8 @@ def main(argv: list[str] | None = None) -> int:
     export_quality_trend_report_parser = sub.add_parser("export-quality-trend-report", help="serialize one quality trend JSON file into a report JSON")
     export_quality_trend_report_parser.add_argument("trend", metavar="TREND", help="quality trend JSON file")
     export_quality_trend_report_parser.add_argument("--output", required=True, help="output file atomically overwritten with the quality trend report JSON")
+    render_quality_trend_report_parser = sub.add_parser("render-quality-trend-report", help="render one quality trend report JSON file as three summary lines")
+    render_quality_trend_report_parser.add_argument("report", metavar="REPORT", help="quality trend report JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -846,6 +849,15 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
+        return 0
+
+    if args.command == "render-quality-trend-report":
+        try:
+            text = _render_quality_trend_report(args.report)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
         return 0
 
     parser.print_help()

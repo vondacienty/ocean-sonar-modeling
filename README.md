@@ -566,6 +566,29 @@ stderr 严格输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码
 ocean-sonar-modeling export-quality-trend-report quality_trend.json --output quality_trend_report.json
 ```
 
+### `render-quality-trend-report REPORT`
+
+把一份 `ocean_sonar.product.serialize_quality_trend_report` 生成的质量
+趋势报告 JSON 文件渲染为三行汇总文本，等价于**仅调用一次**
+`ocean_sonar.product.render_quality_trend_report(path)`：其
+`load_quality_trend_report` 的校验、异常（`TypeError`/`ValueError`/
+`FileNotFoundError`/`IsADirectoryError`/`OSError` 原样向上传播）与
+文件不变性完全沿用被调函数。记 `R` 为加载结果，成功时 stdout 输出三
+行文本加一个换行：第一行为
+`REPORT=<schema_version>,<JSON路径>,<kind>,<quality>`（`<JSON路径>`
+为 `R["source"]["path"]` 的紧凑、`ensure_ascii=False` 的 JSON 字符
+串），第二行为 `SUMMARY=<count>,<failed>,<coverage_delta>`，第三行为
+`WORST=<index>,<coverage_delta>,<terrain_exceed_delta>,<unknown_delta>,<quality>`
+（各值直接取自 `R`；int 十进制、str 原样、float 用六位小数且负零写
+作 `0.000000`），stderr 为空，退出码 0；文件不存在、内容非法等错误
+时 stdout 为空，stderr 严格输出 `ERROR <异常类名>: <异常消息>` 加换
+行，退出码 1；参数缺失或多余属于参数解析错误，退出码 2 且不调用业
+务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling render-quality-trend-report quality_trend_report.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -608,7 +631,8 @@ ocean-sonar-modeling export-quality-trend-report quality_trend.json --output qua
 地形产品流水线接口位于 `ocean_sonar.product`，该模块导出：`build`、
 `dashboard`、`dashboard_summary`、`serialize`、`render`、`write`、
 `metrics`、`load`、`quality_report`、`render_quality_trend`、
-`export_quality_trend`、`export_quality_trend_report`。其中
+`export_quality_trend`、`export_quality_trend_report`、
+`render_quality_trend_report`。其中
 `quality_report` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
@@ -968,6 +992,31 @@ JSON 字节规范完全沿用 `serialize_quality_trend_report`，且 `path`
 、`os.fsync()` 后用 `os.replace` 原子替换 `output`。替换前发生失败会
 清除临时文件且既有 `output` 逐字节不变；`OSError` 原样传播。返回值与
 写入文件的字节为同一份 `bytes`。
+
+### `product.render_quality_trend_report(path) -> str`
+
+把一份质量趋势报告 JSON 渲染为三行汇总文本。
+
+执行时**仅调用一次** `load_quality_trend_report(path)` 得到 `R`，在
+此之前不做任何其他工作、之后也不再调用第二次；因此 `path` 的校验契
+约、读取行为、异常（`TypeError`/`ValueError`/`FileNotFoundError`/
+`IsADirectoryError`/`OSError`，原样向上传播）与文件不变性完全沿用
+`load_quality_trend_report`。输入文件不会被修改，`R` 也不会被修改。
+
+返回以 `\n` 连接、无尾换行的三行文本：
+
+- `REPORT=<schema_version>,<JSON路径>,<kind>,<quality>`：
+  `<schema_version>` 取自 `R["schema_version"]`，`<JSON路径>` 为
+  `R["source"]["path"]` 经紧凑、`ensure_ascii=False` 编码的 JSON 字
+  符串，`<kind>` 与 `<quality>` 分别取自 `R["source"]["kind"]` 与
+  `R["quality"]`；
+- `SUMMARY=<count>,<failed>,<coverage_delta>`：依次取自
+  `R["summary"]` 的 `count`、`failed`、`coverage_delta`；
+- `WORST=<index>,<coverage_delta>,<terrain_exceed_delta>,<unknown_delta>,<quality>`：
+  依次取自 `R["worst"]` 的同名字段。
+
+所有值直接取自 `R`，不重算、不重新排序：`int` 按十进制渲染，`str`
+原样，`float` 用 `format(v, ".6f")`（负零渲染为 `0.000000`）。
 
 ### 通用约定
 

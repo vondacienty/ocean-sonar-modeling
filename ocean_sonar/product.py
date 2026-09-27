@@ -43,6 +43,7 @@ __all__ = [
     "serialize_quality_trend_report",
     "load_quality_trend_report",
     "render_quality_trend",
+    "render_quality_trend_report",
     "export_quality_trend",
     "export_quality_trend_report",
 ]
@@ -1801,6 +1802,61 @@ def render_quality_trend(path) -> str:
     second_line = f"CHANGES={change_fields}"
 
     return "\n".join((first_line, second_line))
+
+
+def render_quality_trend_report(path) -> str:
+    """Render a :func:`load_quality_trend_report`-loaded JSON report as three lines.
+
+    :func:`load_quality_trend_report` is called exactly once with
+    ``path`` unchanged and no other work happens before it; the
+    ``path`` validation contract, the read behavior, every exception
+    (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`load_quality_trend_report` therefore
+    apply here verbatim. The file is not modified.
+
+    Let ``R`` be the dict returned by that single call; returns three
+    lines joined by ``"\\n"`` with no trailing newline::
+
+        REPORT=<schema_version>,<JSON path>,<kind>,<quality>
+        SUMMARY=<count>,<failed>,<coverage_delta>
+        WORST=<index>,<coverage_delta>,<terrain_exceed_delta>,<unknown_delta>,<quality>
+
+    The REPORT values are ``R["schema_version"]``, the compact
+    ``ensure_ascii=False`` JSON string of ``R["source"]["path"]``,
+    ``R["source"]["kind"]`` and ``R["quality"]``; the SUMMARY values
+    are the ``count``, ``failed`` and ``coverage_delta`` of
+    ``R["summary"]``; the WORST values are the fields of
+    ``R["worst"]`` in the key order ``index, coverage_delta,
+    terrain_exceed_delta, unknown_delta, quality``. Values are copied
+    directly from ``R``: ints are formatted in decimal, strings are
+    copied as-is and floats use ``format(v, ".6f")`` with negative
+    zero rendered as ``"0.000000"``.
+    """
+    report = load_quality_trend_report(path)
+    source = report["source"]
+    summary = report["summary"]
+    worst = report["worst"]
+
+    source_path = json.dumps(
+        source["path"], ensure_ascii=False, separators=(",", ":")
+    )
+    first_line = (
+        f"REPORT={_format_trend_value(report['schema_version'])},"
+        f"{source_path},"
+        f"{_format_trend_value(source['kind'])},"
+        f"{_format_trend_value(report['quality'])}"
+    )
+    second_line = (
+        f"SUMMARY={_format_trend_value(summary['count'])},"
+        f"{_format_trend_value(summary['failed'])},"
+        f"{_format_trend_value(summary['coverage_delta'])}"
+    )
+    third_line = "WORST=" + ",".join(
+        _format_trend_value(worst[name]) for name in _QUALITY_TREND_ITEM_KEYS
+    )
+
+    return "\n".join((first_line, second_line, third_line))
 
 
 def export_quality_trend(paths, output) -> bytes:
