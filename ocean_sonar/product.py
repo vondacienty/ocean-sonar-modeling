@@ -41,6 +41,7 @@ __all__ = [
     "serialize_quality_trend",
     "load_quality_trend",
     "serialize_quality_trend_report",
+    "load_quality_trend_report",
     "render_quality_trend",
     "export_quality_trend",
 ]
@@ -92,6 +93,15 @@ _QUALITY_TREND_ITEM_KEYS = (
     "unknown_delta",
     "quality",
 )
+_QUALITY_TREND_REPORT_KEYS = (
+    "schema_version",
+    "source",
+    "summary",
+    "worst",
+    "quality",
+)
+_QUALITY_TREND_REPORT_SOURCE_KEYS = ("path", "kind")
+_QUALITY_TREND_REPORT_SUMMARY_KEYS = ("count", "failed", "coverage_delta")
 
 
 def build(
@@ -1535,6 +1545,204 @@ def serialize_quality_trend_report(path) -> bytes:
     }
 
     return _dump_quality_trend(report)
+
+
+def _check_trend_report_coverage_delta(value, prefix):
+    if type(value) is not float:
+        raise ValueError(prefix + "must be a float")
+    if not math.isfinite(value):
+        raise ValueError(prefix + "must be finite")
+    if not -1.0 <= value <= 1.0:
+        raise ValueError(prefix + "must be in [-1, 1]")
+    if value != round(value, 6):
+        raise ValueError(prefix + "must have at most 6 decimals")
+    if value == 0.0 and math.copysign(1.0, value) < 0:
+        raise ValueError(prefix + "must not be negative zero")
+
+
+def _check_quality_trend_report(report):
+    if not isinstance(report, dict):
+        raise ValueError("quality trend report must be a JSON object")
+    if list(report.keys()) != list(_QUALITY_TREND_REPORT_KEYS):
+        raise ValueError(
+            "quality trend report keys must be in the order "
+            "schema_version, source, summary, worst, quality"
+        )
+
+    schema_version = report["schema_version"]
+    if type(schema_version) is not int:
+        raise ValueError(
+            "quality trend report: schema_version must be a non-bool int"
+        )
+    if schema_version != 1:
+        raise ValueError("quality trend report: schema_version must be 1")
+
+    source = report["source"]
+    if not isinstance(source, dict):
+        raise ValueError(
+            "quality trend report: source must be a JSON object"
+        )
+    if list(source.keys()) != list(_QUALITY_TREND_REPORT_SOURCE_KEYS):
+        raise ValueError(
+            "quality trend report: source keys must be in the order path, kind"
+        )
+    source_path = source["path"]
+    if type(source_path) is not str:
+        raise ValueError("quality trend report: source.path must be a str")
+    if source_path == "":
+        raise ValueError(
+            "quality trend report: source.path must not be empty"
+        )
+    if source["kind"] != "quality_trend":
+        raise ValueError(
+            "quality trend report: source.kind must be 'quality_trend'"
+        )
+
+    summary = report["summary"]
+    if not isinstance(summary, dict):
+        raise ValueError(
+            "quality trend report: summary must be a JSON object"
+        )
+    if list(summary.keys()) != list(_QUALITY_TREND_REPORT_SUMMARY_KEYS):
+        raise ValueError(
+            "quality trend report: summary keys must be in the order "
+            "count, failed, coverage_delta"
+        )
+
+    count = summary["count"]
+    if type(count) is not int:
+        raise ValueError(
+            "quality trend report: summary.count must be a non-bool int"
+        )
+    if not count > 0:
+        raise ValueError("quality trend report: summary.count must be > 0")
+
+    failed = summary["failed"]
+    if type(failed) is not int:
+        raise ValueError(
+            "quality trend report: summary.failed must be a non-bool int"
+        )
+    if not 0 <= failed <= count:
+        raise ValueError(
+            "quality trend report: summary.failed must be in [0, count]"
+        )
+
+    _check_trend_report_coverage_delta(
+        summary["coverage_delta"],
+        "quality trend report: summary.coverage_delta ",
+    )
+
+    worst = report["worst"]
+    _check_quality_trend_item(worst, "quality trend report: worst: ")
+    if not 1 <= worst["index"] <= count:
+        raise ValueError(
+            "quality trend report: worst.index must be in [1, count]"
+        )
+
+    quality = report["quality"]
+    if type(quality) is not str:
+        raise ValueError("quality trend report: quality must be a str")
+    if quality not in _QUALITY_VALUES:
+        raise ValueError(
+            "quality trend report: quality must be 'pass' or 'fail'"
+        )
+    expected = "pass" if failed == 0 else "fail"
+    if quality != expected:
+        raise ValueError(
+            "quality trend report: quality must be 'pass' exactly when "
+            "summary.failed is 0"
+        )
+    if quality == "pass" and worst["quality"] != "pass":
+        raise ValueError(
+            "quality trend report: worst.quality must be 'pass' when "
+            "quality is 'pass'"
+        )
+
+
+def load_quality_trend_report(path) -> dict:
+    """Load a :func:`serialize_quality_trend_report` JSON report from ``path``.
+
+    ``path`` must be a non-empty ``str``: a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``. The file
+    is opened in binary mode (``"rb"``) and read in full; a missing
+    file raises ``FileNotFoundError``, a directory raises
+    ``IsADirectoryError`` and every other ``OSError`` is propagated
+    unchanged. The file is not modified.
+
+    The bytes must be exactly those produced by
+    :func:`serialize_quality_trend_report` for the same value: compact
+    UTF-8 JSON with no BOM and no trailing newline. A BOM, a trailing
+    newline, a UTF-8 decoding failure, a JSON parsing failure, a
+    ``NaN``/``Infinity`` constant or a repeated JSON object key raises
+    ``ValueError``.
+
+    The decoded value must be a JSON object with keys exactly in the
+    order ``schema_version, source, summary, worst, quality``:
+    ``schema_version`` is the non-bool int ``1``; ``source`` is an
+    object with keys exactly in the order ``path, kind`` whose values
+    are a non-empty ``str`` and the string ``"quality_trend"``;
+    ``summary`` is an object with keys exactly in the order ``count,
+    failed, coverage_delta`` where ``count`` and ``failed`` are
+    non-bool ints with ``count > 0`` and ``0 <= failed <= count`` and
+    ``coverage_delta`` is a finite non-bool float in ``[-1, 1]`` with
+    at most six decimals and not negative zero; ``worst`` is an object
+    with keys exactly in the order ``index, coverage_delta,
+    terrain_exceed_delta, unknown_delta, quality`` where ``index`` is
+    a non-bool int in ``[1, count]``, ``coverage_delta`` follows the
+    same rule as the summary one, ``terrain_exceed_delta`` and
+    ``unknown_delta`` are non-bool ints and ``quality`` is ``"pass"``
+    or ``"fail"``; and the top-level ``quality`` is ``"pass"`` or
+    ``"fail"``, ``"pass"`` exactly when ``failed`` is ``0``, in which
+    case ``worst.quality`` must also be ``"pass"``. Finally the file
+    bytes must equal the canonical re-encoding of the decoded value
+    byte for byte. Every key-order, type, range, relation, parse or
+    canonical-byte mismatch raises ``ValueError``.
+
+    Returns the report as a dict with the keys in the order above; the
+    file is never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_keys,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        _check_quality_trend_report(parsed)
+        canonical = _dump_quality_trend(parsed)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid quality trend report: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical "
+            "serialize_quality_trend_report output"
+        )
+
+    return parsed
 
 
 def _format_trend_value(value):
