@@ -29,6 +29,7 @@ from .product import (
     export_quality_report_trend as _export_quality_report_trend,
     export_quality_trend as _export_quality_trend,
     export_quality_trend_report as _export_quality_trend_report,
+    quality_dashboard as _quality_dashboard,
     quality_report as _product_quality_report,
     render_quality_report_trend as _render_quality_report_trend,
     render_quality_trend as _render_quality_trend,
@@ -65,6 +66,10 @@ _SUBSTRATE_BATCH_KEYS = ("analysis", "intensities")
 
 def _reject_request_constant(value):
     raise ValueError(f"request contains a non-finite JSON constant: {value}")
+
+
+def _format_dashboard_float(value):
+    return format(0.0 if value == 0 else value, ".6f")
 
 
 def _reject_request_duplicate_keys(pairs):
@@ -538,6 +543,8 @@ def main(argv: list[str] | None = None) -> int:
     render_quality_trend_report_parser.add_argument("report", metavar="REPORT", help="quality trend report JSON file")
     render_quality_report_trend_parser = sub.add_parser("render-quality-report-trend", help="render one quality report trend JSON file as summary lines")
     render_quality_report_trend_parser.add_argument("trend", metavar="TREND", help="quality report trend JSON file")
+    quality_dashboard_parser = sub.add_parser("quality-dashboard", help="summarize one quality report trend JSON file as two dashboard lines")
+    quality_dashboard_parser.add_argument("trend", metavar="TREND", help="quality report trend JSON file")
     export_quality_report_trend_parser = sub.add_parser("export-quality-report-trend", help="compare quality trend report JSON files and write one quality report trend JSON")
     export_quality_report_trend_parser.add_argument("report_first", metavar="REPORT", help="first quality trend report JSON file")
     export_quality_report_trend_parser.add_argument("report_second", metavar="REPORT", help="second quality trend report JSON file")
@@ -876,6 +883,25 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
         sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "quality-dashboard":
+        try:
+            dashboard = _quality_dashboard(args.trend)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        summary = dashboard["summary"]
+        worst = dashboard["trend"]["worst"]
+        sys.stdout.write(
+            f"DASHBOARD={summary['count']},{summary['passed']},"
+            f"{summary['failed']},"
+            f"{_format_dashboard_float(summary['coverage_delta'])},"
+            f"{dashboard['quality']}\n"
+            f"WORST={worst['index']},{worst['failed_delta']},"
+            f"{_format_dashboard_float(worst['coverage_delta'])},"
+            f"{worst['quality']}\n"
+        )
         return 0
 
     if args.command == "export-quality-report-trend":

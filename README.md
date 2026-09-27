@@ -613,6 +613,30 @@ quality`，不重新排序；int 十进制、str 原样、float 用六位小数�
 ocean-sonar-modeling render-quality-report-trend quality_report_trend.json
 ```
 
+### `quality-dashboard TREND`
+
+把一份 `ocean_sonar.product.serialize_quality_report_trend` 生成的质
+量报告趋势 JSON 文件汇总为两行仪表板文本，等价于**仅调用一次**
+`ocean_sonar.product.quality_dashboard(path)`：其
+`load_quality_report_trend` 的校验、异常（`TypeError`/`ValueError`/
+`FileNotFoundError`/`IsADirectoryError`/`OSError` 原样向上传播）与
+文件不变性完全沿用被调函数。记 `D` 为返回的仪表板、
+`S = D["summary"]`、`W = D["trend"]["worst"]`，成功时 stdout 输出两
+行文本并各跟一个换行：第一行为
+`DASHBOARD=<count>,<passed>,<failed>,<coverage_delta>,<quality>`
+（前四个值依次取自 `S` 的 `count`、`passed`、`failed`、
+`coverage_delta`，最后一个取自 `D["quality"]`），第二行为
+`WORST=<index>,<failed_delta>,<coverage_delta>,<quality>`（各值直接
+取自 `W`，不重新计算 worst）；int 十进制、str 原样、float 用
+`format(v, ".6f")` 且负零写作 `0.000000`，stderr 为空，退出码 0；
+文件不存在、内容非法等错误时 stdout 为空，stderr 严格输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数缺失或多余属
+于参数解析错误，退出码 2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling quality-dashboard quality_report_trend.json
+```
+
 ### `export-quality-report-trend REPORT REPORT [REPORT ...] --output OUTPUT`
 
 把多份 `ocean_sonar.product.serialize_quality_trend_report` 生成的质
@@ -680,7 +704,7 @@ ocean-sonar-modeling export-quality-report-trend report_a.json report_b.json [re
 `render_quality_trend`、
 `export_quality_trend`、`export_quality_trend_report`、
 `render_quality_trend_report`、`render_quality_report_trend`、
-`export_quality_report_trend`。其中
+`quality_dashboard`、`export_quality_report_trend`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
@@ -1153,6 +1177,25 @@ JSON 字节规范完全沿用 `serialize_quality_trend_report`，且 `path`
 `flush()`、`os.fsync()` 后用 `os.replace` 原子替换 `output`。替换
 前发生失败会清除临时文件且既有 `output` 逐字节不变；`OSError` 原
 样传播。返回值与写入文件的字节为同一份 `bytes`。
+
+### `product.quality_dashboard(path) -> dict`
+
+把一份质量报告趋势 JSON 汇总为一个仪表板字典。
+
+执行时**仅调用一次** `load_quality_report_trend(path)` 得到 `T`，在
+此之前不做任何其他工作、之后也不再调用第二次；因此 `path` 的校验契
+约、读取行为、异常（`TypeError`/`ValueError`/`FileNotFoundError`/
+`IsADirectoryError`/`OSError`，原样向上传播）与文件不变性完全沿用
+`load_quality_report_trend`。输入文件不会被修改，`T` 也不会被修
+改，worst 不会被重新计算。
+
+记 `C = T["changes"]`、`n = len(C)`、`p` 为 `C` 中 `quality` 为
+`"pass"` 的项数、`c = round(float(math.fsum(各项 coverage_delta) /
+n), 6)`（负零归一化为 `0.0`）。返回键序为 `trend, summary, quality`
+的 `dict`：`trend` 即 `T` 原对象（保持同一性）；`summary` 的键序为
+`count, passed, failed, coverage_delta`，值依次为 `n`、`p`、`n - p`
+与 `c`；`quality` 为 `T["quality"]`。`count`、`passed`、`failed`
+为非布尔 `int`，`coverage_delta` 为 `float`。
 
 ### 通用约定
 

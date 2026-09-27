@@ -48,6 +48,7 @@ __all__ = [
     "render_quality_trend",
     "render_quality_trend_report",
     "render_quality_report_trend",
+    "quality_dashboard",
     "export_quality_trend",
     "export_quality_trend_report",
     "export_quality_report_trend",
@@ -2325,6 +2326,61 @@ def render_quality_report_trend(path) -> str:
         )
 
     return "\n".join(lines)
+
+
+def quality_dashboard(path) -> dict:
+    """Build a summary dashboard from a :func:`load_quality_report_trend` file.
+
+    Exactly one call to :func:`load_quality_report_trend` is made with
+    ``path`` unchanged and no other work happens before it; the ``path``
+    validation contract, the read behavior, every exception
+    (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`load_quality_report_trend` therefore apply
+    here verbatim. The file is not modified.
+
+    Let ``T`` be the dict returned by that single call, ``C =
+    T["changes"]``, ``n = len(C)`` and ``p`` the number of ``C`` items
+    whose ``quality`` is ``"pass"``. The dashboard is computed from
+    ``T`` alone, without modifying it, and ``worst`` is never
+    recomputed.
+
+    Returns a dict with keys in the order ``trend, summary, quality``:
+    ``trend`` is ``T`` itself (identity preserved); ``summary`` is a
+    dict with keys in the order ``count, passed, failed,
+    coverage_delta`` where ``count`` is ``n``, ``passed`` is ``p``,
+    ``failed`` is ``n - p`` and ``coverage_delta`` is
+    ``round(float(math.fsum(c["coverage_delta"] for c in C) / n), 6)``
+    with negative zero normalized to ``0.0``; ``quality`` is
+    ``T["quality"]``. ``count``, ``passed`` and ``failed`` are non-bool
+    ints and ``coverage_delta`` is a float.
+    """
+    trend = load_quality_report_trend(path)
+    changes = trend["changes"]
+
+    count = len(changes)
+    passed = 0
+    for item in changes:
+        if item["quality"] == "pass":
+            passed += 1
+
+    coverage_delta = round(
+        float(math.fsum(item["coverage_delta"] for item in changes) / count),
+        6,
+    )
+    if coverage_delta == 0:
+        coverage_delta = 0.0
+
+    return {
+        "trend": trend,
+        "summary": {
+            "count": count,
+            "passed": passed,
+            "failed": count - passed,
+            "coverage_delta": coverage_delta,
+        },
+        "quality": trend["quality"],
+    }
 
 
 def export_quality_report_trend(paths, output) -> bytes:
