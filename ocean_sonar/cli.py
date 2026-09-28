@@ -28,6 +28,7 @@ from .outlier import batch as _outlier_batch
 from .product import (
     _format_trend_value as _format_trend_value,
     export_overview as _export_overview,
+    export_overview_comparison as _export_overview_comparison,
     export_overview_trend as _export_overview_trend,
     export_quality_report_trend as _export_quality_report_trend,
     export_quality_trend as _export_quality_trend,
@@ -35,6 +36,7 @@ from .product import (
     quality_dashboard as _quality_dashboard,
     quality_report as _product_quality_report,
     render_overview as _render_overview,
+    render_overview_comparison as _render_overview_comparison,
     render_overview_trend as _render_overview_trend,
     render_overview_trend_report as _render_overview_trend_report,
     render_quality_report_trend as _render_quality_report_trend,
@@ -568,6 +570,13 @@ def main(argv: list[str] | None = None) -> int:
     render_overview_trend_parser.add_argument("trend", metavar="TREND", help="overview trend JSON file")
     render_overview_trend_report_parser = sub.add_parser("render-overview-trend-report", help="render one overview trend report JSON file as three summary lines")
     render_overview_trend_report_parser.add_argument("report", metavar="REPORT", help="overview trend report JSON file")
+    export_overview_comparison_parser = sub.add_parser("export-overview-comparison", help="compare overview trend report JSON files and write one overview comparison JSON")
+    export_overview_comparison_parser.add_argument("comparison_first", metavar="REPORT", help="first overview trend report JSON file")
+    export_overview_comparison_parser.add_argument("comparison_second", metavar="REPORT", help="second overview trend report JSON file")
+    export_overview_comparison_parser.add_argument("comparison_rest", nargs="*", metavar="REPORT", help="additional overview trend report JSON files")
+    export_overview_comparison_parser.add_argument("--output", required=True, help="output file atomically overwritten with the overview comparison JSON")
+    render_overview_comparison_parser = sub.add_parser("render-overview-comparison", help="render one overview comparison JSON file as summary lines")
+    render_overview_comparison_parser.add_argument("comparison", metavar="COMPARISON", help="overview comparison JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -986,6 +995,28 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "render-overview-trend-report":
         try:
             text = _render_overview_trend_report(args.report)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "export-overview-comparison":
+        paths = [
+            args.comparison_first,
+            args.comparison_second,
+            *args.comparison_rest,
+        ]
+        try:
+            _export_overview_comparison(paths, args.output)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        return 0
+
+    if args.command == "render-overview-comparison":
+        try:
+            text = _render_overview_comparison(args.comparison)
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
