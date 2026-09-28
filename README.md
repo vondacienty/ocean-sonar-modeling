@@ -804,6 +804,56 @@ JSON 字符串），第二行为
 ocean-sonar-modeling render-overview-trend-report overview_trend_report.json
 ```
 
+### `export-overview-comparison REPORT REPORT [REPORT ...] --output OUTPUT`
+
+把多份 `ocean_sonar.product.export_overview_trend_report` 生成的总览趋
+势报告 JSON 依次比较后导出为一份总览比较 JSON。路径按命令行顺序传入
+（至少两个），等价于**仅调用一次**
+`ocean_sonar.product.export_overview_comparison(paths, output)`：先且
+仅调用一次 `serialize_overview_comparison(paths)` 得到字节串 `B`，其
+路径校验（至少两份、逐个非空字符串、`paths[i]: ` 前缀）、异常、比较
+顶层键序（`changes, worst, quality`）与 JSON 字节规范完全沿用被调函
+数且先于 `output` 生效；成功时静默（stdout、stderr 均为空），退出码
+0，并以同目录临时文件加 `flush()`、`os.fsync()`、`os.replace` 原子
+覆写 `--output` 指定的文件；`--output` 必须为非空字符串且不得与任一
+REPORT 指向同一文件（双方都存在时用 `os.path.samefile` 识别软/硬链
+接，否则比较
+`os.path.normcase(os.path.realpath(os.path.abspath(path)))` 规范化路
+径），非 `str`/空串分别抛 `TypeError`/`ValueError`，重合抛
+`ValueError`；替换前发生失败会清除临时文件且既有 OUTPUT 逐字节不
+变，`OSError` 原样上抛；文件不存在、内容损坏等错误时 stdout 为空，
+stderr 严格输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码 1；
+REPORT 不足两个、缺少 `--output` 或参数多余属于参数解析错误，退出码
+2 且不调用业务函数。输入报告文件不会被修改。
+
+```bash
+ocean-sonar-modeling export-overview-comparison overview_trend_report_a.json overview_trend_report_b.json [overview_trend_report_c.json ...] --output overview_comparison.json
+```
+
+### `render-overview-comparison COMPARISON`
+
+把一份 `ocean_sonar.product.serialize_overview_comparison` 生成的总览
+比较 JSON 文件渲染为汇总文本，等价于**仅调用一次**
+`ocean_sonar.product.render_overview_comparison(path)`：其
+`load_overview_comparison` 的校验、异常
+（`TypeError`/`ValueError`/`FileNotFoundError`/
+`IsADirectoryError`/`OSError` 原样向上传播）与文件不变性完全沿用被
+调函数。记加载结果为 `C`，成功时 stdout 输出以 `\n` 连接的文本并在
+末尾加一个换行：首行
+`QUALITY=<quality>;COUNT=<n>;WORST_INDEX=<index>` 依次取自 `C` 的
+`quality`、`len(C["changes"])`、`C["worst"]["index"]`；随后按
+`C["changes"]` 原序逐行
+`CHANGE[<index>]=<regressed_delta>,<passed_delta>,<quality>`。各值直
+接取自 `C`，不重算、不重新排序；`int` 十进制、`str` 原样，格式沿
+`render-quality-report-trend`；stderr 为空，退出码 0；文件不存在、
+内容非法等错误时 stdout 为空，stderr 严格输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数缺失或多余属
+于参数解析错误，退出码 2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling render-overview-comparison overview_comparison.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -853,7 +903,8 @@ ocean-sonar-modeling render-overview-trend-report overview_trend_report.json
 `serialize_overview`、`load_overview`、`render_overview`、
 `export_overview`、`render_overview_trend`、
 `export_overview_trend`、`export_overview_trend_report`、
-`load_overview_trend_report`、`render_overview_trend_report`。其中
+`load_overview_trend_report`、`render_overview_trend_report`、
+`export_overview_comparison`、`render_overview_comparison`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
@@ -1489,6 +1540,52 @@ O["crosspoint"]["trend"]`、`M = O["summary"]`，返回以 `\n` 连接、
 所有值直接取自 `R`，不重算、不重新排序：`int` 十进制、`str` 原
 样，`bool` 严格写作 `True`/`False`，格式沿
 `render_overview_trend`。
+
+### `product.export_overview_comparison(paths, output) -> bytes`
+
+把多份总览趋势报告 JSON 的比较结果序列化并原子写盘，返回所写字节。
+
+执行时**先且仅调用一次** `serialize_overview_comparison(paths)` 得到
+字节串 `B`，在此之前不做任何其他工作、之后也不再调用第二次；因此
+`paths` 的校验契约（至少两项、逐项非空 `str`、`paths[i]: ` 下标前
+缀）、逐路径 `load_overview_trend_report` 的行为、异常（原样向上传
+播）、比较顶层键序（`changes, worst, quality`）与 JSON 字节规范完
+全沿用 `serialize_overview_comparison`，且 `paths` 的错误先于
+`output` 报出。输入与所加载的文件均不被修改。
+
+然后才校验 `output`：必须为非空 `str`——非 `str` 抛 `TypeError`
+（`output must be a str`），空串抛 `ValueError`
+（`output must not be empty`）。
+
+`output` 不得与任一 `paths` 项指向同一文件：双方都存在时用
+`os.path.samefile` 识别软/硬链接，任一方不存在时比较
+`os.path.normcase(os.path.realpath(os.path.abspath(path)))`；重合时
+抛 `ValueError`。
+
+非重合时在 `output` 同目录创建临时文件，以二进制写入 `B`，
+`flush()`、`os.fsync()` 后用 `os.replace` 原子替换 `output`。替换
+前发生失败会清除临时文件且既有 `output` 逐字节不变；`OSError` 原
+样传播。返回值与写入文件的字节为同一份 `bytes`。
+
+### `product.render_overview_comparison(path) -> str`
+
+把一份总览比较 JSON 渲染为纯文本。
+
+执行时**仅调用一次** `load_overview_comparison(path)` 得到 `C`，在
+此之前不做任何其他工作、之后也不再调用第二次；因此 `path` 的校验
+契约、读取行为、异常（`TypeError`/`ValueError`/
+`FileNotFoundError`/`IsADirectoryError`/`OSError`，原样向上传播）
+与文件不变性完全沿用 `load_overview_comparison`。输入文件不会被修
+改，`C` 也不会被修改。
+
+返回以 `\n` 连接、无尾换行的文本：首行
+`QUALITY=<quality>;COUNT=<n>;WORST_INDEX=<index>`，三个值依次取自
+`C["quality"]`、`len(C["changes"])`、`C["worst"]["index"]`；随后
+按 `C["changes"]` 原序逐行
+`CHANGE[<index>]=<regressed_delta>,<passed_delta>,<quality>`。
+
+所有值直接取自 `C`，不重算、不重新排序：`int` 按十进制渲染，
+`str` 原样，格式沿 `render_quality_report_trend`。
 
 ### 通用约定
 

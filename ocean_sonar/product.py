@@ -67,6 +67,8 @@ __all__ = [
     "compare_overview_reports",
     "serialize_overview_comparison",
     "load_overview_comparison",
+    "export_overview_comparison",
+    "render_overview_comparison",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -4187,3 +4189,96 @@ def load_overview_comparison(path) -> dict:
         "worst": worst_item,
         "quality": parsed["quality"],
     }
+
+
+def export_overview_comparison(paths, output) -> bytes:
+    """Serialize the :func:`compare_overview_reports` comparison and write it.
+
+    Exactly one call to :func:`serialize_overview_comparison` is made
+    with ``paths`` — before any other work and no second time — so its
+    validation, first-error order, exceptions (propagated unchanged),
+    ``"paths[i]: "`` index prefixes, key order ``changes, worst,
+    quality`` and JSON byte specification all apply here as well; in
+    particular a bad ``paths`` value is reported before ``output`` is
+    inspected. Neither ``paths`` nor the loaded files are modified.
+
+    With ``B`` the ``bytes`` returned by
+    :func:`serialize_overview_comparison`, ``output`` is then
+    validated: it must be a non-empty ``str`` (a non-str raises
+    ``TypeError`` and an empty ``str`` raises ``ValueError``), in that
+    order.
+
+    ``output`` must not name the same file as any of the ``paths``
+    items: when both sides exist they are compared with
+    ``os.path.samefile`` so soft and hard links are recognized, and
+    otherwise the normalized paths
+    ``os.path.normcase(os.path.realpath(os.path.abspath(path)))`` are
+    compared; an overlap raises ``ValueError``.
+
+    When there is no overlap, a temporary file is created in
+    ``output``'s directory, ``B`` is written to it in binary mode,
+    ``flush()`` and ``os.fsync()`` are called and the temporary file
+    then atomically replaces ``output`` via ``os.replace``. Any failure
+    before the replacement removes the temporary file and leaves an
+    existing ``output`` byte for byte unchanged; ``OSError`` is
+    propagated unchanged.
+
+    Returns the same ``bytes`` ``B`` that were written.
+    """
+    data = serialize_overview_comparison(paths)
+
+    if not isinstance(output, str):
+        raise TypeError("output must be a str")
+    if output == "":
+        raise ValueError("output must not be empty")
+
+    _reject_export_output_overlap(output, paths)
+    _atomic_write_bytes(output, data)
+    return data
+
+
+def render_overview_comparison(path) -> str:
+    """Render a :func:`load_overview_comparison`-loaded JSON comparison as text.
+
+    :func:`load_overview_comparison` is called exactly once with
+    ``path`` unchanged and no other work happens before it; the
+    ``path`` validation contract, the read behavior, every exception
+    (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`load_overview_comparison` therefore apply
+    here verbatim. The file is not modified.
+
+    Let ``C`` be the dict returned by that single call; returns one
+    line per change plus a leading summary line, joined by ``"\\n"``
+    with no trailing newline. The first line is::
+
+        QUALITY=<C["quality"]>;COUNT=<len(C["changes"])>;WORST_INDEX=<C["worst"]["index"]>
+
+    followed by, for every item of ``C["changes"]`` in its original
+    order, a line::
+
+        CHANGE[<index>]=<regressed_delta>,<passed_delta>,<quality>
+
+    where the three values are taken in the item's key order ``index,
+    regressed_delta, passed_delta, quality`` with no re-sorting. Values
+    are copied directly from ``C``: ints are formatted in decimal and
+    strings are copied as-is, following
+    :func:`render_quality_report_trend`.
+    """
+    comparison = load_overview_comparison(path)
+    changes = comparison["changes"]
+
+    lines = [
+        f"QUALITY={_format_trend_value(comparison['quality'])};"
+        f"COUNT={len(changes)};"
+        f"WORST_INDEX={_format_trend_value(comparison['worst']['index'])}"
+    ]
+    for item in changes:
+        lines.append(
+            f"CHANGE[{_format_trend_value(item['index'])}]="
+            f"{_format_trend_value(item['regressed_delta'])},"
+            f"{_format_trend_value(item['passed_delta'])},"
+            f"{_format_trend_value(item['quality'])}"
+        )
+
+    return "\n".join(lines)
