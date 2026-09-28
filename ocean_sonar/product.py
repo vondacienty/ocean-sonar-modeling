@@ -77,6 +77,7 @@ __all__ = [
     "serialize_overview_comparison_report_trend",
     "load_overview_comparison_report_trend",
     "export_overview_comparison_report_trend",
+    "render_overview_comparison_report_trend",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -5133,3 +5134,65 @@ def render_overview_comparison_report(path) -> str:
     )
 
     return "\n".join((first_line, second_line, third_line))
+
+
+def render_overview_comparison_report_trend(path) -> str:
+    """Render a :func:`load_overview_comparison_report_trend`-loaded JSON trend as text.
+
+    :func:`load_overview_comparison_report_trend` is called exactly
+    once with ``path`` unchanged and no other work happens before it;
+    the ``path`` validation contract, the read behavior, every
+    exception (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`load_overview_comparison_report_trend`
+    therefore apply here verbatim. The file is not modified.
+
+    Let ``T`` be the dict returned by that single call, ``C =
+    T["changes"]`` and ``W = T["worst"]``; returns two summary lines
+    followed by one line per change, joined by ``"\\n"`` with no
+    trailing newline::
+
+        TREND=<count>,<len(C)>,<regressed>,<quality>
+        WORST=<index>,<failed_delta>,<regressed_delta>,<passed_delta>,<quality>
+        CHANGE[<index>]=<failed_delta>,<regressed_delta>,<passed_delta>,<quality>
+
+    The TREND values are ``T["count"]``, ``len(C)``, ``T["regressed"]``
+    and ``T["quality"]`` in that order; the WORST values are the
+    ``index``, ``failed_delta``, ``regressed_delta``, ``passed_delta``
+    and ``quality`` of ``W`` in that order; one CHANGE line is emitted
+    for every item of ``C`` in its original order, with the four values
+    taken in the item's key order ``index, failed_delta,
+    regressed_delta, passed_delta, quality``. Values are copied
+    directly from ``T`` with no recomputation or re-sorting: ints are
+    formatted in decimal and strings are copied as-is, following
+    :func:`render_overview_comparison_report`.
+    """
+    trend = load_overview_comparison_report_trend(path)
+    changes = trend["changes"]
+    worst = trend["worst"]
+
+    first_line = (
+        f"TREND={_format_trend_value(trend['count'])},"
+        f"{len(changes)},"
+        f"{_format_trend_value(trend['regressed'])},"
+        f"{_format_trend_value(trend['quality'])}"
+    )
+    second_line = (
+        f"WORST={_format_trend_value(worst['index'])},"
+        f"{_format_trend_value(worst['failed_delta'])},"
+        f"{_format_trend_value(worst['regressed_delta'])},"
+        f"{_format_trend_value(worst['passed_delta'])},"
+        f"{_format_trend_value(worst['quality'])}"
+    )
+
+    lines = [first_line, second_line]
+    for item in changes:
+        lines.append(
+            f"CHANGE[{_format_trend_value(item['index'])}]="
+            f"{_format_trend_value(item['failed_delta'])},"
+            f"{_format_trend_value(item['regressed_delta'])},"
+            f"{_format_trend_value(item['passed_delta'])},"
+            f"{_format_trend_value(item['quality'])}"
+        )
+
+    return "\n".join(lines)

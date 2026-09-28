@@ -40,6 +40,7 @@ from .product import (
     render_overview as _render_overview,
     render_overview_comparison as _render_overview_comparison,
     render_overview_comparison_report as _render_overview_comparison_report,
+    render_overview_comparison_report_trend as _render_overview_comparison_report_trend,
     render_overview_trend as _render_overview_trend,
     render_overview_trend_report as _render_overview_trend_report,
     render_quality_report_trend as _render_quality_report_trend,
@@ -590,6 +591,8 @@ def main(argv: list[str] | None = None) -> int:
     render_overview_comparison_parser.add_argument("comparison", metavar="COMPARISON", help="overview comparison JSON file")
     render_overview_comparison_report_parser = sub.add_parser("render-overview-comparison-report", help="render one overview comparison report JSON file as three summary lines")
     render_overview_comparison_report_parser.add_argument("comparison_report", metavar="REPORT", help="overview comparison report JSON file")
+    render_overview_comparison_report_trend_parser = sub.add_parser("render-overview-comparison-report-trend", help="render one overview comparison report trend JSON file as summary lines")
+    render_overview_comparison_report_trend_parser.add_argument("comparison_report_trend", metavar="TREND", help="overview comparison report trend JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -1062,6 +1065,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "render-overview-comparison-report":
         try:
             text = _render_overview_comparison_report(args.comparison_report)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "render-overview-comparison-report-trend":
+        try:
+            text = _render_overview_comparison_report_trend(
+                args.comparison_report_trend
+            )
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
