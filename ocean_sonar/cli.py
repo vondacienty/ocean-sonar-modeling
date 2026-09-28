@@ -36,6 +36,7 @@ from .product import (
     quality_report as _product_quality_report,
     render_overview as _render_overview,
     render_overview_trend as _render_overview_trend,
+    render_overview_trend_report as _render_overview_trend_report,
     render_quality_report_trend as _render_quality_report_trend,
     render_quality_trend as _render_quality_trend,
     render_quality_trend_report as _render_quality_trend_report,
@@ -565,6 +566,8 @@ def main(argv: list[str] | None = None) -> int:
     export_overview_trend_parser.add_argument("--output", required=True, help="output file atomically overwritten with the overview trend JSON")
     render_overview_trend_parser = sub.add_parser("render-overview-trend", help="render one overview trend JSON file as summary lines")
     render_overview_trend_parser.add_argument("trend", metavar="TREND", help="overview trend JSON file")
+    render_overview_trend_report_parser = sub.add_parser("render-overview-trend-report", help="render one overview trend report JSON file as three summary lines")
+    render_overview_trend_report_parser.add_argument("report", metavar="REPORT", help="overview trend report JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -974,6 +977,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "render-overview-trend":
         try:
             text = _render_overview_trend(args.trend)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "render-overview-trend-report":
+        try:
+            text = _render_overview_trend_report(args.report)
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
