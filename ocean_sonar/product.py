@@ -72,6 +72,7 @@ __all__ = [
     "export_overview_comparison",
     "export_overview_comparison_report",
     "render_overview_comparison",
+    "render_overview_comparison_report",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -4623,3 +4624,63 @@ def render_overview_comparison(path) -> str:
         )
 
     return "\n".join(lines)
+
+
+def render_overview_comparison_report(path) -> str:
+    """Render a :func:`load_overview_comparison_report`-loaded JSON report as three lines.
+
+    :func:`load_overview_comparison_report` is called exactly once with
+    ``path`` unchanged and no other work happens before it; the
+    ``path`` validation contract, the read behavior, every exception
+    (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`load_overview_comparison_report`
+    therefore apply here verbatim. The file is not modified.
+
+    Let ``R`` be the dict returned by that single call; returns three
+    lines joined by ``"\\n"`` with no trailing newline::
+
+        REPORT=<schema_version>,<JSON path>,<kind>,<quality>
+        SUMMARY=<count>,<failed>,<regressed_delta>,<passed_delta>
+        WORST=<index>,<regressed_delta>,<passed_delta>,<quality>
+
+    The REPORT values are ``R["schema_version"]``, the compact
+    ``ensure_ascii=False`` JSON string of ``R["source"]["path"]``
+    (``json.dumps(v, ensure_ascii=False, separators=(",", ":"))``),
+    ``R["source"]["kind"]`` and ``R["quality"]``; the SUMMARY values
+    are the ``count``, ``failed``, ``regressed_delta`` and
+    ``passed_delta`` of ``R["summary"]`` in that order; the WORST
+    values are the ``index``, ``regressed_delta``, ``passed_delta``
+    and ``quality`` of ``R["worst"]`` in that order. Values are copied
+    directly from ``R`` with no recomputation or re-sorting: ints are
+    formatted in decimal and strings are copied as-is, following
+    :func:`render_overview_trend_report`.
+    """
+    report = load_overview_comparison_report(path)
+    source = report["source"]
+    summary = report["summary"]
+    worst = report["worst"]
+
+    source_path = json.dumps(
+        source["path"], ensure_ascii=False, separators=(",", ":")
+    )
+    first_line = (
+        f"REPORT={_format_trend_value(report['schema_version'])},"
+        f"{source_path},"
+        f"{_format_trend_value(source['kind'])},"
+        f"{_format_trend_value(report['quality'])}"
+    )
+    second_line = (
+        f"SUMMARY={_format_trend_value(summary['count'])},"
+        f"{_format_trend_value(summary['failed'])},"
+        f"{_format_trend_value(summary['regressed_delta'])},"
+        f"{_format_trend_value(summary['passed_delta'])}"
+    )
+    third_line = (
+        f"WORST={_format_trend_value(worst['index'])},"
+        f"{_format_trend_value(worst['regressed_delta'])},"
+        f"{_format_trend_value(worst['passed_delta'])},"
+        f"{_format_trend_value(worst['quality'])}"
+    )
+
+    return "\n".join((first_line, second_line, third_line))
