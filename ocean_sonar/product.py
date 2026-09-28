@@ -73,6 +73,7 @@ __all__ = [
     "export_overview_comparison_report",
     "render_overview_comparison",
     "render_overview_comparison_report",
+    "overview_comparison_report_trend",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -4485,6 +4486,123 @@ def load_overview_comparison_report(path) -> dict:
         )
 
     return parsed
+
+
+def overview_comparison_report_trend(paths) -> dict:
+    """Compare successive :func:`load_overview_comparison_report` snapshots along ``paths``.
+
+    ``paths`` must be a list/tuple of at least two items; each item,
+    checked in index order, must be a non-empty ``str``. Validation
+    order (first error wins): the ``paths`` container, its length, then
+    each item in index order (type, then emptiness). A non-list/tuple
+    container or a non-str item raises ``TypeError``; fewer than two
+    items or an empty ``str`` raises ``ValueError``. Item errors are
+    prefixed with ``"paths[i]: "``.
+
+    :func:`load_overview_comparison_report` is then called exactly once
+    per path, in input order; any exception it raises is propagated
+    unchanged. The input and the loaded files are not modified.
+
+    Every loaded report must have the same ``summary.count`` value as
+    the first one; otherwise a ``ValueError`` is raised.
+
+    For each successive pair ``i = 1..n-1`` the deltas are
+    ``f = summary.failed_i - summary.failed_(i-1)``,
+    ``r = summary.regressed_delta_i -
+    summary.regressed_delta_(i-1)`` and
+    ``p = summary.passed_delta_i - summary.passed_delta_(i-1)``; a
+    comparison fails (``q`` is ``"fail"``) when ``f > 0``, ``r > 0``,
+    ``p < 0`` or the top-level ``quality`` changes from ``"pass"`` to
+    ``"fail"``, and is ``"pass"`` otherwise.
+
+    Returns a dict with keys in the order ``count, changes, regressed,
+    worst, quality``: ``count`` is the non-bool int ``n`` (the number of
+    snapshots); ``changes`` is a tuple with one dict per pair (in ``i``
+    order), each with keys in the order ``index, failed_delta,
+    regressed_delta, passed_delta, quality`` — ``index`` is the
+    non-bool int ``i``, ``failed_delta``/``regressed_delta``/
+    ``passed_delta`` are the non-bool ints ``f``, ``r`` and ``p`` and
+    ``quality`` is ``q``. ``regressed`` is the number of ``changes``
+    items whose ``quality`` is ``"fail"``. ``worst`` is the ``changes``
+    item minimizing the tuple ``(p, -f, -r, i)`` lexicographically (the
+    same dict object, never a copy); the top-level ``quality`` is
+    ``"pass"`` exactly when ``regressed`` is ``0`` and ``"fail"``
+    otherwise. Items are not sorted, values are not recomputed and no
+    other keys are added.
+    """
+    if not isinstance(paths, (list, tuple)):
+        raise TypeError("paths must be a list or tuple")
+    if len(paths) < 2:
+        raise ValueError("paths must contain at least 2 items")
+    for i in range(len(paths)):
+        prefix = f"paths[{i}]: "
+        if not isinstance(paths[i], str):
+            raise TypeError(prefix + "must be a str")
+        if paths[i] == "":
+            raise ValueError(prefix + "must not be empty")
+
+    reports = [load_overview_comparison_report(path) for path in paths]
+
+    first_count = reports[0]["summary"]["count"]
+    for i in range(1, len(reports)):
+        count = reports[i]["summary"]["count"]
+        if count != first_count:
+            raise ValueError(
+                f"overview comparison report at paths[{i}] summary.count "
+                f"{count} does not match {first_count}"
+            )
+
+    changes = []
+    regressed = 0
+    worst_item = None
+    worst_key = None
+    for i in range(1, len(reports)):
+        previous_summary = reports[i - 1]["summary"]
+        current_summary = reports[i]["summary"]
+        f = int(current_summary["failed"]) - int(previous_summary["failed"])
+        r = (
+            int(current_summary["regressed_delta"])
+            - int(previous_summary["regressed_delta"])
+        )
+        p = (
+            int(current_summary["passed_delta"])
+            - int(previous_summary["passed_delta"])
+        )
+        if (
+            f > 0
+            or r > 0
+            or p < 0
+            or (
+                reports[i - 1]["quality"] == "pass"
+                and reports[i]["quality"] == "fail"
+            )
+        ):
+            verdict = "fail"
+            regressed += 1
+        else:
+            verdict = "pass"
+
+        item = {
+            "index": int(i),
+            "failed_delta": int(f),
+            "regressed_delta": int(r),
+            "passed_delta": int(p),
+            "quality": verdict,
+        }
+        changes.append(item)
+
+        key = (p, -f, -r, i)
+        if worst_key is None or key < worst_key:
+            worst_key = key
+            worst_item = item
+
+    return {
+        "count": len(paths),
+        "changes": tuple(changes),
+        "regressed": regressed,
+        "worst": worst_item,
+        "quality": "pass" if regressed == 0 else "fail",
+    }
 
 
 def export_overview_comparison(paths, output) -> bytes:
