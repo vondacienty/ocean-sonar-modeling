@@ -30,6 +30,7 @@ from .product import (
     export_overview as _export_overview,
     export_overview_comparison as _export_overview_comparison,
     export_overview_comparison_report as _export_overview_comparison_report,
+    export_overview_comparison_report_trend as _export_overview_comparison_report_trend,
     export_overview_trend as _export_overview_trend,
     export_quality_report_trend as _export_quality_report_trend,
     export_quality_trend as _export_quality_trend,
@@ -580,6 +581,11 @@ def main(argv: list[str] | None = None) -> int:
     export_overview_comparison_report_parser = sub.add_parser("export-overview-comparison-report", help="summarize one overview comparison JSON file and write one overview comparison report JSON")
     export_overview_comparison_report_parser.add_argument("comparison_report", metavar="REPORT", help="overview comparison JSON file")
     export_overview_comparison_report_parser.add_argument("--output", required=True, help="output file atomically overwritten with the overview comparison report JSON")
+    export_overview_comparison_report_trend_parser = sub.add_parser("export-overview-comparison-report-trend", help="compare overview comparison report JSON files and write one overview comparison report trend JSON")
+    export_overview_comparison_report_trend_parser.add_argument("comparison_report_first", metavar="REPORT", help="first overview comparison report JSON file")
+    export_overview_comparison_report_trend_parser.add_argument("comparison_report_second", metavar="REPORT", help="second overview comparison report JSON file")
+    export_overview_comparison_report_trend_parser.add_argument("comparison_report_rest", nargs="*", metavar="REPORT", help="additional overview comparison report JSON files")
+    export_overview_comparison_report_trend_parser.add_argument("--output", required=True, help="output file atomically overwritten with the overview comparison report trend JSON")
     render_overview_comparison_parser = sub.add_parser("render-overview-comparison", help="render one overview comparison JSON file as summary lines")
     render_overview_comparison_parser.add_argument("comparison", metavar="COMPARISON", help="overview comparison JSON file")
     render_overview_comparison_report_parser = sub.add_parser("render-overview-comparison-report", help="render one overview comparison report JSON file as three summary lines")
@@ -1026,6 +1032,19 @@ def main(argv: list[str] | None = None) -> int:
             _export_overview_comparison_report(
                 args.comparison_report, args.output
             )
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        return 0
+
+    if args.command == "export-overview-comparison-report-trend":
+        paths = [
+            args.comparison_report_first,
+            args.comparison_report_second,
+            *args.comparison_report_rest,
+        ]
+        try:
+            _export_overview_comparison_report_trend(paths, args.output)
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
