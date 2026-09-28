@@ -29,6 +29,7 @@ from .product import (
     _format_trend_value as _format_trend_value,
     export_overview as _export_overview,
     export_overview_comparison as _export_overview_comparison,
+    export_overview_comparison_report as _export_overview_comparison_report,
     export_overview_trend as _export_overview_trend,
     export_quality_report_trend as _export_quality_report_trend,
     export_quality_trend as _export_quality_trend,
@@ -575,6 +576,9 @@ def main(argv: list[str] | None = None) -> int:
     export_overview_comparison_parser.add_argument("comparison_second", metavar="REPORT", help="second overview trend report JSON file")
     export_overview_comparison_parser.add_argument("comparison_rest", nargs="*", metavar="REPORT", help="additional overview trend report JSON files")
     export_overview_comparison_parser.add_argument("--output", required=True, help="output file atomically overwritten with the overview comparison JSON")
+    export_overview_comparison_report_parser = sub.add_parser("export-overview-comparison-report", help="serialize one overview comparison JSON file into a report JSON")
+    export_overview_comparison_report_parser.add_argument("comparison", metavar="REPORT", help="overview comparison JSON file")
+    export_overview_comparison_report_parser.add_argument("--output", required=True, help="output file atomically overwritten with the overview comparison report JSON")
     render_overview_comparison_parser = sub.add_parser("render-overview-comparison", help="render one overview comparison JSON file as summary lines")
     render_overview_comparison_parser.add_argument("comparison", metavar="COMPARISON", help="overview comparison JSON file")
     args = parser.parse_args(argv)
@@ -1009,6 +1013,14 @@ def main(argv: list[str] | None = None) -> int:
         ]
         try:
             _export_overview_comparison(paths, args.output)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        return 0
+
+    if args.command == "export-overview-comparison-report":
+        try:
+            _export_overview_comparison_report(args.comparison, args.output)
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1

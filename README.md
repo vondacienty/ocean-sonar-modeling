@@ -830,6 +830,33 @@ REPORT 不足两个、缺少 `--output` 或参数多余属于参数解析错误�
 ocean-sonar-modeling export-overview-comparison overview_trend_report_a.json overview_trend_report_b.json [overview_trend_report_c.json ...] --output overview_comparison.json
 ```
 
+### `export-overview-comparison-report REPORT --output OUTPUT`
+
+把一份 `ocean_sonar.product.serialize_overview_comparison` 生成的总览
+比较结果 JSON 序列化为总览比较报告 JSON 并写盘。等价于**仅调用一次**
+`ocean_sonar.product.export_overview_comparison_report(path, output)`：
+先且仅调用一次 `serialize_overview_comparison_report(path)` 得到字节
+串 `B`，其 path 校验、异常（`TypeError`/`ValueError`/
+`FileNotFoundError`/`IsADirectoryError`/`OSError` 原样向上传播）、文
+件不变性、报告顶层键序（`schema_version, source, summary, worst,
+quality`）与 JSON 字节规范（无 BOM、无尾换行的紧凑 UTF-8 JSON）完全
+沿用被调函数且先于 `output` 生效，写出与返回的字节逐字等于 `B`；成
+功时静默（stdout、stderr 均为空），退出码 0，并以同目录临时文件加
+`flush()`、`os.fsync()`、`os.replace` 原子覆写 `--output` 指定的文
+件；`--output` 必须为非空字符串且不得与 REPORT 指向同一文件（双方
+都存在时用 `os.path.samefile` 识别软/硬链接，否则比较
+`os.path.normcase(os.path.realpath(os.path.abspath(path)))` 规范化路
+径），非 `str`/空串分别抛 `TypeError`/`ValueError`，重合抛
+`ValueError`；替换前发生失败会清除临时文件且既有 OUTPUT 逐字节不
+变，`OSError` 原样上抛；文件不存在、内容损坏等错误时 stdout 为空，
+stderr 严格输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码 1；缺
+少 REPORT、缺少 `--output` 或参数多余属于参数解析错误，退出码 2 且
+不调用业务函数。输入比较文件不会被修改。
+
+```bash
+ocean-sonar-modeling export-overview-comparison-report overview_comparison.json --output overview_comparison_report.json
+```
+
 ### `render-overview-comparison COMPARISON`
 
 把一份 `ocean_sonar.product.serialize_overview_comparison` 生成的总
@@ -907,6 +934,7 @@ ocean-sonar-modeling render-overview-comparison overview_comparison.json
 `compare_overview_reports`、`serialize_overview_comparison`、
 `serialize_overview_comparison_report`、`load_overview_comparison`、
 `load_overview_comparison_report`、`export_overview_comparison`、
+`export_overview_comparison_report`、
 `render_overview_comparison`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
@@ -1569,6 +1597,35 @@ JSON 字节规范完全沿用 `serialize_overview_comparison`，且
 `flush()`、`os.fsync()` 后用 `os.replace` 原子替换 `output`。替换
 前发生失败会清除临时文件且既有 `output` 逐字节不变；`OSError`
 原样传播。返回值与写入文件的字节为同一份 `bytes`。
+
+### `product.export_overview_comparison_report(path, output) -> bytes`
+
+把一份总览比较结果 JSON 派生出的总览比较报告序列化并原子写盘，返
+回所写字节。
+
+执行时**先且仅调用一次**
+`serialize_overview_comparison_report(path)` 得到字节串 `B`，在此之
+前不做任何其他工作、之后也不再调用第二次；因此 `path` 的校验契
+约、读取行为、异常（`TypeError`/`ValueError`/
+`FileNotFoundError`/`IsADirectoryError`/`OSError`，原样向上传播）、
+报告键序（`schema_version, source, summary, worst, quality`）与
+JSON 字节规范（无 BOM、无尾换行的紧凑 UTF-8 JSON）完全沿用
+`serialize_overview_comparison_report`，且 `path` 的错误先于
+`output` 报出。输入文件不被修改，写出与返回的字节逐字等于 `B`。
+
+然后才校验 `output`：必须为非空 `str`——非 `str` 抛 `TypeError`
+（`output must be a str`），空串抛 `ValueError`
+（`output must not be empty`）。
+
+`output` 不得与 `path` 指向同一文件：双方都存在时用
+`os.path.samefile` 识别软/硬链接，任一方不存在时比较
+`os.path.normcase(os.path.realpath(os.path.abspath(path)))`；重合时抛
+`ValueError`。
+
+非重合时在 `output` 同目录创建临时文件，以二进制写入 `B`，
+`flush()`、`os.fsync()` 后用 `os.replace` 原子替换 `output`。替换
+前发生失败会清除临时文件且既有 `output` 逐字节不变；`OSError` 原
+样传播。返回值与写入文件的字节为同一份 `bytes`。
 
 ### `product.render_overview_comparison(path) -> str`
 
