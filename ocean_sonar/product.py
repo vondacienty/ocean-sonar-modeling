@@ -79,6 +79,8 @@ __all__ = [
     "export_overview_comparison_report_trend",
     "render_overview_comparison_report_trend",
     "trend_dashboard",
+    "serialize_trend_dashboard",
+    "export_trend_dashboard",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -5245,3 +5247,84 @@ def trend_dashboard(path) -> dict:
         },
         "quality": trend["quality"],
     }
+
+
+def serialize_trend_dashboard(path) -> bytes:
+    """Serialize the :func:`trend_dashboard` summary of ``path`` to bytes.
+
+    Exactly one call to :func:`trend_dashboard` is made with ``path``
+    unchanged and no other work happens before it; the ``path``
+    validation contract, the read behavior, every exception
+    (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`trend_dashboard` therefore apply here
+    verbatim. The file is not modified.
+
+    Let ``D`` be the dict returned by that single
+    :func:`trend_dashboard` call. It is encoded directly with keys
+    exactly in the order ``trend, summary, quality`` and no keys are
+    added: ``trend`` keeps the value returned by
+    :func:`trend_dashboard` (its key order ``count, changes,
+    regressed, worst, quality`` and each change item's order ``index,
+    failed_delta, regressed_delta, passed_delta, quality``), and
+    ``summary`` keeps its key order ``reports, passed, regressed,
+    ratio, worst``.
+
+    The JSON byte specification follows
+    :func:`serialize_overview_comparison_report_trend`: UTF-8,
+    ``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``, no indentation, no BOM and no trailing
+    newline; tuples are recursively converted to arrays and ints are
+    written in decimal. Every float is rounded with
+    ``round(float(v), 6)`` and negative zero is normalized to ``0.0``
+    only at write time. Any JSON or UTF-8 encoding failure raises
+    ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    dashboard = trend_dashboard(path)
+    return _dump_overview_comparison_report_trend(dashboard)
+
+
+def export_trend_dashboard(path, output) -> bytes:
+    """Serialize a :func:`trend_dashboard` summary for ``path`` and write it.
+
+    Exactly one call to :func:`serialize_trend_dashboard` is made with
+    ``path`` — before any other work and no second time — so its
+    validation, first-error order, exceptions (propagated unchanged),
+    read behavior, dashboard key order ``trend, summary, quality`` and
+    JSON byte specification all apply here as well; in particular a
+    bad ``path`` value is reported before ``output`` is inspected. The
+    input file is not modified.
+
+    With ``B`` the ``bytes`` returned by
+    :func:`serialize_trend_dashboard`, ``output`` is then validated:
+    it must be a non-empty ``str`` (a non-str raises ``TypeError`` and
+    an empty ``str`` raises ``ValueError``), in that order.
+
+    ``output`` must not name the same file as ``path``: when both
+    sides exist they are compared with ``os.path.samefile`` so soft
+    and hard links are recognized, and otherwise the normalized paths
+    ``os.path.normcase(os.path.realpath(os.path.abspath(path)))`` are
+    compared; an overlap raises ``ValueError``.
+
+    When there is no overlap, a temporary file is created in
+    ``output``'s directory, ``B`` is written to it in binary mode,
+    ``flush()`` and ``os.fsync()`` are called and the temporary file
+    then atomically replaces ``output`` via ``os.replace``. Any
+    failure before the replacement removes the temporary file and
+    leaves an existing ``output`` byte for byte unchanged;
+    ``OSError`` is propagated unchanged.
+
+    Returns the same ``bytes`` ``B`` that were written.
+    """
+    data = serialize_trend_dashboard(path)
+
+    if not isinstance(output, str):
+        raise TypeError("output must be a str")
+    if output == "":
+        raise ValueError("output must not be empty")
+
+    _reject_export_output_overlap(output, [path])
+    _atomic_write_bytes(output, data)
+    return data

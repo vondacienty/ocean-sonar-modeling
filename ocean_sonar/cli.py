@@ -35,6 +35,7 @@ from .product import (
     export_quality_report_trend as _export_quality_report_trend,
     export_quality_trend as _export_quality_trend,
     export_quality_trend_report as _export_quality_trend_report,
+    export_trend_dashboard as _export_trend_dashboard,
     quality_dashboard as _quality_dashboard,
     quality_report as _product_quality_report,
     render_overview as _render_overview,
@@ -596,6 +597,9 @@ def main(argv: list[str] | None = None) -> int:
     render_overview_comparison_report_trend_parser.add_argument("comparison_report_trend", metavar="TREND", help="overview comparison report trend JSON file")
     trend_dashboard_parser = sub.add_parser("trend-dashboard", help="summarize one overview comparison report trend JSON file as two dashboard lines")
     trend_dashboard_parser.add_argument("trend", metavar="TREND", help="overview comparison report trend JSON file")
+    export_trend_dashboard_parser = sub.add_parser("export-trend-dashboard", help="serialize one overview comparison report trend JSON file into a dashboard JSON")
+    export_trend_dashboard_parser.add_argument("trend", metavar="TREND", help="overview comparison report trend JSON file")
+    export_trend_dashboard_parser.add_argument("--output", required=True, help="output file atomically overwritten with the trend dashboard JSON")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -1108,6 +1112,14 @@ def main(argv: list[str] | None = None) -> int:
             ),
         )
         sys.stdout.write("\n".join(lines) + "\n")
+        return 0
+
+    if args.command == "export-trend-dashboard":
+        try:
+            _export_trend_dashboard(args.trend, args.output)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
         return 0
 
     parser.print_help()
