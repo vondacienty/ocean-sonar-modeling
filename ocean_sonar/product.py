@@ -66,6 +66,7 @@ __all__ = [
     "render_overview_trend_report",
     "compare_overview_reports",
     "serialize_overview_comparison",
+    "serialize_overview_comparison_report",
     "load_overview_comparison",
     "export_overview_comparison",
     "render_overview_comparison",
@@ -4014,6 +4015,80 @@ def serialize_overview_comparison(paths) -> bytes:
     """
     comparison = compare_overview_reports(paths)
     return _dump_overview_comparison(comparison)
+
+
+def serialize_overview_comparison_report(path) -> bytes:
+    """Serialize a report derived from a :func:`load_overview_comparison` file.
+
+    Exactly one call to :func:`load_overview_comparison` is made with
+    ``path`` unchanged and no other work happens before it; the
+    ``path`` validation contract, the read behavior, every exception
+    (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`load_overview_comparison` therefore apply
+    here verbatim. The file is not modified.
+
+    Let ``C`` be the dict returned by that single call. The report is
+    computed from ``C`` alone, without recomputing the worst item,
+    sorting or modifying ``C``, and encoded with keys exactly in the
+    order ``schema_version, source, summary, worst, quality``:
+
+    - ``schema_version``: the non-bool int ``1``.
+    - ``source``: keys in the order ``path, kind``, with ``path`` the
+      original ``path`` argument and ``kind`` the fixed string
+      ``"overview_comparison"``.
+    - ``summary``: keys in the order ``count, failed,
+      regressed_delta, passed_delta`` — ``count`` is the number of
+      change items ``len(C["changes"])``, ``failed`` is the number of
+      change items whose ``quality`` is ``"fail"`` and
+      ``regressed_delta``/``passed_delta`` are the integer sums of the
+      respective deltas over the change items.
+    - ``worst``: an object with keys in the order ``index,
+      regressed_delta, passed_delta, quality``, each value taken from
+      ``C["worst"]`` in that order.
+    - ``quality``: ``C["quality"]``.
+
+    The JSON byte specification follows
+    :func:`serialize_overview_comparison`: UTF-8,
+    ``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``, no indentation, no BOM and no trailing
+    newline; every float is rounded with ``round(float(v), 6)`` and
+    negative zero is normalized to ``0.0`` only at write time; tuples
+    are recursively converted to arrays. Any JSON or UTF-8 encoding
+    failure raises ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    comparison = load_overview_comparison(path)
+    changes = comparison["changes"]
+    worst = comparison["worst"]
+
+    failed = 0
+    regressed_delta = 0
+    passed_delta = 0
+    for item in changes:
+        if item["quality"] == "fail":
+            failed += 1
+        regressed_delta += item["regressed_delta"]
+        passed_delta += item["passed_delta"]
+
+    report = {
+        "schema_version": 1,
+        "source": {
+            "path": path,
+            "kind": "overview_comparison",
+        },
+        "summary": {
+            "count": len(changes),
+            "failed": failed,
+            "regressed_delta": regressed_delta,
+            "passed_delta": passed_delta,
+        },
+        "worst": {name: worst[name] for name in _OVERVIEW_COMPARISON_ITEM_KEYS},
+        "quality": comparison["quality"],
+    }
+
+    return _dump_overview_comparison(report)
 
 
 def _check_overview_comparison_item(item, prefix):
