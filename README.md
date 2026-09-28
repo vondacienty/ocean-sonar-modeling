@@ -960,7 +960,9 @@ ocean-sonar-modeling render-overview-comparison-report overview_comparison_repor
 `export_overview_trend`、`export_overview_trend_report`、
 `load_overview_trend_report`、`render_overview_trend_report`、
 `compare_overview_reports`、`serialize_overview_comparison`、
-`serialize_overview_comparison_report`、`load_overview_comparison`、
+`serialize_overview_comparison_report`、
+`serialize_overview_comparison_report_trend`、
+`load_overview_comparison`、
 `load_overview_comparison_report`、`export_overview_comparison`、
 `export_overview_comparison_report`、`render_overview_comparison`、
 `render_overview_comparison_report`。其中
@@ -1700,6 +1702,32 @@ JSON 字节规范完全沿用 `serialize_overview_comparison`，且
 
 所有值直接取自 `R`，不重算、不重新排序：`int` 十进制、`str` 原
 样，格式沿 `render_overview_trend_report`。
+
+### `product.serialize_overview_comparison_report_trend(paths) -> bytes`
+
+把多份总览比较报告 JSON 依次比较的趋势结果序列化为 UTF-8 JSON 字
+节串。
+
+执行时**仅调用一次** `overview_comparison_report_trend(paths)` 得到
+`T`，不预读、不排序、也不重新加载路径；因此其 `paths` 校验顺序
+（`paths` 容器、至少 2 项、逐项非空 `str`）、`TypeError`/
+`ValueError` 划分、`paths[i]: ` 下标前缀、逐路径
+`load_overview_comparison_report` 的加载异常（原样向上传播）与文件
+不变性完全沿用。非 `list`/`tuple` 容器或非 `str` 项抛
+`TypeError`，少于 2 项或空串抛 `ValueError`。输入与任何文件均不被
+修改。
+
+编码对象直接取自 `T`：顶层键序严格为 `count, changes, regressed,
+worst, quality`；`changes` 的 tuple 按原序转为 JSON 数组；各变化项
+与 `worst` 的键序均为
+`index, failed_delta, regressed_delta, passed_delta, quality`，前四
+值为 `int`（按十进制写出），末值仅为 `"pass"`/`"fail"`。`worst`
+按 `T` 中的原值写出，不重算、不排序、不增加任何键。
+
+编码规范与 `serialize_overview_comparison` 一致：UTF-8 紧凑 JSON，
+`ensure_ascii=False`、`separators=(",", ":")`、`allow_nan=False`，
+无缩进、无 BOM、无尾换行；tuple 递归转为数组。任何 JSON 或 UTF-8
+编码失败抛 `ValueError`。返回 `bytes`。
 
 ### 通用约定
 
