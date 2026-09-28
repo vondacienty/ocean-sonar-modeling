@@ -64,6 +64,7 @@ __all__ = [
     "export_overview_trend_report",
     "load_overview_trend_report",
     "render_overview_trend_report",
+    "compare_overview_reports",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -3856,3 +3857,104 @@ def render_overview_trend_report(path) -> str:
     )
 
     return "\n".join((first_line, second_line, third_line))
+
+
+def compare_overview_reports(paths) -> dict:
+    """Compare successive :func:`load_overview_trend_report` snapshots along ``paths``.
+
+    ``paths`` must be a list/tuple of at least two items; each item,
+    checked in index order, must be a non-empty ``str``. Validation
+    order (first error wins): the ``paths`` container, its length, then
+    each item in index order (type, then emptiness). A non-list/tuple
+    container or a non-str item raises ``TypeError``; fewer than two
+    items or an empty ``str`` raises ``ValueError``. Item errors are
+    prefixed with ``"paths[i]: "``.
+
+    :func:`load_overview_trend_report` is then called exactly once per
+    path, in input order; any exception it raises is propagated
+    unchanged. The input and the loaded files are not modified.
+
+    Every loaded report must have the same ``summary.count`` value as
+    the first one; otherwise a ``ValueError`` is raised.
+
+    For each successive pair ``i = 1..n-1`` the deltas are
+    ``dr = summary.regressed_i - summary.regressed_(i-1)`` and
+    ``dp = summary.passed_i - summary.passed_(i-1)``; a comparison
+    fails (``q`` is ``"fail"``) when ``dr > 0``, ``dp < 0`` or the
+    top-level ``quality`` changes from ``"pass"`` to ``"fail"``, and is
+    ``"pass"`` otherwise.
+
+    Returns a dict with keys in the order ``changes, worst, quality``:
+    ``changes`` is a tuple with one dict per pair (in ``i`` order), each
+    with keys in the order ``index, regressed_delta, passed_delta,
+    quality`` — ``index`` is the non-bool int ``i``,
+    ``regressed_delta``/``passed_delta`` are the non-bool ints ``dr``
+    and ``dp`` and ``quality`` is ``q``. ``worst`` is the ``changes``
+    item minimizing the tuple ``(passed_delta, -regressed_delta,
+    index)`` lexicographically (the same dict object, never a copy);
+    ``quality`` is ``"pass"`` exactly when every ``q`` is ``"pass"`` and
+    ``"fail"`` otherwise. Items are not sorted, values are not
+    recomputed and no other keys are added.
+    """
+    if not isinstance(paths, (list, tuple)):
+        raise TypeError("paths must be a list or tuple")
+    if len(paths) < 2:
+        raise ValueError("paths must contain at least 2 items")
+    for i in range(len(paths)):
+        prefix = f"paths[{i}]: "
+        if not isinstance(paths[i], str):
+            raise TypeError(prefix + "must be a str")
+        if paths[i] == "":
+            raise ValueError(prefix + "must not be empty")
+
+    reports = [load_overview_trend_report(path) for path in paths]
+
+    first_count = reports[0]["summary"]["count"]
+    for i in range(1, len(reports)):
+        count = reports[i]["summary"]["count"]
+        if count != first_count:
+            raise ValueError(
+                f"overview trend report at paths[{i}] summary.count "
+                f"{count} does not match {first_count}"
+            )
+
+    changes = []
+    worst_item = None
+    worst_key = None
+    overall = "pass"
+    for i in range(1, len(reports)):
+        previous_summary = reports[i - 1]["summary"]
+        current_summary = reports[i]["summary"]
+        dr = int(current_summary["regressed"]) - int(previous_summary["regressed"])
+        dp = int(current_summary["passed"]) - int(previous_summary["passed"])
+        if (
+            dr > 0
+            or dp < 0
+            or (
+                reports[i - 1]["quality"] == "pass"
+                and reports[i]["quality"] == "fail"
+            )
+        ):
+            verdict = "fail"
+            overall = "fail"
+        else:
+            verdict = "pass"
+
+        item = {
+            "index": int(i),
+            "regressed_delta": int(dr),
+            "passed_delta": int(dp),
+            "quality": verdict,
+        }
+        changes.append(item)
+
+        key = (dp, -dr, i)
+        if worst_key is None or key < worst_key:
+            worst_key = key
+            worst_item = item
+
+    return {
+        "changes": tuple(changes),
+        "worst": worst_item,
+        "quality": overall,
+    }
