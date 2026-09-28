@@ -936,6 +936,30 @@ JSON 字符串），第二行为
 ocean-sonar-modeling render-overview-comparison-report overview_comparison_report.json
 ```
 
+### `render-overview-comparison-report-trend TREND`
+
+把一份 `ocean_sonar.product.serialize_overview_comparison_report_trend`
+生成的总览比较报告趋势 JSON 文件渲染为汇总文本，等价于**仅调用一次**
+`ocean_sonar.product.render_overview_comparison_report_trend(path)`：其
+`load_overview_comparison_report_trend` 的校验、异常
+（`TypeError`/`ValueError`/`FileNotFoundError`/
+`IsADirectoryError`/`OSError` 原样向上传播）与文件不变性完全沿用被调
+函数。记加载结果为 `T`、`C = T["changes"]`、`W = T["worst"]`，成功
+时 stdout 输出以 `\n` 连接的文本并在末尾加一个换行：第一行为
+`TREND=<count>,<len(C)>,<regressed>,<quality>`（依次取自 `T` 的
+`count`、`len(C)`、`T["regressed"]`、`T["quality"]`），第二行为
+`WORST=<index>,<failed_delta>,<regressed_delta>,<passed_delta>,<quality>`
+（依次取自 `W` 的这五个键），随后按 `C` 原序逐行
+`CHANGE[<index>]=<failed_delta>,<regressed_delta>,<passed_delta>,<quality>`；
+各值直接取自 `T`，不重算、不重新排序，int 十进制、str 原样，stderr
+为空，退出码 0；文件不存在、内容非法等错误时 stdout 为空，stderr 严
+格输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数缺失或多
+余属于参数解析错误，退出码 2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling render-overview-comparison-report-trend overview_comparison_report_trend.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -995,7 +1019,8 @@ ocean-sonar-modeling render-overview-comparison-report overview_comparison_repor
 `export_overview_comparison_report`、
 `export_overview_comparison_report_trend`、
 `render_overview_comparison`、
-`render_overview_comparison_report`。其中
+`render_overview_comparison_report`、
+`render_overview_comparison_report_trend`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
@@ -1827,6 +1852,32 @@ tuple 中匹配的同一项（同一对象，非拷贝）。输入文件不被�
 `flush()`、`os.fsync()` 后用 `os.replace` 原子替换 `output`。替换
 前发生失败会清除临时文件且既有 `output` 逐字节不变；`OSError`
 原样传播。返回值与写入文件的字节为同一份 `bytes`。
+
+### `product.render_overview_comparison_report_trend(path) -> str`
+
+把一份总览比较报告趋势 JSON 渲染为纯文本。
+
+执行时**仅调用一次**
+`load_overview_comparison_report_trend(path)` 得到 `T`，在此之前不
+做任何其他工作、之后也不再调用第二次；因此 `path` 的校验契约、读
+取行为、异常（`TypeError`/`ValueError`/`FileNotFoundError`/
+`IsADirectoryError`/`OSError`，原样向上传播）与文件不变性完全沿
+用 `load_overview_comparison_report_trend`。输入文件不会被修改，
+`T` 也不会被修改。
+
+记 `C = T["changes"]`、`W = T["worst"]`，返回以 `\n` 连接、无尾
+换行的两行表头加每个变化项一行的文本：
+
+1. `TREND=<count>,<len(C)>,<regressed>,<quality>`，依次取自
+   `T["count"]`、`len(C)`、`T["regressed"]`、`T["quality"]`；
+2. `WORST=<index>,<failed_delta>,<regressed_delta>,<passed_delta>,
+   <quality>`，依次取自 `W` 的这五个键；
+3. 随后按 `C` 原序逐行
+   `CHANGE[<index>]=<failed_delta>,<regressed_delta>,<passed_delta>,
+   <quality>`。
+
+所有值直接取自 `T`，不重算、不重新排序：`int` 按十进制渲染，
+`str` 原样，格式沿 `render_overview_comparison_report`。
 
 ### 通用约定
 
