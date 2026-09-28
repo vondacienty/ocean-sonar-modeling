@@ -46,6 +46,7 @@ from .product import (
     render_quality_report_trend as _render_quality_report_trend,
     render_quality_trend as _render_quality_trend,
     render_quality_trend_report as _render_quality_trend_report,
+    trend_dashboard as _trend_dashboard,
 )
 from .report import rank_files
 from .strip import batch as _strip_batch
@@ -593,6 +594,8 @@ def main(argv: list[str] | None = None) -> int:
     render_overview_comparison_report_parser.add_argument("comparison_report", metavar="REPORT", help="overview comparison report JSON file")
     render_overview_comparison_report_trend_parser = sub.add_parser("render-overview-comparison-report-trend", help="render one overview comparison report trend JSON file as summary lines")
     render_overview_comparison_report_trend_parser.add_argument("comparison_report_trend", metavar="TREND", help="overview comparison report trend JSON file")
+    trend_dashboard_parser = sub.add_parser("trend-dashboard", help="summarize one overview comparison report trend JSON file as two dashboard lines")
+    trend_dashboard_parser.add_argument("trend", metavar="TREND", help="overview comparison report trend JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -1078,6 +1081,33 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
         sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "trend-dashboard":
+        try:
+            dashboard = _trend_dashboard(args.trend)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        summary = dashboard["summary"]
+        worst = dashboard["trend"]["worst"]
+        lines = (
+            "DASHBOARD={},{},{},{},{}".format(
+                summary["reports"],
+                summary["passed"],
+                summary["regressed"],
+                _format_trend_value(summary["ratio"]),
+                dashboard["quality"],
+            ),
+            "WORST={},{},{},{},{}".format(
+                worst["index"],
+                worst["failed_delta"],
+                worst["regressed_delta"],
+                worst["passed_delta"],
+                worst["quality"],
+            ),
+        )
+        sys.stdout.write("\n".join(lines) + "\n")
         return 0
 
     parser.print_help()

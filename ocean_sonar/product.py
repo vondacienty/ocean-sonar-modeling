@@ -78,6 +78,7 @@ __all__ = [
     "load_overview_comparison_report_trend",
     "export_overview_comparison_report_trend",
     "render_overview_comparison_report_trend",
+    "trend_dashboard",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -5196,3 +5197,51 @@ def render_overview_comparison_report_trend(path) -> str:
         )
 
     return "\n".join(lines)
+
+
+def trend_dashboard(path) -> dict:
+    """Summarize a :func:`load_overview_comparison_report_trend`-loaded JSON trend.
+
+    :func:`load_overview_comparison_report_trend` is called exactly once
+    with ``path`` unchanged and no other work happens before it; the
+    ``path`` validation contract, the read behavior, every exception
+    (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`load_overview_comparison_report_trend`
+    therefore apply here verbatim. The file is not modified.
+
+    Let ``T`` be the dict returned by that single call, ``W =
+    T["worst"]``, ``n = len(T["changes"])``, ``r = T["regressed"]`` and
+    ``p = n - r``.
+
+    Returns a dict with keys in the order ``trend, summary, quality``:
+    ``trend`` is the ``T`` object itself (identity preserved, not
+    modified); ``summary`` is a dict with keys in the order ``reports,
+    passed, regressed, ratio, worst`` and values ``T["count"]``, ``p``,
+    ``r``, ``round(float(p / n), 6)`` (negative zero normalized to
+    ``0.0``) and ``W["index"]``; ``quality`` is ``T["quality"]``.
+    ``reports``, ``passed``, ``regressed`` and ``worst`` are ``int`` and
+    ``ratio`` is a ``float``. ``worst`` is not recomputed and no other
+    keys are added.
+    """
+    trend = load_overview_comparison_report_trend(path)
+    worst = trend["worst"]
+
+    n = len(trend["changes"])
+    r = trend["regressed"]
+    p = n - r
+    ratio = round(float(p / n), 6)
+    if ratio == 0:
+        ratio = 0.0
+
+    return {
+        "trend": trend,
+        "summary": {
+            "reports": trend["count"],
+            "passed": p,
+            "regressed": r,
+            "ratio": ratio,
+            "worst": worst["index"],
+        },
+        "quality": trend["quality"],
+    }
