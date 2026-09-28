@@ -960,6 +960,30 @@ ocean-sonar-modeling render-overview-comparison-report overview_comparison_repor
 ocean-sonar-modeling render-overview-comparison-report-trend overview_comparison_report_trend.json
 ```
 
+### `trend-dashboard TREND`
+
+把一份 `ocean_sonar.product.serialize_overview_comparison_report_trend`
+生成的总览比较报告趋势 JSON 文件汇总为两行仪表盘文本，等价于**仅调用一
+次** `ocean_sonar.product.trend_dashboard(path)`：其
+`load_overview_comparison_report_trend` 的校验、异常
+（`TypeError`/`ValueError`/`FileNotFoundError`/
+`IsADirectoryError`/`OSError` 原样向上传播）与文件不变性完全沿用被调
+函数。记返回字典为 `D`、`S = D["summary"]`、`T = D["trend"]`、`W =
+T["worst"]`，成功时 stdout 输出两行文本加一个换行：第一行为
+`DASHBOARD=<reports>,<passed>,<regressed>,<ratio>,<quality>`
+（依次取自 `S` 的 `reports`、`passed`、`regressed`、`ratio` 与
+`D["quality"]`），第二行为
+`WORST=<index>,<failed_delta>,<regressed_delta>,<passed_delta>,<quality>`
+（各值直接取自 `W`，不重新计算 worst；int 十进制、str 原样、float 用
+`format(v, ".6f")` 且负零写作 `0.000000`），stderr 为空，退出码 0；
+文件不存在、内容非法等错误时 stdout 为空，stderr 严格输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数缺失或多余属于
+参数解析错误，退出码 2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling trend-dashboard overview_comparison_report_trend.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -1020,7 +1044,8 @@ ocean-sonar-modeling render-overview-comparison-report-trend overview_comparison
 `export_overview_comparison_report_trend`、
 `render_overview_comparison`、
 `render_overview_comparison_report`、
-`render_overview_comparison_report_trend`。其中
+`render_overview_comparison_report_trend`、
+`trend_dashboard`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
@@ -1878,6 +1903,27 @@ tuple 中匹配的同一项（同一对象，非拷贝）。输入文件不被�
 
 所有值直接取自 `T`，不重算、不重新排序：`int` 按十进制渲染，
 `str` 原样，格式沿 `render_overview_comparison_report`。
+
+### `product.trend_dashboard(path) -> dict`
+
+把一份总览比较报告趋势 JSON 汇总为仪表盘字典。
+
+执行时**仅调用一次**
+`load_overview_comparison_report_trend(path)` 得到 `T`，在此之前不
+做任何其他工作、之后也不再调用第二次；因此 `path` 的校验契约、读
+取行为、异常（`TypeError`/`ValueError`/`FileNotFoundError`/
+`IsADirectoryError`/`OSError`，原样向上传播）与文件不变性完全沿
+用 `load_overview_comparison_report_trend`。输入文件不会被修改，
+`T` 也不会被修改。
+
+记 `W = T["worst"]`、`n = len(T["changes"])`、`r =
+T["regressed"]`、`p = n - r`、`c = round(float(p / n), 6)`（负零
+归一化为 `0.0`）。返回键序为 `trend, summary, quality` 的字典：
+`trend` 即 `T` 原对象（保持同一性）；`summary` 的键序为
+`reports, passed, regressed, ratio, worst`，值依次为
+`T["count"]`、`p`、`r`、`c`、`W["index"]`；`quality` 为
+`T["quality"]`。`reports`、`passed`、`regressed`、`worst` 为
+`int`，`ratio` 为 `float`；worst 不被重算，也不添加其他键。
 
 ### 通用约定
 
