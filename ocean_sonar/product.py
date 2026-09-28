@@ -74,6 +74,7 @@ __all__ = [
     "render_overview_comparison",
     "render_overview_comparison_report",
     "overview_comparison_report_trend",
+    "serialize_overview_comparison_report_trend",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -4603,6 +4604,58 @@ def overview_comparison_report_trend(paths) -> dict:
         "worst": worst_item,
         "quality": "pass" if regressed == 0 else "fail",
     }
+
+
+def _dump_overview_comparison_report_trend(trend) -> bytes:
+    try:
+        text = json.dumps(
+            _to_jsonable(trend),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            "overview comparison report trend: could not be serialized "
+            f"to JSON: {exc}"
+        ) from exc
+
+
+def serialize_overview_comparison_report_trend(paths) -> bytes:
+    """Serialize the :func:`overview_comparison_report_trend` comparison of ``paths`` to bytes.
+
+    Exactly one call to :func:`overview_comparison_report_trend` is made
+    with ``paths`` unchanged and no other work happens before it; the
+    ``paths`` validation contract, the per-path
+    :func:`load_overview_comparison_report` behavior, every exception
+    (propagated unchanged) and the input/file invariance of
+    :func:`overview_comparison_report_trend` therefore apply here
+    verbatim. Neither ``paths`` nor the loaded files are modified.
+
+    Let ``T`` be the dict returned by that single
+    :func:`overview_comparison_report_trend` call. It is encoded
+    directly, with keys exactly in the order ``count, changes,
+    regressed, worst, quality``; the ``changes`` tuple is converted to a
+    JSON array in its original order and each item, like ``worst``,
+    keeps its key order ``index, failed_delta, regressed_delta,
+    passed_delta, quality``. The first four values are non-bool ints
+    and the last one is ``"pass"`` or ``"fail"``. ``worst`` is written
+    exactly as it appears in ``T`` — the same item of ``changes`` —
+    without recomputation, sorting or extra keys.
+
+    The JSON byte specification follows
+    :func:`serialize_overview_comparison`: UTF-8,
+    ``ensure_ascii=False``, ``separators=(",", ":")``,
+    ``allow_nan=False``, no indentation, no BOM and no trailing
+    newline; tuples are recursively converted to arrays and ints are
+    written in decimal. Any JSON or UTF-8 encoding failure raises
+    ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    trend = overview_comparison_report_trend(paths)
+    return _dump_overview_comparison_report_trend(trend)
 
 
 def export_overview_comparison(paths, output) -> bytes:

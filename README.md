@@ -963,7 +963,9 @@ ocean-sonar-modeling render-overview-comparison-report overview_comparison_repor
 `serialize_overview_comparison_report`、`load_overview_comparison`、
 `load_overview_comparison_report`、`export_overview_comparison`、
 `export_overview_comparison_report`、`render_overview_comparison`、
-`render_overview_comparison_report`。其中
+`render_overview_comparison_report`、
+`overview_comparison_report_trend`、
+`serialize_overview_comparison_report_trend`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
@@ -1700,6 +1702,72 @@ JSON 字节规范完全沿用 `serialize_overview_comparison`，且
 
 所有值直接取自 `R`，不重算、不重新排序：`int` 十进制、`str` 原
 样，格式沿 `render_overview_trend_report`。
+
+### `product.overview_comparison_report_trend(paths) -> dict`
+
+把多份总览比较报告 JSON 依次比较，返回趋势判定字典。
+
+`paths` 必须为至少含 2 项的 `list`/`tuple`，各项按下标顺序必须为非空
+`str`。校验顺序（先报错者胜出）：先校验 `paths` 容器，再校验长度，最
+后按各项下标顺序逐项校验（先类型后非空）。非 `list`/`tuple` 容器或非
+`str` 项抛 `TypeError`（`paths must be a list or tuple`、
+`paths[i]: must be a str`），少于 2 项或空串抛 `ValueError`
+（`paths must contain at least 2 items`、`paths[i]: must not be
+empty`），项级错误均带 `paths[i]: ` 前缀。
+
+随后按输入顺序对每个路径**仅调用一次**
+`load_overview_comparison_report(path)`；不预读、不排序、不重新加载路
+径。它抛出的任何异常（`TypeError`/`ValueError`/
+`FileNotFoundError`/`IsADirectoryError`/`OSError`）原样向上传播。输入
+与所加载的文件均不被修改。
+
+每份加载报告的 `summary.count` 必须与第一份相同，否则抛
+`ValueError`（`overview comparison report at paths[i] summary.count
+<值> does not match <首值>`）。
+
+对每个相邻对 `i = 1..n-1`，取未舍入差值
+`f = summary.failed_i - summary.failed_(i-1)`、
+`r = summary.regressed_delta_i -
+summary.regressed_delta_(i-1)`、
+`p = summary.passed_delta_i - summary.passed_delta_(i-1)`；当
+`f > 0`、`r > 0`、`p < 0` 或报告 `quality` 由 `"pass"` 变为
+`"fail"` 时判定为 `"fail"`，否则为 `"pass"`。
+
+返回键序恰为 `count, changes, regressed, worst, quality` 的
+`dict`：`count` 为非布尔 `int` 型的快照数 `n`；`changes` 为
+`tuple`，按 `i` 顺序每个相邻对一个 `dict`，键序恰为
+`index, failed_delta, regressed_delta, passed_delta, quality`，前四项
+为非布尔 `int`（`index` 为 `i`，其余为未舍入的 `f`、`r`、`p`），末
+项为 `"pass"`/`"fail"`；`regressed` 为 `changes` 中判定为
+`"fail"` 的项数；`worst` 为使元组 `(p, -f, -r, i)` 字典序最小的
+`changes` 原 `dict` 对象本身（不复制、不重算、不排序）；`quality`
+仅当 `regressed` 为 `0` 时为 `"pass"`，否则为 `"fail"`。不新增键。
+
+### `product.serialize_overview_comparison_report_trend(paths) -> bytes`
+
+把多份总览比较报告 JSON 的趋势比较结果序列化为 UTF-8 JSON 字节串。
+
+执行时**先且仅调用一次**
+`overview_comparison_report_trend(paths)` 得到 `T`，在此之前不做任何
+其他工作（不预读、不排序、不重新加载路径）、之后也不再调用第二次；
+因此 `paths` 容器校验、至少两项、逐项非空 `str` 的校验顺序、
+`TypeError`/`ValueError` 与 `paths[i]: ` 下标前缀、逐路径
+`load_overview_comparison_report` 的行为、异常（原样向上传播）以及输
+入/文件不变性完全沿用 `overview_comparison_report_trend`。输入与所加
+载的文件均不被修改。
+
+直接编码 `T`：顶层键序恰为
+`count, changes, regressed, worst, quality`；`changes` 的 `tuple`
+按原序转为 JSON 数组；各变化项与 `worst` 的键序均为
+`index, failed_delta, regressed_delta, passed_delta, quality`，前四
+值为非布尔 `int`（十进制写出），末值仅为 `"pass"` 或 `"fail"`。
+`worst` 按 `T` 中的原值写出，不重算、不排序、不新增键。
+
+JSON 字节规范：UTF-8、`ensure_ascii=False`、
+`separators=(",", ":")`、`allow_nan=False`，无缩进、无 BOM、无尾换
+行，`tuple` 递归转为数组。JSON 或 UTF-8 编码失败抛 `ValueError`。
+
+返回 JSON 文档的 `bytes`；不修改输入，也不修改任何文件。
 
 ### 通用约定
 
