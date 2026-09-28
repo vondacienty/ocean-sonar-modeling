@@ -63,6 +63,7 @@ __all__ = [
     "export_overview_trend",
     "export_overview_trend_report",
     "load_overview_trend_report",
+    "render_overview_trend_report",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -3789,3 +3790,71 @@ def load_overview_trend_report(path) -> dict:
         },
         "quality": parsed["quality"],
     }
+
+
+def render_overview_trend_report(path) -> str:
+    """Render a :func:`load_overview_trend_report`-loaded JSON report as three lines.
+
+    :func:`load_overview_trend_report` is called exactly once with
+    ``path`` unchanged and no other work happens before it; the
+    ``path`` validation contract, the read behavior, every exception
+    (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`load_overview_trend_report` therefore
+    apply here verbatim. The file is not modified.
+
+    Let ``R`` be the dict returned by that single call, ``S =
+    R["summary"]`` and ``W = R["worst"]``; returns three lines joined
+    by ``"\\n"`` with no trailing newline::
+
+        REPORT=<schema_version>,<JSON path>,<kind>,<quality>
+        SUMMARY=<count>,<changes>,<regressed>,<passed>
+        WORST=<index>;<qualities>;<regressions>;<quality>
+
+    The REPORT values are ``R["schema_version"]``, the compact
+    ``ensure_ascii=False`` JSON string of ``R["source"]["path"]``
+    (rendered with ``json.dumps(v, ensure_ascii=False,
+    separators=(",", ":"))``), ``R["source"]["kind"]`` and
+    ``R["quality"]``; the SUMMARY values are the ``count``,
+    ``changes``, ``regressed`` and ``passed`` of ``S`` in that order;
+    in the WORST line ``<index>`` is ``W["index"]``, ``<qualities>``
+    and ``<regressions>`` are the four items of ``W["qualities"]`` and
+    ``W["regressions"]`` in their original order joined by commas (the
+    regression bools rendered strictly as ``"True"``/``"False"``) and
+    the trailing ``<quality>`` is ``W["quality"]``. Values are taken
+    directly from ``R`` with no recomputation or re-sorting: ints are
+    formatted in decimal and strings are copied as-is.
+    """
+    report = load_overview_trend_report(path)
+    source = report["source"]
+    summary = report["summary"]
+    worst = report["worst"]
+
+    source_path = json.dumps(
+        source["path"], ensure_ascii=False, separators=(",", ":")
+    )
+    first_line = (
+        f"REPORT={_format_trend_value(report['schema_version'])},"
+        f"{source_path},"
+        f"{_format_trend_value(source['kind'])},"
+        f"{_format_trend_value(report['quality'])}"
+    )
+    second_line = (
+        f"SUMMARY={_format_trend_value(summary['count'])},"
+        f"{_format_trend_value(summary['changes'])},"
+        f"{_format_trend_value(summary['regressed'])},"
+        f"{_format_trend_value(summary['passed'])}"
+    )
+    worst_qualities = ",".join(
+        _format_trend_value(value) for value in worst["qualities"]
+    )
+    worst_regressions = ",".join(
+        _format_trend_value(value) for value in worst["regressions"]
+    )
+    third_line = (
+        f"WORST={_format_trend_value(worst['index'])};"
+        f"{worst_qualities};{worst_regressions};"
+        f"{_format_trend_value(worst['quality'])}"
+    )
+
+    return "\n".join((first_line, second_line, third_line))

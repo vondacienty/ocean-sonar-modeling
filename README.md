@@ -775,6 +775,37 @@ substrate、crosspoint、overall 四个质量字符串，`b0` 至 `b3` 取同
 ocean-sonar-modeling render-overview-trend overview_trend.json
 ```
 
+### `render-overview-trend-report REPORT`
+
+把一份 `ocean_sonar.product.export_overview_trend_report` 生成的总览
+趋势报告 JSON 文件渲染为三行汇总文本，等价于**仅调用一次**
+`ocean_sonar.product.render_overview_trend_report(path)`：其
+`load_overview_trend_report` 的校验、异常
+（`TypeError`/`ValueError`/`FileNotFoundError`/
+`IsADirectoryError`/`OSError` 原样向上传播）与文件不变性完全沿用被
+调函数。记 `R` 为加载结果，成功时 stdout 输出三行文本加一个换行：
+第一行为
+`REPORT=<schema_version>,<JSON路径>,<kind>,<quality>`（`<JSON路径>`
+为 `R["source"]["path"]` 以
+`json.dumps(v,ensure_ascii=False,separators=(',',':'))` 渲染的紧凑
+JSON 字符串，其余依次取自 `R["schema_version"]`、
+`R["source"]["kind"]`、`R["quality"]`）；第二行为
+`SUMMARY=<count>,<changes>,<regressed>,<passed>`（依次取自
+`R["summary"]` 同名字段）；第三行为
+`WORST=<index>;<qualities>;<regressions>;<quality>`，其中
+`<index>` 取 `R["worst"]["index"]`，`<qualities>` 与
+`<regressions>` 各按 `R["worst"]` 中四项原序用逗号连接（
+`regressions` 的布尔值严格写作 `True`/`False`），末尾
+`<quality>` 取 `R["worst"]["quality"]`。各值直接取自 `R`，不重
+算、不重新排序；`int` 十进制、`str` 原样，stderr 为空，退出码 0；
+文件不存在、内容非法等错误时 stdout 为空，stderr 严格输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数缺失或多余属
+于参数解析错误，退出码 2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling render-overview-trend-report overview_trend_report.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -823,7 +854,7 @@ ocean-sonar-modeling render-overview-trend overview_trend.json
 `export_quality_report_trend`、`quality_dashboard`、
 `serialize_overview`、`load_overview`、`render_overview`、
 `export_overview`、`render_overview_trend`、
-`export_overview_trend`。其中
+`export_overview_trend`、`render_overview_trend_report`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
@@ -1432,6 +1463,35 @@ O["crosspoint"]["trend"]`、`M = O["summary"]`，返回以 `\n` 连接、
 所有值直接取自 `T`，不重算、不重新排序：`int` 按十进制渲染，
 `str` 原样，`bool` 用 `str(v)`（即 `True`/`False`），格式沿
 `render_quality_report_trend`。
+
+### `product.render_overview_trend_report(path) -> str`
+
+把一份总览趋势报告 JSON 渲染为三行纯文本。
+
+执行时**仅调用一次** `load_overview_trend_report(path)` 得到 `R`，
+在此之前不做任何其他工作、之后也不再调用第二次；因此 `path` 的校
+验契约、读取行为、异常（`TypeError`/`ValueError`/
+`FileNotFoundError`/`IsADirectoryError`/`OSError`，原样向上传播）
+与文件不变性完全沿用 `load_overview_trend_report`。输入文件不会被
+修改，`R` 也不会被修改。
+
+返回以 `\n` 连接、无尾换行的三行文本：
+
+1. `REPORT=<schema_version>,<JSON路径>,<kind>,<quality>`，依次取自
+   `R["schema_version"]`、`R["source"]["path"]`、
+   `R["source"]["kind"]`、`R["quality"]`，其中 `<JSON路径>` 为
+   `json.dumps(v,ensure_ascii=False,separators=(',',':'))` 的渲染
+   结果；
+2. `SUMMARY=<count>,<changes>,<regressed>,<passed>`，四个值依次取
+   自 `R["summary"]` 的同名字段；
+3. `WORST=<index>;<qualities>;<regressions>;<quality>`：`<index>`
+   取 `R["worst"]["index"]`；`<qualities>` 与 `<regressions>` 各
+   按 `R["worst"]` 中四项原序用逗号连接，`regressions` 的布尔值
+   严格写作 `True`/`False`；末尾 `<quality>` 取
+   `R["worst"]["quality"]`。
+
+所有值直接取自 `R`，不重算、不重新排序：`int` 按十进制渲染，
+`str` 原样，`bool` 用 `str(v)`（即 `True`/`False`）。
 
 ### 通用约定
 
