@@ -905,7 +905,8 @@ ocean-sonar-modeling render-overview-comparison overview_comparison.json
 `export_overview_trend`、`export_overview_trend_report`、
 `load_overview_trend_report`、`render_overview_trend_report`、
 `compare_overview_reports`、`serialize_overview_comparison`、
-`load_overview_comparison`、`export_overview_comparison`、
+`serialize_overview_comparison_report`、`load_overview_comparison`、
+`load_overview_comparison_report`、`export_overview_comparison`、
 `render_overview_comparison`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 

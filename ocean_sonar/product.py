@@ -68,6 +68,7 @@ __all__ = [
     "serialize_overview_comparison",
     "serialize_overview_comparison_report",
     "load_overview_comparison",
+    "load_overview_comparison_report",
     "export_overview_comparison",
     "render_overview_comparison",
 ]
@@ -176,6 +177,20 @@ _OVERVIEW_COMPARISON_ITEM_KEYS = (
     "regressed_delta",
     "passed_delta",
     "quality",
+)
+_OVERVIEW_COMPARISON_REPORT_KEYS = (
+    "schema_version",
+    "source",
+    "summary",
+    "worst",
+    "quality",
+)
+_OVERVIEW_COMPARISON_REPORT_SOURCE_KEYS = ("path", "kind")
+_OVERVIEW_COMPARISON_REPORT_SUMMARY_KEYS = (
+    "count",
+    "failed",
+    "regressed_delta",
+    "passed_delta",
 )
 
 
@@ -4264,6 +4279,210 @@ def load_overview_comparison(path) -> dict:
         "worst": worst_item,
         "quality": parsed["quality"],
     }
+
+
+def _check_overview_comparison_report(report):
+    if not isinstance(report, dict):
+        raise ValueError("overview comparison report must be a JSON object")
+    if list(report.keys()) != list(_OVERVIEW_COMPARISON_REPORT_KEYS):
+        raise ValueError(
+            "overview comparison report keys must be in the order "
+            "schema_version, source, summary, worst, quality"
+        )
+
+    schema_version = report["schema_version"]
+    if type(schema_version) is not int:
+        raise ValueError(
+            "overview comparison report: schema_version must be a "
+            "non-bool int"
+        )
+    if schema_version != 1:
+        raise ValueError(
+            "overview comparison report: schema_version must be 1"
+        )
+
+    source = report["source"]
+    if not isinstance(source, dict):
+        raise ValueError(
+            "overview comparison report: source must be a JSON object"
+        )
+    if list(source.keys()) != list(_OVERVIEW_COMPARISON_REPORT_SOURCE_KEYS):
+        raise ValueError(
+            "overview comparison report: source keys must be in the "
+            "order path, kind"
+        )
+    source_path = source["path"]
+    if type(source_path) is not str:
+        raise ValueError(
+            "overview comparison report: source.path must be a str"
+        )
+    if source_path == "":
+        raise ValueError(
+            "overview comparison report: source.path must not be empty"
+        )
+    if source["kind"] != "overview_comparison":
+        raise ValueError(
+            "overview comparison report: source.kind must be "
+            "'overview_comparison'"
+        )
+
+    summary = report["summary"]
+    if not isinstance(summary, dict):
+        raise ValueError(
+            "overview comparison report: summary must be a JSON object"
+        )
+    if list(summary.keys()) != list(
+        _OVERVIEW_COMPARISON_REPORT_SUMMARY_KEYS
+    ):
+        raise ValueError(
+            "overview comparison report: summary keys must be in the "
+            "order count, failed, regressed_delta, passed_delta"
+        )
+
+    count = summary["count"]
+    if type(count) is not int:
+        raise ValueError(
+            "overview comparison report: summary.count must be a "
+            "non-bool int"
+        )
+    if not count > 0:
+        raise ValueError(
+            "overview comparison report: summary.count must be > 0"
+        )
+
+    failed = summary["failed"]
+    if type(failed) is not int:
+        raise ValueError(
+            "overview comparison report: summary.failed must be a "
+            "non-bool int"
+        )
+    if not 0 <= failed <= count:
+        raise ValueError(
+            "overview comparison report: summary.failed must be in "
+            "[0, count]"
+        )
+
+    for name in ("regressed_delta", "passed_delta"):
+        value = summary[name]
+        if type(value) is not int:
+            raise ValueError(
+                f"overview comparison report: summary.{name} must be a "
+                "non-bool int"
+            )
+
+    worst = report["worst"]
+    _check_overview_comparison_item(
+        worst, "overview comparison report: worst: "
+    )
+    if not 1 <= worst["index"] <= count:
+        raise ValueError(
+            "overview comparison report: worst.index must be in [1, count]"
+        )
+
+    quality = report["quality"]
+    if type(quality) is not str:
+        raise ValueError("overview comparison report: quality must be a str")
+    if quality not in _QUALITY_VALUES:
+        raise ValueError(
+            "overview comparison report: quality must be 'pass' or 'fail'"
+        )
+    expected = "pass" if failed == 0 else "fail"
+    if quality != expected:
+        raise ValueError(
+            "overview comparison report: quality must be 'pass' exactly "
+            "when summary.failed is 0"
+        )
+    if quality == "pass" and worst["quality"] != "pass":
+        raise ValueError(
+            "overview comparison report: worst.quality must be 'pass' "
+            "when quality is 'pass'"
+        )
+
+
+def load_overview_comparison_report(path) -> dict:
+    """Load a :func:`serialize_overview_comparison_report` JSON report from ``path``.
+
+    ``path`` must be a non-empty ``str``: a non-str raises ``TypeError``
+    and an empty ``str`` raises ``ValueError``. The file is opened in
+    binary mode (``"rb"``) and read in full; a missing file raises
+    ``FileNotFoundError``, a directory raises ``IsADirectoryError`` and
+    every other ``OSError`` is propagated unchanged. The file is not
+    modified.
+
+    The bytes must be exactly those produced by
+    :func:`serialize_overview_comparison_report` for the same value:
+    compact UTF-8 JSON with no BOM and no trailing newline. A BOM, a
+    trailing newline, a UTF-8 decoding failure, a JSON parsing failure,
+    a ``NaN``/``Infinity`` constant or a repeated JSON object key raises
+    ``ValueError``.
+
+    The decoded value must be a JSON object with keys exactly in the
+    order ``schema_version, source, summary, worst, quality``:
+    ``schema_version`` is the non-bool int ``1``; ``source`` is an
+    object with keys exactly in the order ``path, kind`` whose values
+    are a non-empty ``str`` and the fixed string
+    ``"overview_comparison"``; ``summary`` is an object with keys
+    exactly in the order ``count, failed, regressed_delta,
+    passed_delta`` whose four values are non-bool ints with
+    ``count > 0`` and ``0 <= failed <= count``; ``worst`` is an object
+    with keys exactly in the order ``index, regressed_delta,
+    passed_delta, quality`` where ``index``, ``regressed_delta`` and
+    ``passed_delta`` are non-bool ints with ``1 <= index <= count`` and
+    ``quality`` is ``"pass"`` or ``"fail"``; and the top-level
+    ``quality`` is ``"pass"`` or ``"fail"``, ``"pass"`` exactly when
+    ``failed`` is ``0``, in which case ``worst.quality`` must also be
+    ``"pass"``. Finally the file bytes must equal the canonical
+    re-encoding of the decoded value via
+    :func:`serialize_overview_comparison_report` byte for byte. Every
+    key-order, type, range, relation, parse or canonical-byte mismatch
+    raises ``ValueError``.
+
+    Returns the report as a dict with the keys in the order above; the
+    file is never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_keys,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        _check_overview_comparison_report(parsed)
+        canonical = _dump_overview_comparison(parsed)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid overview comparison report: "
+            f"{exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical "
+            "serialize_overview_comparison_report output"
+        )
+
+    return parsed
 
 
 def export_overview_comparison(paths, output) -> bytes:
