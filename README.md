@@ -962,6 +962,7 @@ ocean-sonar-modeling render-overview-comparison-report overview_comparison_repor
 `compare_overview_reports`、`serialize_overview_comparison`、
 `serialize_overview_comparison_report`、
 `serialize_overview_comparison_report_trend`、
+`load_overview_comparison_report_trend`、
 `load_overview_comparison`、
 `load_overview_comparison_report`、`export_overview_comparison`、
 `export_overview_comparison_report`、`render_overview_comparison`、
@@ -1728,6 +1729,46 @@ worst, quality`；`changes` 的 tuple 按原序转为 JSON 数组；各变化项
 `ensure_ascii=False`、`separators=(",", ":")`、`allow_nan=False`，
 无缩进、无 BOM、无尾换行；tuple 递归转为数组。任何 JSON 或 UTF-8
 编码失败抛 `ValueError`。返回 `bytes`。
+
+### `product.load_overview_comparison_report_trend(path) -> dict`
+
+读取一份 `serialize_overview_comparison_report_trend` 生成的总览比
+较报告趋势 JSON。
+
+`path` 必须为非空 `str`：非 `str` 抛 `TypeError`
+（`path must be a str`），空串抛 `ValueError`
+（`path must not be empty`）。文件以 `"rb"` 打开并一次性读入：文件
+不存在抛 `FileNotFoundError`，路径是目录抛 `IsADirectoryError`，其
+余 `OSError` 原样传播。文件不被修改。
+
+字节必须逐字等于对同一取值调用
+`serialize_overview_comparison_report_trend` 的产物：无 BOM、无尾换
+行的紧凑 UTF-8 JSON。BOM、尾换行、UTF-8 解码失败、JSON 解析失
+败、`NaN`/`Infinity` 常量、重复 JSON 对象键或任何非规范字节均抛
+`ValueError`。
+
+解码值必须是键序严格为 `count, changes, regressed, worst, quality`
+的 JSON 对象：
+
+- `count` 为非布尔 `int` 且 `>= 2`；
+- `changes` 为恰含 `count - 1` 项的 JSON 数组；每一项与 `worst`
+  一样是键序严格为 `index, failed_delta, regressed_delta,
+  passed_delta, quality` 的对象，前四值为非布尔 `int`，`index` 从
+  `1` 起连续，`quality` 仅为 `"pass"`/`"fail"`；
+- `regressed` 为非布尔 `int`，等于 `changes` 中 `quality` 为
+  `"fail"` 的项数；
+- `worst` 必须等于按
+  `(passed_delta, -failed_delta, -regressed_delta, index)`
+  字典序取最小的那个 `changes` 项；
+- 顶层 `quality` 仅在 `regressed == 0` 时为 `"pass"`，否则为
+  `"fail"`。
+
+任何键序、类型、取值范围、相互关系或解析错误均抛 `ValueError`；
+此外文件字节必须与解码值的规范重编码逐字节相等，否则抛
+`ValueError`。
+
+返回保持原键序的 dict，其中 `changes` 转为 tuple，`worst` 引用该
+tuple 中匹配的同一项（同一对象，非拷贝）。输入文件不被修改。
 
 ### 通用约定
 
