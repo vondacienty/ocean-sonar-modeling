@@ -882,6 +882,33 @@ ocean-sonar-modeling export-overview-comparison-report overview_comparison.json 
 ocean-sonar-modeling render-overview-comparison overview_comparison.json
 ```
 
+### `render-overview-comparison-report REPORT`
+
+把一份 `ocean_sonar.product.export_overview_comparison_report` 生成的总
+览比较报告 JSON 文件渲染为三行汇总文本，等价于**仅调用一次**
+`ocean_sonar.product.render_overview_comparison_report(path)`：其
+`load_overview_comparison_report` 的校验、异常
+（`TypeError`/`ValueError`/`FileNotFoundError`/
+`IsADirectoryError`/`OSError` 原样向上传播）与文件不变性完全沿用被
+调函数。记 `R` 为加载结果，成功时 stdout 输出三行文本加一个换行：
+第一行为
+`REPORT=<schema_version>,<JSON路径>,<kind>,<quality>`（`<JSON路径>`
+为 `R["source"]["path"]` 经
+`json.dumps(v,ensure_ascii=False,separators=(',',':'))` 渲染的紧凑
+JSON 字符串），第二行为
+`SUMMARY=<count>,<failed>,<regressed_delta>,<passed_delta>`（依次取
+自 `R["summary"]` 的这四个键），第三行为
+`WORST=<index>,<regressed_delta>,<passed_delta>,<quality>`（依次取
+自 `R["worst"]` 的这四个键）；各值直接取自 `R`，不重算、不重新排
+序，int 十进制、str 原样，stderr 为空，退出码 0；文件不存在、内容
+非法等错误时 stdout 为空，stderr 严格输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数缺失或多余属
+于参数解析错误，退出码 2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling render-overview-comparison-report overview_comparison_report.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -935,7 +962,8 @@ ocean-sonar-modeling render-overview-comparison overview_comparison.json
 `compare_overview_reports`、`serialize_overview_comparison`、
 `serialize_overview_comparison_report`、`load_overview_comparison`、
 `load_overview_comparison_report`、`export_overview_comparison`、
-`export_overview_comparison_report`、`render_overview_comparison`。其中
+`export_overview_comparison_report`、`render_overview_comparison`、
+`render_overview_comparison_report`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
@@ -1647,6 +1675,31 @@ JSON 字节规范完全沿用 `serialize_overview_comparison`，且
 
 所有值直接取自 `C`，不重算、不重新排序：`int` 按十进制渲染，
 `str` 原样，格式沿 `render_quality_report_trend`。
+
+### `product.render_overview_comparison_report(path) -> str`
+
+把一份总览比较报告 JSON 渲染为三行纯文本。
+
+执行时**仅调用一次** `load_overview_comparison_report(path)` 得到
+`R`，在此之前不做任何其他工作、之后也不再调用第二次；因此 `path`
+的校验契约、读取行为、异常（`TypeError`/`ValueError`/
+`FileNotFoundError`/`IsADirectoryError`/`OSError`，原样向上传播）
+与文件不变性完全沿用 `load_overview_comparison_report`。输入文件不
+会被修改，`R` 也不会被修改。
+
+返回以 `\n` 连接、无尾换行的三行文本：
+
+1. `REPORT=<schema_version>,<JSON路径>,<kind>,<quality>`，依次取
+   `R["schema_version"]`、`R["source"]["path"]` 经
+   `json.dumps(v,ensure_ascii=False,separators=(',',':'))` 渲染的
+   紧凑 JSON 字符串、`R["source"]["kind"]`、`R["quality"]`；
+2. `SUMMARY=<count>,<failed>,<regressed_delta>,<passed_delta>`，依
+   次取自 `R["summary"]` 的这四个键；
+3. `WORST=<index>,<regressed_delta>,<passed_delta>,<quality>`，依次
+   取自 `R["worst"]` 的这四个键。
+
+所有值直接取自 `R`，不重算、不重新排序：`int` 十进制、`str` 原
+样，格式沿 `render_overview_trend_report`。
 
 ### 通用约定
 

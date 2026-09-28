@@ -38,6 +38,7 @@ from .product import (
     quality_report as _product_quality_report,
     render_overview as _render_overview,
     render_overview_comparison as _render_overview_comparison,
+    render_overview_comparison_report as _render_overview_comparison_report,
     render_overview_trend as _render_overview_trend,
     render_overview_trend_report as _render_overview_trend_report,
     render_quality_report_trend as _render_quality_report_trend,
@@ -581,6 +582,8 @@ def main(argv: list[str] | None = None) -> int:
     export_overview_comparison_report_parser.add_argument("--output", required=True, help="output file atomically overwritten with the overview comparison report JSON")
     render_overview_comparison_parser = sub.add_parser("render-overview-comparison", help="render one overview comparison JSON file as summary lines")
     render_overview_comparison_parser.add_argument("comparison", metavar="COMPARISON", help="overview comparison JSON file")
+    render_overview_comparison_report_parser = sub.add_parser("render-overview-comparison-report", help="render one overview comparison report JSON file as three summary lines")
+    render_overview_comparison_report_parser.add_argument("report", metavar="REPORT", help="overview comparison report JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -1031,6 +1034,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "render-overview-comparison":
         try:
             text = _render_overview_comparison(args.comparison)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "render-overview-comparison-report":
+        try:
+            text = _render_overview_comparison_report(args.report)
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
