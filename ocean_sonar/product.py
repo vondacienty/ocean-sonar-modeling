@@ -65,6 +65,8 @@ __all__ = [
     "load_overview_trend_report",
     "render_overview_trend_report",
     "compare_overview_reports",
+    "serialize_overview_comparison",
+    "load_overview_comparison",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -164,6 +166,12 @@ _OVERVIEW_TREND_REPORT_SUMMARY_KEYS = (
     "changes",
     "regressed",
     "passed",
+)
+_OVERVIEW_COMPARISON_ITEM_KEYS = (
+    "index",
+    "regressed_delta",
+    "passed_delta",
+    "quality",
 )
 
 
@@ -3957,4 +3965,236 @@ def compare_overview_reports(paths) -> dict:
         "changes": tuple(changes),
         "worst": worst_item,
         "quality": overall,
+    }
+
+
+def _dump_overview_comparison(comparison) -> bytes:
+    try:
+        text = json.dumps(
+            _to_jsonable(comparison),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"overview comparison: could not be serialized to JSON: {exc}"
+        ) from exc
+
+
+def serialize_overview_comparison(paths) -> bytes:
+    """Serialize the :func:`compare_overview_reports` comparison of ``paths`` to bytes.
+
+    Exactly one call to :func:`compare_overview_reports` is made with
+    ``paths`` unchanged and no other work happens before it; the
+    ``paths`` validation contract, the per-path
+    :func:`load_overview_trend_report` behavior, every exception
+    (propagated unchanged) and the input/file invariance of
+    :func:`compare_overview_reports` therefore apply here verbatim.
+    Neither ``paths`` nor the loaded files are modified.
+
+    Let ``C`` be the dict returned by that single
+    :func:`compare_overview_reports` call. It is encoded with keys
+    exactly in the order ``changes, worst, quality``; the ``changes``
+    tuple is converted to a JSON array and each item, like ``worst``,
+    keeps its key order ``index, regressed_delta, passed_delta,
+    quality``. Values are not recomputed and no keys are added or
+    removed.
+
+    The JSON byte specification follows
+    :func:`serialize_overview_trend`: UTF-8, ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation, no
+    BOM and no trailing newline; tuples are recursively converted to
+    arrays. Any JSON or UTF-8 encoding failure raises ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    comparison = compare_overview_reports(paths)
+    return _dump_overview_comparison(comparison)
+
+
+def _check_overview_comparison_item(item, prefix):
+    if not isinstance(item, dict):
+        raise ValueError(prefix + "must be a JSON object")
+    if list(item.keys()) != list(_OVERVIEW_COMPARISON_ITEM_KEYS):
+        raise ValueError(
+            prefix + "keys must be in the order index, regressed_delta, "
+            "passed_delta, quality"
+        )
+
+    index = item["index"]
+    if type(index) is not int:
+        raise ValueError(prefix + "index must be a non-bool int")
+
+    regressed_delta = item["regressed_delta"]
+    if type(regressed_delta) is not int:
+        raise ValueError(prefix + "regressed_delta must be a non-bool int")
+
+    passed_delta = item["passed_delta"]
+    if type(passed_delta) is not int:
+        raise ValueError(prefix + "passed_delta must be a non-bool int")
+
+    quality = item["quality"]
+    if type(quality) is not str:
+        raise ValueError(prefix + "quality must be a str")
+    if quality not in _QUALITY_VALUES:
+        raise ValueError(prefix + "quality must be 'pass' or 'fail'")
+
+
+def _check_overview_comparison(comparison):
+    if not isinstance(comparison, dict):
+        raise ValueError("overview comparison must be a JSON object")
+    if list(comparison.keys()) != list(_QUALITY_TREND_KEYS):
+        raise ValueError(
+            "overview comparison keys must be in the order "
+            "changes, worst, quality"
+        )
+
+    changes = comparison["changes"]
+    if not isinstance(changes, list):
+        raise ValueError(
+            "overview comparison: changes must be a JSON array"
+        )
+    if len(changes) == 0:
+        raise ValueError("overview comparison: changes must be non-empty")
+    for i in range(len(changes)):
+        prefix = f"overview comparison: changes[{i}]: "
+        item = changes[i]
+        _check_overview_comparison_item(item, prefix)
+        if item["index"] != i + 1:
+            raise ValueError(prefix + "index must run consecutively from 1")
+
+    worst = comparison["worst"]
+    _check_overview_comparison_item(
+        worst, "overview comparison: worst: "
+    )
+    if worst not in changes:
+        raise ValueError(
+            "overview comparison: worst must equal one of the changes items"
+        )
+
+    expected_worst_item = min(
+        changes,
+        key=lambda item: (
+            item["passed_delta"],
+            -item["regressed_delta"],
+            item["index"],
+        ),
+    )
+    if worst != expected_worst_item:
+        raise ValueError(
+            "overview comparison: worst must be the changes item "
+            "minimizing (passed_delta, -regressed_delta, index)"
+        )
+
+    quality = comparison["quality"]
+    if type(quality) is not str:
+        raise ValueError("overview comparison: quality must be a str")
+    if quality not in _QUALITY_VALUES:
+        raise ValueError(
+            "overview comparison: quality must be 'pass' or 'fail'"
+        )
+    expected = (
+        "pass"
+        if all(item["quality"] == "pass" for item in changes)
+        else "fail"
+    )
+    if quality != expected:
+        raise ValueError(
+            "overview comparison: quality must be 'pass' exactly when "
+            "every changes item is 'pass'"
+        )
+
+
+def load_overview_comparison(path) -> dict:
+    """Load a :func:`serialize_overview_comparison`-produced JSON comparison from ``path``.
+
+    ``path`` must be a non-empty ``str``: a non-str raises ``TypeError``
+    and an empty ``str`` raises ``ValueError``. The file is opened in
+    binary mode (``"rb"``) and read in full; a missing file raises
+    ``FileNotFoundError``, a directory raises ``IsADirectoryError`` and
+    every other ``OSError`` is propagated unchanged. The file is not
+    modified.
+
+    The bytes must be exactly those produced by
+    :func:`serialize_overview_comparison` for the same value: compact
+    UTF-8 JSON with no BOM and no trailing newline. A BOM, a trailing
+    newline, a UTF-8 decoding failure, a JSON parsing failure, a
+    ``NaN``/``Infinity`` constant or a repeated JSON object key raises
+    ``ValueError``.
+
+    The decoded value must be a JSON object with keys exactly in the
+    order ``changes, worst, quality``. ``changes`` must be a non-empty
+    JSON array whose items, like ``worst``, are objects with keys
+    exactly in the order ``index, regressed_delta, passed_delta,
+    quality``: ``index`` a non-bool int running consecutively from
+    ``1``; ``regressed_delta`` and ``passed_delta`` non-bool ints;
+    ``quality`` either ``"pass"`` or ``"fail"``. ``worst`` must equal
+    the ``changes`` item minimizing the tuple
+    ``(passed_delta, -regressed_delta, index)`` lexicographically, and
+    the top-level ``quality`` must be ``"pass"`` exactly when every
+    ``changes`` item is ``"pass"``. Finally the file bytes must equal
+    the canonical re-encoding of the decoded value byte for byte.
+    Every key-order, type, range, relation, parse or canonical-byte
+    mismatch raises ``ValueError``.
+
+    Returns the comparison as a dict with the keys in the order
+    ``changes, worst, quality``, where ``changes`` is converted to a
+    tuple and ``worst`` is the matching item of that tuple; the file is
+    never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_keys,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        _check_overview_comparison(parsed)
+        canonical = _dump_overview_comparison(parsed)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid overview comparison: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical "
+            "serialize_overview_comparison output"
+        )
+
+    changes = parsed["changes"]
+    worst = parsed["worst"]
+    matched = None
+    for item in changes:
+        if item == worst:
+            matched = item
+            break
+
+    return {
+        "changes": tuple(changes),
+        "worst": matched,
+        "quality": parsed["quality"],
     }
