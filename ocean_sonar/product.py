@@ -87,6 +87,7 @@ __all__ = [
     "serialize_dashboard_history_report",
     "load_dashboard_history",
     "load_dashboard_history_report",
+    "dashboard_history_report_trend",
     "render_dashboard_history",
     "render_dashboard_history_report",
     "export_dashboard_history",
@@ -6317,6 +6318,125 @@ def load_dashboard_history_report(path) -> dict:
         },
         "summary": parsed["summary"],
         "quality": parsed["quality"],
+    }
+
+
+def dashboard_history_report_trend(paths) -> dict:
+    """Compare successive :func:`load_dashboard_history_report` snapshots along ``paths``.
+
+    ``paths`` must be a list/tuple of at least two items; each item,
+    checked in index order, must be a non-empty ``str``. Validation
+    order (first error wins): the ``paths`` container, its length, then
+    each item in index order (type, then emptiness). A non-list/tuple
+    container or a non-str item raises ``TypeError``; fewer than two
+    items or an empty ``str`` raises ``ValueError``. Item errors are
+    prefixed with ``"paths[i]: "``.
+
+    :func:`load_dashboard_history_report` is then called exactly once
+    per path, in input order; any exception it raises is propagated
+    unchanged. The input and the loaded files are not modified.
+
+    Every loaded report must have the same ``summary.snapshots`` value
+    as the first one; otherwise a ``ValueError`` is raised.
+
+    For each successive pair ``i = 1..n-1`` the unrounded deltas are
+    ``ds = summary.stability_i - summary.stability_(i-1)`` and
+    ``dv = summary.volatility_i - summary.volatility_(i-1)`` (both taken
+    from the reports' ``summary``); a comparison fails (``q`` is
+    ``"fail"``) when ``ds < 0``, ``dv > 0`` or the report ``quality``
+    changes from ``"pass"`` to ``"fail"``, and is ``"pass"`` otherwise.
+
+    Returns a dict with keys in the order ``count, changes, regressed,
+    worst, quality``: ``count`` is the non-bool int ``n`` (the number of
+    snapshots); ``changes`` is a tuple with one dict per pair (in ``i``
+    order), each with keys in the order ``index, stability_delta,
+    volatility_delta, quality`` — ``index`` is the non-bool int ``i``,
+    ``stability_delta``/``volatility_delta`` are ``round(float(ds), 6)``
+    and ``round(float(dv), 6)`` respectively (negative zero normalized
+    to ``0.0``) and ``quality`` is ``q``. ``regressed`` is the number of
+    ``changes`` items whose ``quality`` is ``"fail"``. ``worst`` is the
+    ``changes`` item minimizing the *unrounded* tuple ``(ds, -dv, i)``
+    lexicographically (the same dict object, never a copy); the
+    top-level ``quality`` is ``"pass"`` exactly when ``regressed`` is
+    ``0`` and ``"fail"`` otherwise. Items are not sorted, values are not
+    recomputed and no other keys are added.
+    """
+    if not isinstance(paths, (list, tuple)):
+        raise TypeError("paths must be a list or tuple")
+    if len(paths) < 2:
+        raise ValueError("paths must contain at least 2 items")
+    for i in range(len(paths)):
+        prefix = f"paths[{i}]: "
+        if not isinstance(paths[i], str):
+            raise TypeError(prefix + "must be a str")
+        if paths[i] == "":
+            raise ValueError(prefix + "must not be empty")
+
+    reports = [load_dashboard_history_report(path) for path in paths]
+
+    first_snapshots = reports[0]["summary"]["snapshots"]
+    for i in range(1, len(reports)):
+        snapshots = reports[i]["summary"]["snapshots"]
+        if snapshots != first_snapshots:
+            raise ValueError(
+                f"dashboard history report at paths[{i}] summary.snapshots "
+                f"{snapshots} does not match {first_snapshots}"
+            )
+
+    changes = []
+    regressed = 0
+    worst_item = None
+    worst_key = None
+    for i in range(1, len(reports)):
+        previous_summary = reports[i - 1]["summary"]
+        current_summary = reports[i]["summary"]
+        ds = (
+            current_summary["stability"]
+            - previous_summary["stability"]
+        )
+        dv = (
+            current_summary["volatility"]
+            - previous_summary["volatility"]
+        )
+        if (
+            ds < 0
+            or dv > 0
+            or (
+                reports[i - 1]["quality"] == "pass"
+                and reports[i]["quality"] == "fail"
+            )
+        ):
+            verdict = "fail"
+            regressed += 1
+        else:
+            verdict = "pass"
+
+        stability_delta = round(float(ds), 6)
+        if stability_delta == 0:
+            stability_delta = 0.0
+        volatility_delta = round(float(dv), 6)
+        if volatility_delta == 0:
+            volatility_delta = 0.0
+
+        item = {
+            "index": int(i),
+            "stability_delta": stability_delta,
+            "volatility_delta": volatility_delta,
+            "quality": verdict,
+        }
+        changes.append(item)
+
+        key = (ds, -dv, i)
+        if worst_key is None or key < worst_key:
+            worst_key = key
+            worst_item = item
+
+    return {
+        "count": len(paths),
+        "changes": tuple(changes),
+        "regressed": regressed,
+        "worst": worst_item,
+        "quality": "pass" if regressed == 0 else "fail",
     }
 
 
