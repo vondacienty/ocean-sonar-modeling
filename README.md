@@ -1071,7 +1071,8 @@ ocean-sonar-modeling export-trend-dashboard overview_comparison_report_trend.jso
 `render_overview_comparison`、
 `render_overview_comparison_report`、
 `render_overview_comparison_report_trend`、`trend_dashboard`、
-`serialize_trend_dashboard`、`export_trend_dashboard`。其中
+`serialize_trend_dashboard`、`load_trend_dashboard`、
+`export_trend_dashboard`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
@@ -1977,6 +1978,45 @@ worst`，不重算、不排序。
 出；每个 `float` 经 `round(float(v), 6)` 舍入、负零仅在写出时归
 一化为 `0.0`。任何 JSON 或 UTF-8 编码失败抛 `ValueError`。返回
 `bytes`。
+
+### `product.load_trend_dashboard(path) -> dict`
+
+读取一份 `serialize_trend_dashboard` 生成的趋势仪表盘 JSON。
+
+`path` 必须为非空 `str`：非 `str` 抛 `TypeError`
+（`path must be a str`），空串抛 `ValueError`
+（`path must not be empty`）。文件以 `"rb"` 打开并一次性读入：文件
+不存在抛 `FileNotFoundError`，路径是目录抛 `IsADirectoryError`，其
+余 `OSError` 原样传播。文件不被修改。
+
+字节必须逐字等于对同一取值调用 `serialize_trend_dashboard` 的产物：
+无 BOM、无尾换行的紧凑 UTF-8 JSON。BOM、尾换行、UTF-8 解码失败、
+JSON 解析失败、`NaN`/`Infinity` 常量、重复 JSON 对象键或任何其他
+文档错误均抛 `ValueError`。
+
+解码值必须是键序严格为 `trend, summary, quality` 的 JSON 对象：
+
+- `trend` 完整满足
+  `load_overview_comparison_report_trend` 的加载器契约（键序
+  `count, changes, regressed, worst, quality` 及其全部类型、范围、
+  相互关系校验）；
+- `summary` 为键序严格为 `reports, passed, regressed, ratio,
+  worst` 的对象：`reports` 等于 `trend.count`，`passed` 等于
+  `len(changes) - trend.regressed`，`regressed` 等于
+  `trend.regressed`；四个计数/索引均为非布尔 `int`（`worst` 等于
+  `trend.worst.index`）；`ratio` 为有限、至多六位小数、禁负零的
+  `float`，且必须等于
+  `round(float(passed / len(changes)), 6)`；
+- 顶层 `quality` 必须等于 `trend.quality`。
+
+任何键序、类型、取值范围、相互关系或解析错误均抛 `ValueError`；
+此外文件字节必须与按 `serialize_trend_dashboard` 规范重编码的字节
+逐字节相等，否则抛 `ValueError`。
+
+返回保持原键序的 dict（`trend, summary, quality`）：`trend` 中
+`changes` 转为 tuple、`worst` 引用该 tuple 中命中的同一项（同一
+对象，非拷贝），`summary` 保持键序 `reports, passed, regressed,
+ratio, worst`。输入文件不被修改。
 
 ### `product.export_trend_dashboard(path, output) -> bytes`
 
