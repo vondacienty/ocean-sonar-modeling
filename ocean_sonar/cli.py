@@ -28,6 +28,7 @@ from .outlier import batch as _outlier_batch
 from .product import (
     _format_trend_value as _format_trend_value,
     export_dashboard_history as _export_dashboard_history,
+    export_dashboard_history_report as _export_dashboard_history_report,
     export_overview as _export_overview,
     export_overview_comparison as _export_overview_comparison,
     export_overview_comparison_report as _export_overview_comparison_report,
@@ -608,6 +609,12 @@ def main(argv: list[str] | None = None) -> int:
     export_dashboard_history_parser.add_argument("dashboard_second", metavar="DASHBOARD", help="second trend dashboard JSON file")
     export_dashboard_history_parser.add_argument("dashboard_rest", nargs="*", metavar="DASHBOARD", help="additional trend dashboard JSON files")
     export_dashboard_history_parser.add_argument("--output", required=True, help="output file atomically overwritten with the dashboard history JSON")
+    export_dashboard_history_report_parser = sub.add_parser("export-dashboard-history-report", help="cross-check one dashboard history JSON against trend dashboard JSON files and write one dashboard history report JSON")
+    export_dashboard_history_report_parser.add_argument("history", metavar="HISTORY", help="dashboard history JSON file")
+    export_dashboard_history_report_parser.add_argument("dashboard_first", metavar="DASHBOARD", help="first trend dashboard JSON file")
+    export_dashboard_history_report_parser.add_argument("dashboard_second", metavar="DASHBOARD", help="second trend dashboard JSON file")
+    export_dashboard_history_report_parser.add_argument("dashboard_rest", nargs="*", metavar="DASHBOARD", help="additional trend dashboard JSON files")
+    export_dashboard_history_report_parser.add_argument("--output", required=True, help="output file atomically overwritten with the dashboard history report JSON")
     render_dashboard_history_parser = sub.add_parser("render-dashboard-history", help="render one dashboard history JSON file as summary lines")
     render_dashboard_history_parser.add_argument("history", metavar="HISTORY", help="dashboard history JSON file")
     render_dashboard_history_report_parser = sub.add_parser("render-dashboard-history-report", help="render one dashboard history report JSON file as three summary lines")
@@ -1142,6 +1149,19 @@ def main(argv: list[str] | None = None) -> int:
         ]
         try:
             _export_dashboard_history(paths, args.output)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        return 0
+
+    if args.command == "export-dashboard-history-report":
+        paths = [
+            args.dashboard_first,
+            args.dashboard_second,
+            *args.dashboard_rest,
+        ]
+        try:
+            _export_dashboard_history_report(args.history, paths, args.output)
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
