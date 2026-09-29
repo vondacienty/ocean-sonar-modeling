@@ -82,6 +82,7 @@ __all__ = [
     "serialize_trend_dashboard",
     "load_trend_dashboard",
     "export_trend_dashboard",
+    "dashboard_history",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -5542,3 +5543,124 @@ def export_trend_dashboard(path, output) -> bytes:
     _reject_export_output_overlap(output, [path])
     _atomic_write_bytes(output, data)
     return data
+
+
+def dashboard_history(paths) -> dict:
+    """Compare successive :func:`load_trend_dashboard` snapshots along ``paths``.
+
+    ``paths`` must be a list/tuple of at least two items; each item,
+    checked in index order, must be a non-empty ``str``. Validation
+    order (first error wins): the ``paths`` container, its length, then
+    each item in index order (type, then emptiness). A non-list/tuple
+    container or a non-str item raises ``TypeError``; fewer than two
+    items or an empty ``str`` raises ``ValueError``. Item errors are
+    prefixed with ``"paths[i]: "``.
+
+    :func:`load_trend_dashboard` is then called exactly once per path,
+    in input order; any exception it raises is propagated unchanged.
+    The input and the loaded files are not modified.
+
+    Every loaded dashboard must have the same ``summary.reports`` value
+    as the first one; otherwise a ``ValueError`` is raised.
+
+    For each successive pair ``i = 1..n-1`` the unrounded deltas are
+    ``dp = summary.passed_i - summary.passed_(i-1)``,
+    ``dr = summary.regressed_i - summary.regressed_(i-1)`` and
+    ``dq = summary.ratio_i - summary.ratio_(i-1)``; a comparison fails
+    (``q`` is ``"fail"``) when ``dp < 0``, ``dr > 0``, ``dq < 0`` or the
+    top-level ``quality`` changes from ``"pass"`` to ``"fail"``, and is
+    ``"pass"`` otherwise.
+
+    Returns a dict with keys in the order ``count, changes, regressed,
+    worst, quality``: ``count`` is the non-bool int ``n`` (the number of
+    snapshots); ``changes`` is a tuple with one dict per pair (in ``i``
+    order), each with keys in the order ``index, passed_delta,
+    regressed_delta, ratio_delta, quality`` — ``index`` is the non-bool
+    int ``i``, ``passed_delta``/``regressed_delta`` are the unrounded
+    non-bool ints ``dp`` and ``dr``, ``ratio_delta`` is
+    ``round(float(dq), 6)`` (negative zero normalized to ``0.0``) and
+    ``quality`` is ``q``. ``regressed`` is the number of ``changes``
+    items whose ``quality`` is ``"fail"``. ``worst`` is the ``changes``
+    item minimizing the *unrounded* tuple ``(dq, dp, -dr, i)``
+    lexicographically (the same dict object, never a copy); the
+    top-level ``quality`` is ``"pass"`` exactly when ``regressed`` is
+    ``0`` and ``"fail"`` otherwise. Items are not sorted, values are not
+    recomputed and no other keys are added.
+    """
+    if not isinstance(paths, (list, tuple)):
+        raise TypeError("paths must be a list or tuple")
+    if len(paths) < 2:
+        raise ValueError("paths must contain at least 2 items")
+    for i in range(len(paths)):
+        prefix = f"paths[{i}]: "
+        if not isinstance(paths[i], str):
+            raise TypeError(prefix + "must be a str")
+        if paths[i] == "":
+            raise ValueError(prefix + "must not be empty")
+
+    dashboards = [load_trend_dashboard(path) for path in paths]
+
+    first_reports = dashboards[0]["summary"]["reports"]
+    for i in range(1, len(dashboards)):
+        reports = dashboards[i]["summary"]["reports"]
+        if reports != first_reports:
+            raise ValueError(
+                f"trend dashboard at paths[{i}] summary.reports "
+                f"{reports} does not match {first_reports}"
+            )
+
+    changes = []
+    regressed = 0
+    worst_item = None
+    worst_key = None
+    for i in range(1, len(dashboards)):
+        previous_summary = dashboards[i - 1]["summary"]
+        current_summary = dashboards[i]["summary"]
+        dp = int(current_summary["passed"]) - int(previous_summary["passed"])
+        dr = (
+            int(current_summary["regressed"])
+            - int(previous_summary["regressed"])
+        )
+        dq = (
+            float(current_summary["ratio"])
+            - float(previous_summary["ratio"])
+        )
+        if (
+            dp < 0
+            or dr > 0
+            or dq < 0
+            or (
+                dashboards[i - 1]["quality"] == "pass"
+                and dashboards[i]["quality"] == "fail"
+            )
+        ):
+            verdict = "fail"
+            regressed += 1
+        else:
+            verdict = "pass"
+
+        ratio_delta = round(float(dq), 6)
+        if ratio_delta == 0:
+            ratio_delta = 0.0
+
+        item = {
+            "index": int(i),
+            "passed_delta": int(dp),
+            "regressed_delta": int(dr),
+            "ratio_delta": ratio_delta,
+            "quality": verdict,
+        }
+        changes.append(item)
+
+        key = (dq, dp, -dr, i)
+        if worst_key is None or key < worst_key:
+            worst_key = key
+            worst_item = item
+
+    return {
+        "count": len(paths),
+        "changes": tuple(changes),
+        "regressed": regressed,
+        "worst": worst_item,
+        "quality": "pass" if regressed == 0 else "fail",
+    }
