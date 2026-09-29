@@ -1127,6 +1127,7 @@ ocean-sonar-modeling render-dashboard-history dashboard_history.json
 `serialize_trend_dashboard`、`load_trend_dashboard`、
 `export_trend_dashboard`、`dashboard_history`、
 `serialize_dashboard_history`、`load_dashboard_history`、
+`serialize_dashboard_history_report`、
 `render_dashboard_history`、`export_dashboard_history`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
@@ -2147,6 +2148,50 @@ JSON 字节规范完全沿用 `serialize_dashboard_history`，且 `paths`
 （`<index>` 及四个值依次取自该 `C` 项），不重新排序、不重新计算。
 各值直接取自 `H`/`W`/`C`：int 十进制输出、str 原样、float 用
 `format(v, ".6f")`，负零写作 `0.000000`。
+
+### `product.serialize_dashboard_history_report(path, paths) -> bytes`
+
+把一份仪表盘历史 JSON 文件与对多份趋势仪表盘重新比较的结果交叉核对
+后导出为一份报告 JSON，返回其字节。
+
+执行时**先且仅调用一次** `load_dashboard_history(path)` 得到 `H`，
+在此之前不做任何其他工作；随后**仅调用一次**
+`dashboard_history(paths)` 得到 `E`，两者都不再调用第二次。因此
+`path` 的校验契约、读取行为、异常（`TypeError`/`ValueError`/
+`FileNotFoundError`/`IsADirectoryError`/`OSError`，原样向上传播）
+与文件不变性先生效，随后 `paths` 的校验契约（容器、至少两项、
+`paths[i]: ` 下标前缀）、逐路径 `load_trend_dashboard` 的行为、异常
+与输入/文件不变性完全沿用 `dashboard_history`。输入参数与所加载文件
+均不被修改。
+
+`H` 与 `E` 必须逐字段相等（`H != E` 即整体不等），否则抛
+`ValueError`。
+
+核对通过后记 `C = H["changes"]`，报告仅由 `H` 计算，不重新排序、不
+增键、不改值，键序严格为
+`schema_version, source, history, summary, quality`：
+
+- `schema_version`：非布尔 `int`，恒为 `1`。
+- `source`：键序 `path, inputs`；`path` 为原 `path` 参数，
+  `inputs` 为按原顺序容纳 `paths` 各项的 tuple（编码为 JSON 数
+  组）。
+- `history`：即 `H`，保持其键序 `count, changes, regressed, worst,
+  quality`（`changes` tuple 编码为数组）。
+- `summary`：键序
+  `snapshots, regressed, stability, volatility,
+  longest_regression, worst_index`，依次为 `H["count"]`、
+  `H["regressed"]`、`1 - H["regressed"] / len(C)`、各
+  `abs(c["ratio_delta"])` 经 `math.fsum` 求和后的均值（除以
+  `len(C)`）、`C` 中 `quality` 连续为 `"fail"` 的最大段长、
+  `H["worst"]["index"]`。
+- `quality`：`H["quality"]`。
+
+JSON 字节规范完全沿用 `serialize_dashboard_history`：UTF-8 紧凑
+JSON，`ensure_ascii=False`、`separators=(",", ":")`、
+`allow_nan=False`，无缩进、无 BOM、无尾换行；tuple 递归转为数组，
+`int` 按十进制写出；每个 `float` 经 `round(float(v), 6)` 舍入、负
+零仅在写出时归一化为 `0.0`。任何 JSON 或 UTF-8 编码失败抛
+`ValueError`。返回 `bytes`。
 
 ### 通用约定
 

@@ -85,6 +85,7 @@ __all__ = [
     "dashboard_history",
     "serialize_dashboard_history",
     "load_dashboard_history",
+    "serialize_dashboard_history_report",
     "render_dashboard_history",
     "export_dashboard_history",
 ]
@@ -237,6 +238,22 @@ _DASHBOARD_HISTORY_ITEM_KEYS = (
     "regressed_delta",
     "ratio_delta",
     "quality",
+)
+_DASHBOARD_HISTORY_REPORT_KEYS = (
+    "schema_version",
+    "source",
+    "history",
+    "summary",
+    "quality",
+)
+_DASHBOARD_HISTORY_REPORT_SOURCE_KEYS = ("path", "inputs")
+_DASHBOARD_HISTORY_REPORT_SUMMARY_KEYS = (
+    "snapshots",
+    "regressed",
+    "stability",
+    "volatility",
+    "longest_regression",
+    "worst_index",
 )
 
 
@@ -5913,6 +5930,109 @@ def load_dashboard_history(path) -> dict:
         "worst": matched,
         "quality": parsed["quality"],
     }
+
+
+def serialize_dashboard_history_report(path, paths) -> bytes:
+    """Serialize a report cross-checking a history file against ``paths``.
+
+    Exactly one call to :func:`load_dashboard_history` is made with
+    ``path`` unchanged, and then exactly one call to
+    :func:`dashboard_history` with ``paths`` unchanged; no other work
+    happens before them and neither is called a second time. The
+    ``path`` validation contract, the read behavior, every exception
+    (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`load_dashboard_history` therefore apply
+    first, followed verbatim by the ``paths`` validation contract
+    (container, length of at least two, the ``"paths[i]: "`` prefixes),
+    the per-path :func:`load_trend_dashboard` behavior, every exception
+    and the input/file invariance of :func:`dashboard_history`. The
+    input arguments and the loaded files are not modified.
+
+    Let ``H`` be the dict returned by the single
+    :func:`load_dashboard_history` call and ``E`` the dict returned by
+    the single :func:`dashboard_history` call. They must agree field
+    for field; if ``H != E`` a ``ValueError`` is raised.
+
+    With ``C = H["changes"]``, the report is computed from ``H`` alone
+    after the cross-check, without sorting, modifying it or adding
+    extra keys, and encoded with keys exactly in the order
+    ``schema_version, source, history, summary, quality``:
+
+    - ``schema_version``: the non-bool int ``1``.
+    - ``source``: keys in the order ``path, inputs``, with ``path`` the
+      original ``path`` argument and ``inputs`` a tuple of the original
+      ``paths`` items in their given order.
+    - ``history``: ``H`` itself, encoded with its key order
+      ``count, changes, regressed, worst, quality`` (the ``changes``
+      tuple becomes a JSON array).
+    - ``summary``: keys in the order ``snapshots, regressed, stability,
+      volatility, longest_regression, worst_index`` — ``snapshots`` is
+      ``H["count"]``; ``regressed`` is ``H["regressed"]``;
+      ``stability`` is ``1 - H["regressed"] / len(C)``; ``volatility``
+      is the ``math.fsum`` mean of ``abs(c["ratio_delta"])`` over the
+      ``C`` items; ``longest_regression`` is the length of the longest
+      run of consecutive ``C`` items whose ``quality`` is ``"fail"``;
+      and ``worst_index`` is ``H["worst"]["index"]``.
+    - ``quality``: ``H["quality"]``.
+
+    The JSON byte specification follows
+    :func:`serialize_dashboard_history`: UTF-8, ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation, no
+    BOM and no trailing newline; tuples are recursively converted to
+    arrays and ints are written in decimal; every float is rounded with
+    ``round(float(v), 6)`` and negative zero is normalized to ``0.0``
+    only at write time. Any JSON or UTF-8 encoding failure raises
+    ``ValueError``. Values are not sorted, no keys are added and no
+    values are otherwise changed.
+
+    Returns the JSON document as ``bytes``.
+    """
+    history = load_dashboard_history(path)
+    expected = dashboard_history(paths)
+
+    if history != expected:
+        raise ValueError(
+            "dashboard history report: loaded history does not match "
+            "dashboard_history(paths)"
+        )
+
+    changes = history["changes"]
+    count = len(changes)
+
+    longest = 0
+    run = 0
+    for item in changes:
+        if item["quality"] == "fail":
+            run += 1
+            if run > longest:
+                longest = run
+        else:
+            run = 0
+
+    volatility = math.fsum(
+        abs(item["ratio_delta"]) for item in changes
+    ) / count
+
+    report = {
+        "schema_version": 1,
+        "source": {
+            "path": path,
+            "inputs": tuple(paths),
+        },
+        "history": history,
+        "summary": {
+            "snapshots": history["count"],
+            "regressed": history["regressed"],
+            "stability": 1 - history["regressed"] / count,
+            "volatility": volatility,
+            "longest_regression": longest,
+            "worst_index": history["worst"]["index"],
+        },
+        "quality": history["quality"],
+    }
+
+    return _dump_dashboard_history(report)
 
 
 def render_dashboard_history(path) -> str:
