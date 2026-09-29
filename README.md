@@ -1184,7 +1184,8 @@ ocean-sonar-modeling render-dashboard-history-report dashboard_history_report.js
 `serialize_dashboard_history`、`serialize_dashboard_history_report`、
 `load_dashboard_history`、`load_dashboard_history_report`、
 `render_dashboard_history`、`render_dashboard_history_report`、
-`export_dashboard_history`、`export_dashboard_history_report`。其中
+`export_dashboard_history`、`export_dashboard_history_report`、
+`dashboard_history_report_trend`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
@@ -2333,6 +2334,50 @@ volatility, longest_regression, worst_index`，并逐项复核——
 返回保持原键序的 dict；仅 `source.inputs` 与 `history.changes` 转为
 tuple，`history.worst` 引用该 tuple 中相等的命中项（同一对象、非拷
 贝）。输入与文件均不被修改。
+
+### `product.dashboard_history_report_trend(paths) -> dict`
+
+把多份 `product.serialize_dashboard_history_report` 生成的仪表盘历史
+报告 JSON 依次比较，返回趋势判定字典。
+
+`paths` 必须为至少含 2 项的 `list`/`tuple`，各项按下标顺序必须为非空
+`str`。校验顺序（先报错者胜出）：先校验 `paths` 容器，再校验长度，最
+后按各项下标顺序逐项校验（先类型后非空）。非 `list`/`tuple` 容器或非
+`str` 项抛 `TypeError`（`paths must be a list or tuple`、
+`paths[i]: must be a str`），少于 2 项或空串抛 `ValueError`
+（`paths must contain at least 2 items`、`paths[i]: must not be
+empty`），项级错误均带 `paths[i]: ` 前缀。
+
+随后按输入顺序对每个路径**仅调用一次**
+`load_dashboard_history_report(path)`；它抛出的任何异常（`TypeError`/
+`ValueError`/`FileNotFoundError`/`IsADirectoryError`/`OSError`）原样向
+上传播。输入与所加载的文件均不被修改。
+
+每份加载报告的 `summary.snapshots` 必须与第一份相同，否则抛
+`ValueError`（`dashboard history report at paths[i]
+summary.snapshots <值> does not match <首值>`）。
+
+对每个相邻对 `i = 1..n-1`，取未舍入差值
+`ds = summary.stability_i - summary.stability_(i-1)` 与
+`dv = summary.volatility_i - summary.volatility_(i-1)`；当 `ds < 0`、
+`dv > 0` 或报告 `quality` 由 `"pass"` 变为 `"fail"` 时判定为
+`"fail"`，否则为 `"pass"`。
+
+返回键序恰为 `count, changes, regressed, worst, quality` 的 `dict`：
+
+- `count`：快照数 `n`，非布尔 `int`；
+- `changes`：`tuple`，按 `i` 顺序每个相邻对一个 `dict`，键序恰为
+  `index, stability_delta, volatility_delta, quality`；`index` 为非布
+  尔 `int` 型的 `i`，`stability_delta`/`volatility_delta` 为
+  `round(float(ds), 6)`/`round(float(dv), 6)`（负零均归一化为
+  `0.0`）的 `float`，`quality` 为该项判定；
+- `regressed`：`changes` 中判定为 `"fail"` 的项数；
+- `worst`：使**未舍入**元组 `(ds, -dv, i)` 字典序最小的 `changes`
+  原 `dict` 对象本身（不复制、不排序）；
+- `quality`：仅当 `regressed` 为 `0` 时为 `"pass"`，否则为
+  `"fail"`。
+
+不排序、不重新加载、不重算数值、不新增键。
 
 ### 通用约定
 
