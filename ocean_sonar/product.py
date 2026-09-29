@@ -85,6 +85,7 @@ __all__ = [
     "dashboard_history",
     "serialize_dashboard_history",
     "load_dashboard_history",
+    "export_dashboard_history",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -5911,3 +5912,49 @@ def load_dashboard_history(path) -> dict:
         "worst": matched,
         "quality": parsed["quality"],
     }
+
+
+def export_dashboard_history(paths, output) -> bytes:
+    """Serialize the :func:`dashboard_history` comparison of ``paths`` and write it.
+
+    Exactly one call to :func:`serialize_dashboard_history` is made with
+    ``paths`` — before any other work and no second time — so its
+    validation, first-error order, exceptions (propagated unchanged),
+    ``"paths[i]: "`` index prefixes, key order ``count, changes,
+    regressed, worst, quality`` and JSON byte specification all apply
+    here as well; in particular a bad ``paths`` value is reported before
+    ``output`` is inspected. Neither ``paths`` nor the loaded files are
+    modified.
+
+    With ``B`` the ``bytes`` returned by
+    :func:`serialize_dashboard_history`, ``output`` is then validated:
+    it must be a non-empty ``str`` (a non-str raises ``TypeError`` and
+    an empty ``str`` raises ``ValueError``), in that order.
+
+    ``output`` must not name the same file as any of the ``paths``
+    items: when both sides exist they are compared with
+    ``os.path.samefile`` so soft and hard links are recognized, and
+    otherwise the normalized paths
+    ``os.path.normcase(os.path.realpath(os.path.abspath(path)))`` are
+    compared; an overlap raises ``ValueError``.
+
+    When there is no overlap, a temporary file is created in
+    ``output``'s directory, ``B`` is written to it in binary mode,
+    ``flush()`` and ``os.fsync()`` are called and the temporary file
+    then atomically replaces ``output`` via ``os.replace``. Any failure
+    before the replacement removes the temporary file and leaves an
+    existing ``output`` byte for byte unchanged; ``OSError`` is
+    propagated unchanged.
+
+    Returns the same ``bytes`` ``B`` that were written.
+    """
+    data = serialize_dashboard_history(paths)
+
+    if not isinstance(output, str):
+        raise TypeError("output must be a str")
+    if output == "":
+        raise ValueError("output must not be empty")
+
+    _reject_export_output_overlap(output, paths)
+    _atomic_write_bytes(output, data)
+    return data

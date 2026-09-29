@@ -27,6 +27,7 @@ from .grid import batch as _grid_batch
 from .outlier import batch as _outlier_batch
 from .product import (
     _format_trend_value as _format_trend_value,
+    export_dashboard_history as _export_dashboard_history,
     export_overview as _export_overview,
     export_overview_comparison as _export_overview_comparison,
     export_overview_comparison_report as _export_overview_comparison_report,
@@ -600,6 +601,11 @@ def main(argv: list[str] | None = None) -> int:
     export_trend_dashboard_parser = sub.add_parser("export-trend-dashboard", help="serialize one overview comparison report trend JSON file into a dashboard JSON")
     export_trend_dashboard_parser.add_argument("trend", metavar="TREND", help="overview comparison report trend JSON file")
     export_trend_dashboard_parser.add_argument("--output", required=True, help="output file atomically overwritten with the trend dashboard JSON")
+    export_dashboard_history_parser = sub.add_parser("export-dashboard-history", help="compare trend dashboard JSON files and write one dashboard history JSON")
+    export_dashboard_history_parser.add_argument("dashboard_first", metavar="DASHBOARD", help="first trend dashboard JSON file")
+    export_dashboard_history_parser.add_argument("dashboard_second", metavar="DASHBOARD", help="second trend dashboard JSON file")
+    export_dashboard_history_parser.add_argument("dashboard_rest", nargs="*", metavar="DASHBOARD", help="additional trend dashboard JSON files")
+    export_dashboard_history_parser.add_argument("--output", required=True, help="output file atomically overwritten with the dashboard history JSON")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -1117,6 +1123,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "export-trend-dashboard":
         try:
             _export_trend_dashboard(args.trend, args.output)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        return 0
+
+    if args.command == "export-dashboard-history":
+        paths = [
+            args.dashboard_first,
+            args.dashboard_second,
+            *args.dashboard_rest,
+        ]
+        try:
+            _export_dashboard_history(paths, args.output)
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
