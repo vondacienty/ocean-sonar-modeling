@@ -1036,6 +1036,33 @@ DASHBOARD 不足两个、缺少 `--output` 或参数多余属于参数解析错�
 ocean-sonar-modeling export-dashboard-history dashboard_a.json dashboard_b.json [dashboard_c.json ...] --output dashboard_history.json
 ```
 
+### `render-dashboard-history HISTORY`
+
+把一份 `ocean_sonar.product.serialize_dashboard_history` 生成的仪表盘
+历史 JSON 文件渲染为汇总文本，等价于**仅调用一次**
+`ocean_sonar.product.render_dashboard_history(path)`：先且仅调用一次
+`load_dashboard_history(path)` 得到 `H`，其路径校验、异常
+（`TypeError`/`ValueError`/`FileNotFoundError`/
+`IsADirectoryError`/`OSError` 原样向上传播）与文件不变性完全沿用被调
+函数。记 `C = H["changes"]`、`W = H["worst"]`，成功时 stdout 输出以
+`\n` 连接的文本并在末尾加一个换行：第一行为
+`HISTORY=<count>,<len(C)>,<regressed>,<quality>`（依次取自 `H` 的
+`count`、`len(C)`、`H["regressed"]`、`H["quality"]`），第二行为
+`WORST=<index>,<passed_delta>,<regressed_delta>,<ratio_delta>,<quality>`
+（依次取自 `W` 的这五个键），随后按 `C` 原序逐行
+`CHANGE[<index>]=<passed_delta>,<regressed_delta>,<ratio_delta>,<quality>`
+（`<index>` 及四个值依次取自该 `C` 项的对应键）；各值直接取自
+`H`/`W`/`C`，不重算、不重新排序，int 十进制、str 原样、float 用
+`format(v, ".6f")` 且负零写作 `0.000000`，stderr 为空，退出码 0；文
+本本身无尾换行，stdout 输出时在末尾追加一个换行；文件不存在、内容非
+法等错误时 stdout 为空，stderr 严格输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；参数缺失或多余属于
+参数解析错误，退出码 2 且不调用业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling render-dashboard-history dashboard_history.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -1100,7 +1127,7 @@ ocean-sonar-modeling export-dashboard-history dashboard_a.json dashboard_b.json 
 `serialize_trend_dashboard`、`load_trend_dashboard`、
 `export_trend_dashboard`、`dashboard_history`、
 `serialize_dashboard_history`、`load_dashboard_history`、
-`export_dashboard_history`。其中
+`render_dashboard_history`、`export_dashboard_history`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
@@ -2098,6 +2125,28 @@ JSON 字节规范完全沿用 `serialize_dashboard_history`，且 `paths`
 `flush()`、`os.fsync()` 后用 `os.replace` 原子替换 `output`。替换
 前发生失败会清除临时文件且既有 `output` 逐字节不变；`OSError` 原
 样传播。返回值与写入文件的字节为同一份 `bytes`。
+
+### `product.render_dashboard_history(path) -> str`
+
+把一份仪表盘历史 JSON 文件渲染为汇总文本。
+
+执行时**先且仅调用一次** `load_dashboard_history(path)` 得到 `H`，
+在此之前不做任何其他工作、之后也不再调用第二次；因此 `path` 的校验
+契约、读取行为、所有异常（`TypeError`/`ValueError`/
+`FileNotFoundError`/`IsADirectoryError`/`OSError`，原样向上传播）
+与文件不变性完全沿用 `load_dashboard_history`。输入文件不被修改。
+
+令 `C = H["changes"]`、`W = H["worst"]`，返回以 `\n` 连接、无尾换
+行的文本：第一行为
+`HISTORY=<count>,<len(C)>,<regressed>,<quality>`（依次为
+`H["count"]`、`len(C)`、`H["regressed"]`、`H["quality"]`），第二
+行为
+`WORST=<index>,<passed_delta>,<regressed_delta>,<ratio_delta>,<quality>`
+（依次取自 `W` 的这五个键），随后按 `C` 原序逐行输出
+`CHANGE[<index>]=<passed_delta>,<regressed_delta>,<ratio_delta>,<quality>`
+（`<index>` 及四个值依次取自该 `C` 项），不重新排序、不重新计算。
+各值直接取自 `H`/`W`/`C`：int 十进制输出、str 原样、float 用
+`format(v, ".6f")`，负零写作 `0.000000`。
 
 ### 通用约定
 

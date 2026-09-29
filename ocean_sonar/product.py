@@ -85,6 +85,7 @@ __all__ = [
     "dashboard_history",
     "serialize_dashboard_history",
     "load_dashboard_history",
+    "render_dashboard_history",
     "export_dashboard_history",
 ]
 
@@ -5912,6 +5913,61 @@ def load_dashboard_history(path) -> dict:
         "worst": matched,
         "quality": parsed["quality"],
     }
+
+
+def render_dashboard_history(path) -> str:
+    """Render a :func:`load_dashboard_history`-loaded JSON history as text lines.
+
+    :func:`load_dashboard_history` is called exactly once with ``path``
+    unchanged and no other work happens before it; the ``path``
+    validation contract, the read behavior, every exception
+    (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`load_dashboard_history` therefore apply
+    here verbatim. The file is not modified.
+
+    Let ``H`` be the dict returned by that single call, ``C =
+    H["changes"]`` and ``W = H["worst"]``; returns the following lines
+    joined by ``"\\n"`` with no trailing newline:
+
+        HISTORY=<count>,<len(C)>,<regressed>,<quality>
+        WORST=<index>,<passed_delta>,<regressed_delta>,<ratio_delta>,<quality>
+        CHANGE[<index>]=<passed_delta>,<regressed_delta>,<ratio_delta>,<quality>
+        ...
+
+    The HISTORY values are ``H["count"]``, ``len(C)``,
+    ``H["regressed"]`` and ``H["quality"]``; the WORST values are the
+    fields of ``W`` in the key order ``index, passed_delta,
+    regressed_delta, ratio_delta, quality``; one CHANGE line then
+    follows per ``C`` item in ``C`` order with no re-sorting, each
+    prefixed with the item's own ``index``. Values are copied directly
+    from ``H``/``W``/``C``: ints are formatted in decimal, strings are
+    copied as-is and floats use ``format(v, ".6f")`` with negative zero
+    rendered as ``"0.000000"``.
+    """
+    history = load_dashboard_history(path)
+    changes = history["changes"]
+    worst = history["worst"]
+
+    first_line = (
+        f"HISTORY={_format_trend_value(history['count'])},"
+        f"{len(changes)},"
+        f"{_format_trend_value(history['regressed'])},"
+        f"{_format_trend_value(history['quality'])}"
+    )
+    second_line = "WORST=" + ",".join(
+        _format_trend_value(worst[name]) for name in _DASHBOARD_HISTORY_ITEM_KEYS
+    )
+    change_lines = tuple(
+        f"CHANGE[{_format_trend_value(item['index'])}]="
+        + ",".join(
+            _format_trend_value(item[name])
+            for name in _DASHBOARD_HISTORY_ITEM_KEYS[1:]
+        )
+        for item in changes
+    )
+
+    return "\n".join((first_line, second_line, *change_lines))
 
 
 def export_dashboard_history(paths, output) -> bytes:
