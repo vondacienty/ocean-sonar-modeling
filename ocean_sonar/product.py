@@ -84,6 +84,7 @@ __all__ = [
     "export_trend_dashboard",
     "dashboard_history",
     "serialize_dashboard_history",
+    "serialize_dashboard_history_report",
     "load_dashboard_history",
     "render_dashboard_history",
     "export_dashboard_history",
@@ -5724,6 +5725,101 @@ def serialize_dashboard_history(paths) -> bytes:
     """
     history = dashboard_history(paths)
     return _dump_dashboard_history(history)
+
+
+def serialize_dashboard_history_report(path, paths) -> bytes:
+    """Serialize a report cross-checking a loaded history against fresh inputs.
+
+    Exactly one call to :func:`load_dashboard_history` is made with
+    ``path`` unchanged and, afterwards, exactly one call to
+    :func:`dashboard_history` is made with ``paths`` unchanged; the
+    ``path``/``paths`` validation contracts, the read and per-path
+    behavior, every exception (propagated unchanged, including the
+    ``"paths[i]: "`` index prefixes) and the input/file invariance of
+    those functions therefore apply here verbatim. Neither ``path``,
+    ``paths`` nor any loaded file is modified.
+
+    Let ``H`` be the dict returned by the
+    :func:`load_dashboard_history` call and ``E`` the dict returned by
+    the :func:`dashboard_history` call. If ``H`` and ``E`` differ in
+    any field (compared recursively), a ``ValueError`` is raised.
+
+    Let ``C = H["changes"]``. The report is computed from ``H`` alone,
+    without modifying it, and encoded with keys exactly in the order
+    ``schema_version, source, history, summary, quality``:
+
+    - ``schema_version``: the non-bool int ``1``.
+    - ``source``: keys in the order ``path, inputs``, with ``path`` the
+      original ``path`` argument and ``inputs`` a tuple of the original
+      ``paths`` items.
+    - ``history``: ``H`` itself, encoded with its key order ``count,
+      changes, regressed, worst, quality``.
+    - ``summary``: keys in the order ``snapshots, regressed, stability,
+      volatility, longest_regression, worst_index`` — ``snapshots`` is
+      ``H["count"]``; ``regressed`` is ``H["regressed"]``;
+      ``stability`` is ``1 - H["regressed"] / len(C)``;
+      ``volatility`` is the ``math.fsum`` mean of the
+      ``abs(c["ratio_delta"])`` values over ``C``;
+      ``longest_regression`` is the length of the longest run of
+      consecutive ``C`` items whose ``quality`` is ``"fail"``; and
+      ``worst_index`` is ``H["worst"]["index"]``.
+    - ``quality``: ``H["quality"]``.
+
+    Items are not sorted, no values are otherwise changed and no other
+    keys are added. The JSON byte specification is exactly the one of
+    :func:`serialize_dashboard_history`: UTF-8, ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation, no
+    BOM and no trailing newline; every float is rounded with
+    ``round(float(v), 6)`` and negative zero is normalized to ``0.0``
+    only at write time; tuples (including ``inputs`` and
+    ``history.changes``) are recursively converted to arrays. Any JSON
+    or UTF-8 encoding failure raises ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    history = load_dashboard_history(path)
+    expected = dashboard_history(paths)
+
+    if history != expected:
+        raise ValueError(
+            "dashboard history report: loaded history does not match "
+            "dashboard_history(paths)"
+        )
+
+    changes = history["changes"]
+
+    longest_regression = 0
+    fail_run = 0
+    for item in changes:
+        if item["quality"] == "fail":
+            fail_run += 1
+            if fail_run > longest_regression:
+                longest_regression = fail_run
+        else:
+            fail_run = 0
+
+    volatility = math.fsum(
+        abs(item["ratio_delta"]) for item in changes
+    ) / len(changes)
+
+    report = {
+        "schema_version": 1,
+        "source": {
+            "path": path,
+            "inputs": tuple(paths),
+        },
+        "history": history,
+        "summary": {
+            "snapshots": history["count"],
+            "regressed": history["regressed"],
+            "stability": 1 - history["regressed"] / len(changes),
+            "volatility": volatility,
+            "longest_regression": longest_regression,
+            "worst_index": history["worst"]["index"],
+        },
+        "quality": history["quality"],
+    }
+    return _dump_dashboard_history(report)
 
 
 def _check_dashboard_history_item(item, prefix):

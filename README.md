@@ -1126,7 +1126,8 @@ ocean-sonar-modeling render-dashboard-history dashboard_history.json
 `render_overview_comparison_report_trend`、`trend_dashboard`、
 `serialize_trend_dashboard`、`load_trend_dashboard`、
 `export_trend_dashboard`、`dashboard_history`、
-`serialize_dashboard_history`、`load_dashboard_history`、
+`serialize_dashboard_history`、`serialize_dashboard_history_report`、
+`load_dashboard_history`、
 `render_dashboard_history`、`export_dashboard_history`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
@@ -2147,6 +2148,45 @@ JSON 字节规范完全沿用 `serialize_dashboard_history`，且 `paths`
 （`<index>` 及四个值依次取自该 `C` 项），不重新排序、不重新计算。
 各值直接取自 `H`/`W`/`C`：int 十进制输出、str 原样、float 用
 `format(v, ".6f")`，负零写作 `0.000000`。
+
+### `product.serialize_dashboard_history_report(path, paths) -> bytes`
+
+把一份已写盘的仪表盘历史 JSON 与对当前 `paths` 重新比较的结果交叉
+核对后序列化为报告 JSON 字节串。
+
+执行时**先且仅调用一次** `load_dashboard_history(path)` 得到 `H`，
+随后**仅调用一次** `dashboard_history(paths)` 得到 `E`，之前不做其
+他工作、之后不再重复调用；因此 `path`/`paths` 的校验契约、读取与
+逐路径加载行为、异常（`TypeError`/`ValueError`/
+`FileNotFoundError`/`IsADirectoryError`/`OSError`，原样向上传播，
+含 `paths[i]: ` 下标前缀）与输入/文件不变性完全沿用被调函数，且
+`path` 的错误先于 `paths` 报出。`path`、`paths` 与所加载的文件均不
+被修改。
+
+若 `H` 与 `E` 逐字段不等，抛 `ValueError`。
+
+令 `C = H["changes"]`，报告仅由 `H` 计算、不修改 `H`，顶层键序严
+格为 `schema_version, source, history, summary, quality`，不排序、
+不增删键、不改值：
+
+- `schema_version`：非布尔 `int`，恒为 `1`；
+- `source`：键序 `path, inputs`，分别为原 `path` 参数与原 `paths`
+  各项组成的 tuple；
+- `history`：即 `H`，按其原键序 `count, changes, regressed, worst,
+  quality` 写出；
+- `summary`：键序 `snapshots, regressed, stability, volatility,
+  longest_regression, worst_index`，依次为 `H["count"]`、
+  `H["regressed"]`、`1 - H["regressed"] / len(C)`、各
+  `abs(c["ratio_delta"])` 以 `math.fsum` 求和后除以 `len(C)` 的均
+  值、`C` 中连续 `"fail"` 段的最大长度、`H["worst"]["index"]`；
+- `quality`：`H["quality"]`。
+
+JSON 字节规范与 `serialize_dashboard_history` 完全一致：UTF-8 紧凑
+JSON，`ensure_ascii=False`、`separators=(",", ":")`、
+`allow_nan=False`，无缩进、无 BOM、无尾换行；tuple（含 `inputs`
+与 `history.changes`）递归转为数组，`int` 十进制；每个 `float` 经
+`round(float(v), 6)` 舍入、负零仅在写出时归一化为 `0.0`。任何
+JSON 或 UTF-8 编码失败抛 `ValueError`。返回 `bytes`。
 
 ### 通用约定
 
