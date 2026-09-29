@@ -1063,6 +1063,35 @@ ocean-sonar-modeling export-dashboard-history dashboard_a.json dashboard_b.json 
 ocean-sonar-modeling render-dashboard-history dashboard_history.json
 ```
 
+### `render-dashboard-history-report REPORT`
+
+把一份
+`ocean_sonar.product.serialize_dashboard_history_report` 生成的仪表盘
+历史报告 JSON 文件渲染为三行汇总文本，等价于**仅调用一次**
+`ocean_sonar.product.render_dashboard_history_report(path)`：先且仅调
+用一次 `load_dashboard_history_report(path)` 得到 `R`，其路径校验、
+异常（`TypeError`/`ValueError`/`FileNotFoundError`/
+`IsADirectoryError`/`OSError` 原样向上传播）与文件不变性完全沿用被
+调函数。记 `S = R["summary"]`、`W = R["history"]["worst"]`，成功时
+stdout 输出以 `\n` 连接的文本并在末尾加一个换行：第一行为
+`REPORT=<schema_version>,<JSON路径>,<quality>`（依次取自
+`R["schema_version"]`、`R["source"]["path"]` 经紧凑且
+`ensure_ascii=False` 转义的 JSON 字符串、`R["quality"]`），第二行为
+`SUMMARY=<snapshots>,<regressed>,<stability>,<volatility>,<longest_regression>,<worst_index>`
+（依次取自 `S` 的这六个键），第三行为
+`WORST=<index>,<passed_delta>,<regressed_delta>,<ratio_delta>,<quality>`
+（依次取自 `W` 的这五个键）；各值直接取自 `R`/`S`/`W`，不重算、不
+重新排序，int 十进制、str 原样、float 用 `format(v, ".6f")` 且负零
+写作 `0.000000`，stderr 为空，退出码 0；文本本身无尾换行，stdout
+输出时在末尾追加一个换行；文件不存在、内容非法等错误时 stdout 为
+空，stderr 严格输出 `ERROR <异常类名>: <异常消息>` 加换行，退出码
+1；参数缺失或多余属于参数解析错误，退出码 2 且不调用业务函数。输
+入文件不会被修改。
+
+```bash
+ocean-sonar-modeling render-dashboard-history-report dashboard_history_report.json
+```
+
 ## Python 接口
 
 包 `ocean_sonar` 的 `__version__` 为当前版本号。
@@ -1128,7 +1157,8 @@ ocean-sonar-modeling render-dashboard-history dashboard_history.json
 `export_trend_dashboard`、`dashboard_history`、
 `serialize_dashboard_history`、`serialize_dashboard_history_report`、
 `load_dashboard_history`、`load_dashboard_history_report`、
-`render_dashboard_history`、`export_dashboard_history`。其中
+`render_dashboard_history`、`render_dashboard_history_report`、
+`export_dashboard_history`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
@@ -2148,6 +2178,33 @@ JSON 字节规范完全沿用 `serialize_dashboard_history`，且 `paths`
 （`<index>` 及四个值依次取自该 `C` 项），不重新排序、不重新计算。
 各值直接取自 `H`/`W`/`C`：int 十进制输出、str 原样、float 用
 `format(v, ".6f")`，负零写作 `0.000000`。
+
+### `product.render_dashboard_history_report(path) -> str`
+
+把一份仪表盘历史报告 JSON 文件渲染为三行汇总文本。
+
+执行时**先且仅调用一次** `load_dashboard_history_report(path)` 得到
+`R`，在此之前不做任何其他工作、之后也不再调用第二次；因此 `path`
+的校验契约、读取行为、所有异常（`TypeError`/`ValueError`/
+`FileNotFoundError`/`IsADirectoryError`/`OSError`，原样向上传播）
+与文件不变性完全沿用 `load_dashboard_history_report`。输入文件与
+`R` 均不被修改。
+
+记 `S = R["summary"]`、`W = R["history"]["worst"]`，返回以 `\n`
+连接、无尾换行的三行文本：
+
+- `REPORT=<schema_version>,<JSON路径>,<quality>`：
+  `<schema_version>` 取自 `R["schema_version"]`，`<JSON路径>` 为
+  `R["source"]["path"]` 经紧凑、`ensure_ascii=False` 编码的 JSON
+  字符串，`<quality>` 取自 `R["quality"]`；
+- `SUMMARY=<snapshots>,<regressed>,<stability>,<volatility>,<longest_regression>,<worst_index>`：
+  依次取自 `S` 的这六个键；
+- `WORST=<index>,<passed_delta>,<regressed_delta>,<ratio_delta>,<quality>`：
+  依次取自 `W` 的同名字段。
+
+所有值直接取自 `R`/`S`/`W`，不重算、不重新排序：`int` 按十进制渲
+染，`str` 原样，`float` 用 `format(v, ".6f")`（负零渲染为
+`0.000000`）。
 
 ### `product.serialize_dashboard_history_report(path, paths) -> bytes`
 

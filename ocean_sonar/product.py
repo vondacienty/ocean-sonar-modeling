@@ -88,6 +88,7 @@ __all__ = [
     "load_dashboard_history",
     "load_dashboard_history_report",
     "render_dashboard_history",
+    "render_dashboard_history_report",
     "export_dashboard_history",
 ]
 
@@ -6154,8 +6155,9 @@ def _check_dashboard_history_report(report):
     )
     if volatility != expected_volatility:
         raise ValueError(
-            "dashboard history report: summary.volatility must equal the "
-            "round(, 6) math.fsum mean of the abs(ratio_delta) values"
+            "dashboard history report: summary.volatility must equal "
+            "round(math.fsum(abs(c['ratio_delta']) for c in changes) "
+            "/ len(changes), 6)"
         )
 
     longest_regression = summary["longest_regression"]
@@ -6370,6 +6372,60 @@ def render_dashboard_history(path) -> str:
     )
 
     return "\n".join((first_line, second_line, *change_lines))
+
+
+def render_dashboard_history_report(path) -> str:
+    """Render a :func:`load_dashboard_history_report` JSON report as three lines.
+
+    :func:`load_dashboard_history_report` is called exactly once with
+    ``path`` unchanged and no other work happens before it; the ``path``
+    validation contract, the read behavior, every exception
+    (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`load_dashboard_history_report` therefore
+    apply here verbatim. The file is not modified.
+
+    Let ``R`` be the dict returned by that single call, ``S =
+    R["summary"]`` and ``W = R["history"]["worst"]``; returns three
+    lines joined by ``"\\n"`` with no trailing newline::
+
+        REPORT=<schema_version>,<JSON path>,<quality>
+        SUMMARY=<snapshots>,<regressed>,<stability>,<volatility>,<longest_regression>,<worst_index>
+        WORST=<index>,<passed_delta>,<regressed_delta>,<ratio_delta>,<quality>
+
+    The REPORT values are ``R["schema_version"]``, the compact
+    ``ensure_ascii=False`` JSON string of ``R["source"]["path"]`` and
+    ``R["quality"]``; the SUMMARY values are the ``snapshots``,
+    ``regressed``, ``stability``, ``volatility``,
+    ``longest_regression`` and ``worst_index`` of ``S`` in that order;
+    the WORST values are the fields of ``W`` in the key order ``index,
+    passed_delta, regressed_delta, ratio_delta, quality``. Values are
+    copied directly from ``R``/``S``/``W``: ints are formatted in
+    decimal, strings are copied as-is and floats use
+    ``format(v, ".6f")`` with negative zero rendered as ``"0.000000"``.
+    """
+    report = load_dashboard_history_report(path)
+    source = report["source"]
+    summary = report["summary"]
+    worst = report["history"]["worst"]
+
+    source_path = json.dumps(
+        source["path"], ensure_ascii=False, separators=(",", ":")
+    )
+    first_line = (
+        f"REPORT={_format_trend_value(report['schema_version'])},"
+        f"{source_path},"
+        f"{_format_trend_value(report['quality'])}"
+    )
+    second_line = "SUMMARY=" + ",".join(
+        _format_trend_value(summary[name])
+        for name in _DASHBOARD_HISTORY_REPORT_SUMMARY_KEYS
+    )
+    third_line = "WORST=" + ",".join(
+        _format_trend_value(worst[name]) for name in _DASHBOARD_HISTORY_ITEM_KEYS
+    )
+
+    return "\n".join((first_line, second_line, third_line))
 
 
 def export_dashboard_history(paths, output) -> bytes:
