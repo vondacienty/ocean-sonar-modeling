@@ -92,6 +92,8 @@ __all__ = [
     "export_dashboard_history",
     "export_dashboard_history_report",
     "dashboard_history_report_trend",
+    "serialize_dashboard_history_report_trend",
+    "load_dashboard_history_report_trend",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -258,6 +260,19 @@ _DASHBOARD_HISTORY_REPORT_SUMMARY_KEYS = (
     "volatility",
     "longest_regression",
     "worst_index",
+)
+_DASHBOARD_HISTORY_REPORT_TREND_KEYS = (
+    "count",
+    "changes",
+    "regressed",
+    "worst",
+    "quality",
+)
+_DASHBOARD_HISTORY_REPORT_TREND_ITEM_KEYS = (
+    "index",
+    "stability_delta",
+    "volatility_delta",
+    "quality",
 )
 
 
@@ -6639,4 +6654,268 @@ def dashboard_history_report_trend(paths) -> dict:
         "regressed": regressed,
         "worst": worst_item,
         "quality": "pass" if regressed == 0 else "fail",
+    }
+
+
+def _dump_dashboard_history_report_trend(trend) -> bytes:
+    try:
+        text = json.dumps(
+            _to_jsonable(trend),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            "dashboard history report trend: could not be "
+            f"serialized to JSON: {exc}"
+        ) from exc
+
+
+def serialize_dashboard_history_report_trend(paths) -> bytes:
+    """Serialize the :func:`dashboard_history_report_trend` comparison of ``paths`` to bytes.
+
+    Exactly one call to :func:`dashboard_history_report_trend` is made
+    with ``paths`` unchanged and no other work happens before it; the
+    ``paths`` validation contract, the per-path
+    :func:`load_dashboard_history_report` behavior, every exception
+    (propagated unchanged, including the ``"paths[i]: "`` index
+    prefixes) and the input/file invariance of
+    :func:`dashboard_history_report_trend` therefore apply here
+    verbatim. Neither ``paths`` nor the loaded files are modified.
+
+    Let ``T`` be the dict returned by that single
+    :func:`dashboard_history_report_trend` call. It is encoded directly
+    with keys exactly in the order ``count, changes, regressed, worst,
+    quality`` and no keys are added: the ``changes`` tuple is
+    recursively converted to a JSON array and each change item, like
+    ``worst``, keeps its key order ``index, stability_delta,
+    volatility_delta, quality``.
+
+    The JSON byte specification follows
+    :func:`serialize_dashboard_history`: UTF-8, ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation, no
+    BOM and no trailing newline; tuples are recursively converted to
+    arrays and ints are written in decimal. Every float is rounded with
+    ``round(float(v), 6)`` and negative zero is normalized to ``0.0``
+    only at write time. Any JSON or UTF-8 encoding failure raises
+    ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    trend = dashboard_history_report_trend(paths)
+    return _dump_dashboard_history_report_trend(trend)
+
+
+def _check_dashboard_history_report_trend_item(item, prefix):
+    if not isinstance(item, dict):
+        raise ValueError(prefix + "must be a JSON object")
+    if list(item.keys()) != list(
+        _DASHBOARD_HISTORY_REPORT_TREND_ITEM_KEYS
+    ):
+        raise ValueError(
+            prefix + "keys must be in the order index, stability_delta, "
+            "volatility_delta, quality"
+        )
+
+    index = item["index"]
+    if type(index) is not int:
+        raise ValueError(prefix + "index must be a non-bool int")
+
+    for name in ("stability_delta", "volatility_delta"):
+        value = item[name]
+        if type(value) is not float:
+            raise ValueError(prefix + f"{name} must be a float")
+        if not math.isfinite(value):
+            raise ValueError(prefix + f"{name} must be finite")
+        if not -1.0 <= value <= 1.0:
+            raise ValueError(prefix + f"{name} must be in [-1, 1]")
+        if value != round(value, 6):
+            raise ValueError(
+                prefix + f"{name} must have at most 6 decimals"
+            )
+        if value == 0.0 and math.copysign(1.0, value) < 0:
+            raise ValueError(prefix + f"{name} must not be negative zero")
+
+    quality = item["quality"]
+    if type(quality) is not str:
+        raise ValueError(prefix + "quality must be a str")
+    if quality not in _QUALITY_VALUES:
+        raise ValueError(prefix + "quality must be 'pass' or 'fail'")
+
+
+def _check_dashboard_history_report_trend(trend):
+    if not isinstance(trend, dict):
+        raise ValueError(
+            "dashboard history report trend must be a JSON object"
+        )
+    if list(trend.keys()) != list(_DASHBOARD_HISTORY_REPORT_TREND_KEYS):
+        raise ValueError(
+            "dashboard history report trend keys must be in the order "
+            "count, changes, regressed, worst, quality"
+        )
+
+    count = trend["count"]
+    if type(count) is not int:
+        raise ValueError(
+            "dashboard history report trend: count must be a non-bool int"
+        )
+    if not count >= 2:
+        raise ValueError(
+            "dashboard history report trend: count must be >= 2"
+        )
+
+    changes = trend["changes"]
+    if not isinstance(changes, list):
+        raise ValueError(
+            "dashboard history report trend: changes must be a JSON array"
+        )
+    if len(changes) != count - 1:
+        raise ValueError(
+            "dashboard history report trend: changes must have "
+            "count - 1 elements"
+        )
+
+    for i in range(len(changes)):
+        prefix = (
+            f"dashboard history report trend: changes[{i}]: "
+        )
+        item = changes[i]
+        _check_dashboard_history_report_trend_item(item, prefix)
+        if item["index"] != i + 1:
+            raise ValueError(prefix + "index must run consecutively from 1")
+
+    regressed = trend["regressed"]
+    if type(regressed) is not int:
+        raise ValueError(
+            "dashboard history report trend: regressed must be a "
+            "non-bool int"
+        )
+    fail_count = sum(1 for item in changes if item["quality"] == "fail")
+    if regressed != fail_count:
+        raise ValueError(
+            "dashboard history report trend: regressed must equal the "
+            "number of fail items"
+        )
+
+    worst = trend["worst"]
+    _check_dashboard_history_report_trend_item(
+        worst, "dashboard history report trend: worst: "
+    )
+    if worst not in changes:
+        raise ValueError(
+            "dashboard history report trend: worst must equal one of "
+            "the changes items"
+        )
+
+    quality = trend["quality"]
+    if type(quality) is not str:
+        raise ValueError(
+            "dashboard history report trend: quality must be a str"
+        )
+    if quality not in _QUALITY_VALUES:
+        raise ValueError(
+            "dashboard history report trend: quality must be 'pass' or "
+            "'fail'"
+        )
+    if quality != ("pass" if regressed == 0 else "fail"):
+        raise ValueError(
+            "dashboard history report trend: quality must be 'pass' "
+            "exactly when regressed is 0"
+        )
+
+
+def load_dashboard_history_report_trend(path) -> dict:
+    """Load a :func:`serialize_dashboard_history_report_trend` JSON trend from ``path``.
+
+    ``path`` must be a non-empty ``str``: a non-str raises ``TypeError``
+    and an empty ``str`` raises ``ValueError``. The file is opened in
+    binary mode (``"rb"``) and read in full; a missing file raises
+    ``FileNotFoundError``, a directory raises ``IsADirectoryError`` and
+    every other ``OSError`` is propagated unchanged. The file is not
+    modified.
+
+    The bytes must be exactly those produced by
+    :func:`serialize_dashboard_history_report_trend` for the same
+    value: compact UTF-8 JSON with no BOM and no trailing newline. A
+    BOM, a trailing newline, a UTF-8 decoding failure, a JSON parsing
+    failure, a ``NaN``/``Infinity`` constant, a repeated JSON object
+    key or any other non-canonical byte sequence raises ``ValueError``.
+
+    The decoded value must be a JSON object with keys exactly in the
+    order ``count, changes, regressed, worst, quality``. ``count`` must
+    be a non-bool int ``>= 2`` and ``changes`` a JSON array of exactly
+    ``count - 1`` items. Each item, like ``worst``, must be an object
+    with keys exactly in the order ``index, stability_delta,
+    volatility_delta, quality``: ``index`` a non-bool int running
+    consecutively from ``1``; ``stability_delta`` and
+    ``volatility_delta`` finite non-bool floats in ``[-1, 1]`` with at
+    most six decimals and not negative zero; ``quality`` either
+    ``"pass"`` or ``"fail"``. ``regressed`` must be a non-bool int
+    equal to the number of ``changes`` items whose ``quality`` is
+    ``"fail"``; ``worst`` must equal one of the ``changes`` items
+    field for field; and the top-level ``quality`` must be ``"pass"``
+    exactly when ``regressed`` is ``0`` and ``"fail"`` otherwise.
+    Finally the file bytes must equal the canonical re-encoding of the
+    decoded value byte for byte. Every key-order, type, range,
+    relation, parse or canonical-byte mismatch raises ``ValueError``.
+
+    Returns the trend as a dict with the keys in the order ``count,
+    changes, regressed, worst, quality``; ``changes`` is converted to a
+    tuple and ``worst`` is the matching item of that tuple (the same
+    object, never a copy). The input and the file are never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_keys,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        _check_dashboard_history_report_trend(parsed)
+        canonical = _dump_dashboard_history_report_trend(parsed)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "file does not contain a valid dashboard history report "
+            f"trend: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical "
+            "serialize_dashboard_history_report_trend output"
+        )
+
+    changes = tuple(parsed["changes"])
+    worst = parsed["worst"]
+    matched = next(item for item in changes if item == worst)
+
+    return {
+        "count": parsed["count"],
+        "changes": changes,
+        "regressed": parsed["regressed"],
+        "worst": matched,
+        "quality": parsed["quality"],
     }
