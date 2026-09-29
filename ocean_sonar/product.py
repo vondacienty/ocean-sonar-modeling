@@ -86,6 +86,7 @@ __all__ = [
     "serialize_dashboard_history",
     "load_dashboard_history",
     "export_dashboard_history",
+    "render_dashboard_history",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -5958,3 +5959,65 @@ def export_dashboard_history(paths, output) -> bytes:
     _reject_export_output_overlap(output, paths)
     _atomic_write_bytes(output, data)
     return data
+
+
+def render_dashboard_history(path) -> str:
+    """Render a :func:`load_dashboard_history`-loaded JSON history as text.
+
+    :func:`load_dashboard_history` is called exactly once with ``path``
+    unchanged and no other work happens before it; the ``path``
+    validation contract, the read behavior, every exception
+    (``TypeError``/``ValueError``/``FileNotFoundError``/
+    ``IsADirectoryError``/``OSError``, propagated unchanged) and the
+    file invariance of :func:`load_dashboard_history` therefore apply
+    here verbatim. The file is not modified.
+
+    Let ``H`` be the dict returned by that single call, ``C =
+    H["changes"]`` and ``W = H["worst"]``; returns two header lines
+    followed by one line per change, joined by ``"\\n"`` with no
+    trailing newline::
+
+        HISTORY=<count>,<len(C)>,<regressed>,<quality>
+        WORST=<index>,<passed_delta>,<regressed_delta>,<ratio_delta>,<quality>
+        CHANGE[<index>]=<passed_delta>,<regressed_delta>,<ratio_delta>,<quality>
+
+    The HISTORY values are ``H["count"]``, ``len(C)``,
+    ``H["regressed"]`` and ``H["quality"]`` in that order; the WORST
+    values are the ``index``, ``passed_delta``, ``regressed_delta``,
+    ``ratio_delta`` and ``quality`` of ``W`` in that order. The CHANGE
+    lines then follow for every item of ``C`` in its original order,
+    with the values taken in the item's key order ``index,
+    passed_delta, regressed_delta, ratio_delta, quality`` with no
+    re-sorting. Values are copied directly from ``H`` with no
+    recomputation: ints are formatted in decimal, strings are copied
+    as-is and floats use ``format(v, ".6f")`` with negative zero
+    rendered as ``"0.000000"``, following
+    :func:`render_overview_comparison_report_trend`.
+    """
+    history = load_dashboard_history(path)
+    changes = history["changes"]
+    worst = history["worst"]
+
+    first_line = (
+        f"HISTORY={_format_trend_value(history['count'])},"
+        f"{len(changes)},"
+        f"{_format_trend_value(history['regressed'])},"
+        f"{_format_trend_value(history['quality'])}"
+    )
+    second_line = "WORST=" + ",".join(
+        _format_trend_value(worst[name])
+        for name in _DASHBOARD_HISTORY_ITEM_KEYS
+    )
+
+    lines = [first_line, second_line]
+    for item in changes:
+        lines.append(
+            f"CHANGE[{_format_trend_value(item['index'])}]="
+            + ",".join(
+                _format_trend_value(item[name])
+                for name in _DASHBOARD_HISTORY_ITEM_KEYS
+                if name != "index"
+            )
+        )
+
+    return "\n".join(lines)
