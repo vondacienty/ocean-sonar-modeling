@@ -1036,6 +1036,35 @@ DASHBOARD 不足两个、缺少 `--output` 或参数多余属于参数解析错�
 ocean-sonar-modeling export-dashboard-history dashboard_a.json dashboard_b.json [dashboard_c.json ...] --output dashboard_history.json
 ```
 
+### `export-dashboard-history-report HISTORY DASHBOARD DASHBOARD [DASHBOARD ...] --output OUTPUT`
+
+把一份 `ocean_sonar.product.serialize_dashboard_history` 生成的仪表盘
+历史 JSON 与按命令行顺序传入的多份趋势仪表盘 JSON（至少两个）交叉复
+核后导出为一份仪表盘历史报告 JSON，等价于**仅调用一次**
+`ocean_sonar.product.export_dashboard_history_report(path, paths, output)`
+：先且仅调用一次
+`serialize_dashboard_history_report(path, paths)` 得到字节串 `B`，其
+`path`/`paths` 校验（至少两份 DASHBOARD、逐项非空字符串、
+`paths[i]: ` 前缀）、加载与交叉复核、异常、报告顶层键序（
+`schema_version, source, history, summary, quality`）与 JSON 字节规范
+完全沿用被调函数且先于 `output` 生效；成功时静默（stdout、stderr 均
+为空），退出码 0，并以同目录临时文件加 `flush()`、`os.fsync()`、
+`os.replace` 原子覆写 `--output` 指定的文件；`--output` 必须为非空
+字符串且不得与 HISTORY 或任一 DASHBOARD 指向同一文件（双方都存在时
+用 `os.path.samefile` 识别软/硬链接，否则比较
+`os.path.normcase(os.path.realpath(os.path.abspath(path)))` 规范化路
+径），非 `str`/空串分别抛 `TypeError`/`ValueError`，重合抛
+`ValueError`；替换前发生失败会清除临时文件且既有 OUTPUT 逐字节不
+变，`OSError` 原样上抛；文件不存在、内容损坏、交叉复核不一致等错误
+时 stdout 为空，stderr 严格输出
+`ERROR <异常类名>: <异常消息>` 加换行，退出码 1；DASHBOARD 不足两
+个、缺少 `--output` 或参数多余属于参数解析错误，退出码 2 且不调用
+业务函数。输入文件不会被修改。
+
+```bash
+ocean-sonar-modeling export-dashboard-history-report dashboard_history.json dashboard_a.json dashboard_b.json [dashboard_c.json ...] --output dashboard_history_report.json
+```
+
 ### `render-dashboard-history HISTORY`
 
 把一份 `ocean_sonar.product.serialize_dashboard_history` 生成的仪表盘
@@ -1158,7 +1187,7 @@ ocean-sonar-modeling render-dashboard-history-report dashboard_history_report.js
 `serialize_dashboard_history`、`serialize_dashboard_history_report`、
 `load_dashboard_history`、`load_dashboard_history_report`、
 `render_dashboard_history`、`render_dashboard_history_report`、
-`export_dashboard_history`。其中
+`export_dashboard_history`、`export_dashboard_history_report`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
@@ -2148,6 +2177,37 @@ JSON 字节规范完全沿用 `serialize_dashboard_history`，且 `paths`
 （`output must not be empty`）。
 
 `output` 不得与任一 `paths` 项指向同一文件：双方都存在时用
+`os.path.samefile` 识别软/硬链接，任一方不存在时比较
+`os.path.normcase(os.path.realpath(os.path.abspath(path)))`；重合时
+抛 `ValueError`。
+
+非重合时在 `output` 同目录创建临时文件，以二进制写入 `B`，
+`flush()`、`os.fsync()` 后用 `os.replace` 原子替换 `output`。替换
+前发生失败会清除临时文件且既有 `output` 逐字节不变；`OSError` 原
+样传播。返回值与写入文件的字节为同一份 `bytes`。
+
+### `product.export_dashboard_history_report(path, paths, output) -> bytes`
+
+把仪表盘历史报告的交叉复核序列化结果原子写盘，返回所写字节。
+
+执行时**先且仅调用一次**
+`serialize_dashboard_history_report(path, paths)` 得到字节串 `B`，
+在此之前不做任何其他工作、之后也不再调用第二次；因此 `path` 与
+`paths` 的校验契约（`paths` 至少两项、逐项非空 `str`、
+`paths[i]: ` 下标前缀）、`load_dashboard_history` 与逐路径
+`load_trend_dashboard` 的行为、加载历史与
+`dashboard_history(paths)` 的交叉复核、异常（原样向上传播）、报告
+顶层键序（`schema_version, source, history, summary, quality`）
+与 JSON 字节规范完全沿用 `serialize_dashboard_history_report`，且
+`path`/`paths` 的错误先于 `output` 报出。`path`、`paths` 与所加
+载的文件均不被修改。
+
+然后才校验 `output`：必须为非空 `str`——非 `str` 抛 `TypeError`
+（`output must be a str`），空串抛 `ValueError`
+（`output must not be empty`）。
+
+`output` 不得与 `path` 或任一 `paths` 项（输入集合为
+`[path, *paths]`）指向同一文件：双方都存在时用
 `os.path.samefile` 识别软/硬链接，任一方不存在时比较
 `os.path.normcase(os.path.realpath(os.path.abspath(path)))`；重合时
 抛 `ValueError`。
