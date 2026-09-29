@@ -40,6 +40,7 @@ from .product import (
     quality_dashboard as _quality_dashboard,
     quality_report as _product_quality_report,
     render_dashboard_history as _render_dashboard_history,
+    render_dashboard_history_report as _render_dashboard_history_report,
     render_overview as _render_overview,
     render_overview_comparison as _render_overview_comparison,
     render_overview_comparison_report as _render_overview_comparison_report,
@@ -609,6 +610,8 @@ def main(argv: list[str] | None = None) -> int:
     export_dashboard_history_parser.add_argument("--output", required=True, help="output file atomically overwritten with the dashboard history JSON")
     render_dashboard_history_parser = sub.add_parser("render-dashboard-history", help="render one dashboard history JSON file as summary lines")
     render_dashboard_history_parser.add_argument("history", metavar="HISTORY", help="dashboard history JSON file")
+    render_dashboard_history_report_parser = sub.add_parser("render-dashboard-history-report", help="render one dashboard history report JSON file as three summary lines")
+    render_dashboard_history_report_parser.add_argument("report", metavar="REPORT", help="dashboard history report JSON file")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -1147,6 +1150,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "render-dashboard-history":
         try:
             text = _render_dashboard_history(args.history)
+        except Exception as exc:
+            sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
+            return 1
+        sys.stdout.write(text + "\n")
+        return 0
+
+    if args.command == "render-dashboard-history-report":
+        try:
+            text = _render_dashboard_history_report(args.report)
         except Exception as exc:
             sys.stderr.write(f"ERROR {type(exc).__name__}: {exc}\n")
             return 1
