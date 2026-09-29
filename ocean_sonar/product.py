@@ -83,6 +83,8 @@ __all__ = [
     "load_trend_dashboard",
     "export_trend_dashboard",
     "dashboard_history",
+    "serialize_dashboard_history",
+    "load_dashboard_history",
 ]
 
 _PRODUCT_KEYS = ("crosspoint", "layers", "overall")
@@ -225,6 +227,14 @@ _TREND_DASHBOARD_SUMMARY_KEYS = (
     "regressed",
     "ratio",
     "worst",
+)
+_DASHBOARD_HISTORY_KEYS = ("count", "changes", "regressed", "worst", "quality")
+_DASHBOARD_HISTORY_ITEM_KEYS = (
+    "index",
+    "passed_delta",
+    "regressed_delta",
+    "ratio_delta",
+    "quality",
 )
 
 
@@ -5663,4 +5673,241 @@ def dashboard_history(paths) -> dict:
         "regressed": regressed,
         "worst": worst_item,
         "quality": "pass" if regressed == 0 else "fail",
+    }
+
+
+def _dump_dashboard_history(history) -> bytes:
+    try:
+        text = json.dumps(
+            _to_jsonable(history),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return text.encode("utf-8")
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ValueError(
+            f"dashboard history: could not be serialized to JSON: {exc}"
+        ) from exc
+
+
+def serialize_dashboard_history(paths) -> bytes:
+    """Serialize the :func:`dashboard_history` comparison of ``paths`` to bytes.
+
+    Exactly one call to :func:`dashboard_history` is made with ``paths``
+    unchanged and no other work happens before it; the ``paths``
+    validation contract, the per-path :func:`load_trend_dashboard`
+    behavior, every exception (propagated unchanged) and the
+    input/file invariance of :func:`dashboard_history` therefore apply
+    here verbatim. Neither ``paths`` nor the loaded files are modified.
+
+    Let ``H`` be the dict returned by that single
+    :func:`dashboard_history` call. It is encoded directly with keys
+    exactly in the order ``count, changes, regressed, worst, quality``
+    and no keys are added: the ``changes`` tuple is recursively
+    converted to a JSON array and each change item, like ``worst``,
+    keeps its key order ``index, passed_delta, regressed_delta,
+    ratio_delta, quality``.
+
+    The JSON byte specification follows
+    :func:`serialize_trend_dashboard`: UTF-8, ``ensure_ascii=False``,
+    ``separators=(",", ":")``, ``allow_nan=False``, no indentation, no
+    BOM and no trailing newline; tuples are recursively converted to
+    arrays and ints are written in decimal. Every float is rounded
+    with ``round(float(v), 6)`` and negative zero is normalized to
+    ``0.0`` only at write time. Any JSON or UTF-8 encoding failure
+    raises ``ValueError``.
+
+    Returns the JSON document as ``bytes``.
+    """
+    history = dashboard_history(paths)
+    return _dump_dashboard_history(history)
+
+
+def _check_dashboard_history_item(item, prefix):
+    if not isinstance(item, dict):
+        raise ValueError(prefix + "must be a JSON object")
+    if list(item.keys()) != list(_DASHBOARD_HISTORY_ITEM_KEYS):
+        raise ValueError(
+            prefix + "keys must be in the order index, passed_delta, "
+            "regressed_delta, ratio_delta, quality"
+        )
+
+    for name in ("index", "passed_delta", "regressed_delta"):
+        value = item[name]
+        if type(value) is not int:
+            raise ValueError(prefix + f"{name} must be a non-bool int")
+
+    ratio_delta = item["ratio_delta"]
+    if type(ratio_delta) is not float:
+        raise ValueError(prefix + "ratio_delta must be a float")
+    if not math.isfinite(ratio_delta):
+        raise ValueError(prefix + "ratio_delta must be finite")
+    if not -1.0 <= ratio_delta <= 1.0:
+        raise ValueError(prefix + "ratio_delta must be in [-1, 1]")
+    if ratio_delta != round(ratio_delta, 6):
+        raise ValueError(prefix + "ratio_delta must have at most 6 decimals")
+    if ratio_delta == 0.0 and math.copysign(1.0, ratio_delta) < 0:
+        raise ValueError(prefix + "ratio_delta must not be negative zero")
+
+    quality = item["quality"]
+    if type(quality) is not str:
+        raise ValueError(prefix + "quality must be a str")
+    if quality not in _QUALITY_VALUES:
+        raise ValueError(prefix + "quality must be 'pass' or 'fail'")
+
+
+def _check_dashboard_history(history):
+    if not isinstance(history, dict):
+        raise ValueError("dashboard history must be a JSON object")
+    if list(history.keys()) != list(_DASHBOARD_HISTORY_KEYS):
+        raise ValueError(
+            "dashboard history keys must be in the order count, changes, "
+            "regressed, worst, quality"
+        )
+
+    count = history["count"]
+    if type(count) is not int:
+        raise ValueError("dashboard history: count must be a non-bool int")
+    if not count >= 2:
+        raise ValueError("dashboard history: count must be >= 2")
+
+    changes = history["changes"]
+    if not isinstance(changes, list):
+        raise ValueError("dashboard history: changes must be a JSON array")
+    if len(changes) != count - 1:
+        raise ValueError(
+            "dashboard history: changes must have count - 1 elements"
+        )
+
+    for i in range(len(changes)):
+        prefix = f"dashboard history: changes[{i}]: "
+        item = changes[i]
+        _check_dashboard_history_item(item, prefix)
+        if item["index"] != i + 1:
+            raise ValueError(prefix + "index must run consecutively from 1")
+
+    regressed = history["regressed"]
+    if type(regressed) is not int:
+        raise ValueError(
+            "dashboard history: regressed must be a non-bool int"
+        )
+    fail_count = sum(1 for item in changes if item["quality"] == "fail")
+    if regressed != fail_count:
+        raise ValueError(
+            "dashboard history: regressed must equal the number of "
+            "fail items"
+        )
+
+    worst = history["worst"]
+    _check_dashboard_history_item(worst, "dashboard history: worst: ")
+    if worst not in changes:
+        raise ValueError(
+            "dashboard history: worst must equal one of the changes items"
+        )
+
+    quality = history["quality"]
+    if type(quality) is not str:
+        raise ValueError("dashboard history: quality must be a str")
+    if quality not in _QUALITY_VALUES:
+        raise ValueError("dashboard history: quality must be 'pass' or 'fail'")
+    if quality != ("pass" if regressed == 0 else "fail"):
+        raise ValueError(
+            "dashboard history: quality must be 'pass' exactly when "
+            "regressed is 0"
+        )
+
+
+def load_dashboard_history(path) -> dict:
+    """Load a :func:`serialize_dashboard_history` JSON history from ``path``.
+
+    ``path`` must be a non-empty ``str``: a non-str raises ``TypeError``
+    and an empty ``str`` raises ``ValueError``. The file is opened in
+    binary mode (``"rb"``) and read in full; a missing file raises
+    ``FileNotFoundError``, a directory raises ``IsADirectoryError`` and
+    every other ``OSError`` is propagated unchanged. The file is not
+    modified.
+
+    The bytes must be exactly those produced by
+    :func:`serialize_dashboard_history` for the same value: compact
+    UTF-8 JSON with no BOM and no trailing newline. A BOM, a trailing
+    newline, a UTF-8 decoding failure, a JSON parsing failure, a
+    ``NaN``/``Infinity`` constant, a repeated JSON object key or any
+    other non-canonical byte sequence raises ``ValueError``.
+
+    The decoded value must be a JSON object with keys exactly in the
+    order ``count, changes, regressed, worst, quality``. ``count`` must
+    be a non-bool int ``>= 2`` and ``changes`` a JSON array of exactly
+    ``count - 1`` items. Each item, like ``worst``, must be an object
+    with keys exactly in the order ``index, passed_delta,
+    regressed_delta, ratio_delta, quality``: ``index`` a non-bool int
+    running consecutively from ``1``; ``passed_delta`` and
+    ``regressed_delta`` non-bool ints; ``ratio_delta`` a finite
+    non-bool float in ``[-1, 1]`` with at most six decimals and not
+    negative zero; ``quality`` either ``"pass"`` or ``"fail"``.
+    ``regressed`` must be a non-bool int equal to the number of
+    ``changes`` items whose ``quality`` is ``"fail"``; ``worst`` must
+    equal one of the ``changes`` items; and the top-level ``quality``
+    must be ``"pass"`` exactly when ``regressed`` is ``0``. Finally the
+    file bytes must equal the canonical
+    :func:`serialize_dashboard_history` re-encoding of the decoded
+    value byte for byte. Every key-order, type, range, relation, parse
+    or canonical-byte mismatch raises ``ValueError``.
+
+    Returns the history as a dict with the keys in the order ``count,
+    changes, regressed, worst, quality``; ``changes`` is converted to a
+    tuple and ``worst`` is the matching item of that tuple (the same
+    object, never a copy). The input and the file are never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_keys,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        _check_dashboard_history(parsed)
+        canonical = _dump_dashboard_history(parsed)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid dashboard history: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical "
+            "serialize_dashboard_history output"
+        )
+
+    changes = tuple(parsed["changes"])
+    worst = parsed["worst"]
+    matched = next(item for item in changes if item == worst)
+
+    return {
+        "count": parsed["count"],
+        "changes": changes,
+        "regressed": parsed["regressed"],
+        "worst": matched,
+        "quality": parsed["quality"],
     }
