@@ -86,6 +86,7 @@ __all__ = [
     "serialize_dashboard_history",
     "serialize_dashboard_history_report",
     "load_dashboard_history",
+    "load_dashboard_history_report",
     "render_dashboard_history",
     "export_dashboard_history",
 ]
@@ -238,6 +239,22 @@ _DASHBOARD_HISTORY_ITEM_KEYS = (
     "regressed_delta",
     "ratio_delta",
     "quality",
+)
+_DASHBOARD_HISTORY_REPORT_KEYS = (
+    "schema_version",
+    "source",
+    "history",
+    "summary",
+    "quality",
+)
+_DASHBOARD_HISTORY_REPORT_SOURCE_KEYS = ("path", "inputs")
+_DASHBOARD_HISTORY_REPORT_SUMMARY_KEYS = (
+    "snapshots",
+    "regressed",
+    "stability",
+    "volatility",
+    "longest_regression",
+    "worst_index",
 )
 
 
@@ -6007,6 +6024,295 @@ def load_dashboard_history(path) -> dict:
         "changes": changes,
         "regressed": parsed["regressed"],
         "worst": matched,
+        "quality": parsed["quality"],
+    }
+
+
+def _check_dashboard_history_report(report):
+    if not isinstance(report, dict):
+        raise ValueError("dashboard history report must be a JSON object")
+    if list(report.keys()) != list(_DASHBOARD_HISTORY_REPORT_KEYS):
+        raise ValueError(
+            "dashboard history report keys must be in the order "
+            "schema_version, source, history, summary, quality"
+        )
+
+    schema_version = report["schema_version"]
+    if type(schema_version) is not int:
+        raise ValueError(
+            "dashboard history report: schema_version must be a non-bool int"
+        )
+    if schema_version != 1:
+        raise ValueError(
+            "dashboard history report: schema_version must be 1"
+        )
+
+    source = report["source"]
+    if not isinstance(source, dict):
+        raise ValueError("dashboard history report: source must be a JSON object")
+    if list(source.keys()) != list(_DASHBOARD_HISTORY_REPORT_SOURCE_KEYS):
+        raise ValueError(
+            "dashboard history report: source keys must be in the order "
+            "path, inputs"
+        )
+    source_path = source["path"]
+    if type(source_path) is not str:
+        raise ValueError(
+            "dashboard history report: source.path must be a str"
+        )
+    if source_path == "":
+        raise ValueError(
+            "dashboard history report: source.path must not be empty"
+        )
+    inputs = source["inputs"]
+    if not isinstance(inputs, list):
+        raise ValueError(
+            "dashboard history report: source.inputs must be a JSON array"
+        )
+    for i in range(len(inputs)):
+        prefix = f"dashboard history report: source.inputs[{i}]: "
+        value = inputs[i]
+        if type(value) is not str:
+            raise ValueError(prefix + "must be a str")
+        if value == "":
+            raise ValueError(prefix + "must not be empty")
+
+    history = report["history"]
+    _check_dashboard_history(history)
+    count = history["count"]
+    changes = history["changes"]
+    if len(inputs) != count:
+        raise ValueError(
+            "dashboard history report: source.inputs must have history.count "
+            "elements"
+        )
+
+    summary = report["summary"]
+    if not isinstance(summary, dict):
+        raise ValueError(
+            "dashboard history report: summary must be a JSON object"
+        )
+    if list(summary.keys()) != list(_DASHBOARD_HISTORY_REPORT_SUMMARY_KEYS):
+        raise ValueError(
+            "dashboard history report: summary keys must be in the order "
+            "snapshots, regressed, stability, volatility, "
+            "longest_regression, worst_index"
+        )
+
+    snapshots = summary["snapshots"]
+    if type(snapshots) is not int:
+        raise ValueError(
+            "dashboard history report: summary.snapshots must be a "
+            "non-bool int"
+        )
+    if snapshots != count:
+        raise ValueError(
+            "dashboard history report: summary.snapshots must equal "
+            "history.count"
+        )
+
+    regressed = summary["regressed"]
+    if type(regressed) is not int:
+        raise ValueError(
+            "dashboard history report: summary.regressed must be a "
+            "non-bool int"
+        )
+    if regressed != history["regressed"]:
+        raise ValueError(
+            "dashboard history report: summary.regressed must equal "
+            "history.regressed"
+        )
+
+    stability = summary["stability"]
+    if type(stability) is not float:
+        raise ValueError(
+            "dashboard history report: summary.stability must be a float"
+        )
+    if not math.isfinite(stability):
+        raise ValueError(
+            "dashboard history report: summary.stability must be finite"
+        )
+    if stability != round(1 - regressed / len(changes), 6):
+        raise ValueError(
+            "dashboard history report: summary.stability must equal "
+            "round(1 - regressed / len(changes), 6)"
+        )
+
+    volatility = summary["volatility"]
+    if type(volatility) is not float:
+        raise ValueError(
+            "dashboard history report: summary.volatility must be a float"
+        )
+    if not math.isfinite(volatility):
+        raise ValueError(
+            "dashboard history report: summary.volatility must be finite"
+        )
+    expected_volatility = round(
+        math.fsum(abs(item["ratio_delta"]) for item in changes)
+        / len(changes),
+        6,
+    )
+    if volatility != expected_volatility:
+        raise ValueError(
+            "dashboard history report: summary.volatility must equal the "
+            "round(, 6) math.fsum mean of the abs(ratio_delta) values"
+        )
+
+    longest_regression = summary["longest_regression"]
+    if type(longest_regression) is not int:
+        raise ValueError(
+            "dashboard history report: summary.longest_regression must be a "
+            "non-bool int"
+        )
+    expected_longest = 0
+    fail_run = 0
+    for item in changes:
+        if item["quality"] == "fail":
+            fail_run += 1
+            if fail_run > expected_longest:
+                expected_longest = fail_run
+        else:
+            fail_run = 0
+    if longest_regression != expected_longest:
+        raise ValueError(
+            "dashboard history report: summary.longest_regression must be "
+            "the length of the longest run of consecutive fail changes"
+        )
+
+    worst_index = summary["worst_index"]
+    if type(worst_index) is not int:
+        raise ValueError(
+            "dashboard history report: summary.worst_index must be a "
+            "non-bool int"
+        )
+    if worst_index != history["worst"]["index"]:
+        raise ValueError(
+            "dashboard history report: summary.worst_index must equal "
+            "history.worst.index"
+        )
+
+    quality = report["quality"]
+    if type(quality) is not str:
+        raise ValueError("dashboard history report: quality must be a str")
+    if quality not in _QUALITY_VALUES:
+        raise ValueError(
+            "dashboard history report: quality must be 'pass' or 'fail'"
+        )
+    if quality != history["quality"]:
+        raise ValueError(
+            "dashboard history report: quality must equal history.quality"
+        )
+
+
+def load_dashboard_history_report(path) -> dict:
+    """Load a :func:`serialize_dashboard_history_report` JSON report from ``path``.
+
+    ``path`` must be a non-empty ``str``: a non-str raises ``TypeError``
+    and an empty ``str`` raises ``ValueError``. The file is opened in
+    binary mode (``"rb"``) and read in full; a missing file raises
+    ``FileNotFoundError``, a directory raises ``IsADirectoryError`` and
+    every other ``OSError`` is propagated unchanged. The file is not
+    modified.
+
+    The bytes must be exactly those produced by
+    :func:`serialize_dashboard_history_report` for the same value:
+    compact UTF-8 JSON with no BOM and no trailing newline. A BOM, a
+    trailing newline, a UTF-8 decoding failure, a JSON parsing failure,
+    a ``NaN``/``Infinity`` constant, a repeated JSON object key or any
+    other non-canonical byte sequence raises ``ValueError``.
+
+    The decoded value must be a JSON object with keys exactly in the
+    order ``schema_version, source, history, summary, quality``.
+    ``schema_version`` must be the non-bool int ``1``. ``source`` must
+    be an object with keys exactly in the order ``path, inputs``:
+    ``path`` a non-empty ``str`` and ``inputs`` a JSON array of at least
+    two non-empty ``str`` values whose length equals
+    ``history.count``. ``history`` must satisfy every relation of
+    :func:`load_dashboard_history` (keys in the order ``count, changes,
+    regressed, worst, quality`` with all item and cross-field
+    constraints). ``summary`` must be an object with keys exactly in the
+    order ``snapshots, regressed, stability, volatility,
+    longest_regression, worst_index`` and the values are cross-checked:
+    ``snapshots`` and ``regressed`` equal the corresponding history
+    values; ``stability`` equals
+    ``round(1 - regressed / len(changes), 6)``; ``volatility`` equals
+    the ``round(..., 6)`` ``math.fsum`` mean of the
+    ``abs(ratio_delta)`` values; ``longest_regression`` is the length
+    of the longest run of consecutive ``"fail"`` changes; and
+    ``worst_index`` equals ``history["worst"]["index"]``. The top-level
+    ``quality`` must equal ``history["quality"]``. Finally the file
+    bytes must equal the canonical
+    :func:`serialize_dashboard_history` re-encoding of the decoded
+    value byte for byte. Every key-order, type, range, relation, parse
+    or canonical-byte mismatch raises ``ValueError``.
+
+    Returns the report as a dict with the keys in the order above; only
+    ``source["inputs"]`` and ``history["changes"]`` are converted to
+    tuples and ``history["worst"]`` is the matching item of that tuple
+    (the same object, never a copy). The input and the file are never
+    modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_keys,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        _check_dashboard_history_report(parsed)
+        canonical = _dump_dashboard_history(parsed)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid dashboard history report: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical "
+            "serialize_dashboard_history_report output"
+        )
+
+    parsed_history = parsed["history"]
+    changes = tuple(parsed_history["changes"])
+    worst = parsed_history["worst"]
+    matched = next(item for item in changes if item == worst)
+
+    parsed_source = parsed["source"]
+    return {
+        "schema_version": parsed["schema_version"],
+        "source": {
+            "path": parsed_source["path"],
+            "inputs": tuple(parsed_source["inputs"]),
+        },
+        "history": {
+            "count": parsed_history["count"],
+            "changes": changes,
+            "regressed": parsed_history["regressed"],
+            "worst": matched,
+            "quality": parsed_history["quality"],
+        },
+        "summary": parsed["summary"],
         "quality": parsed["quality"],
     }
 

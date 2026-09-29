@@ -1127,7 +1127,7 @@ ocean-sonar-modeling render-dashboard-history dashboard_history.json
 `serialize_trend_dashboard`、`load_trend_dashboard`、
 `export_trend_dashboard`、`dashboard_history`、
 `serialize_dashboard_history`、`serialize_dashboard_history_report`、
-`load_dashboard_history`、
+`load_dashboard_history`、`load_dashboard_history_report`、
 `render_dashboard_history`、`export_dashboard_history`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
@@ -2187,6 +2187,39 @@ JSON，`ensure_ascii=False`、`separators=(",", ":")`、
 与 `history.changes`）递归转为数组，`int` 十进制；每个 `float` 经
 `round(float(v), 6)` 舍入、负零仅在写出时归一化为 `0.0`。任何
 JSON 或 UTF-8 编码失败抛 `ValueError`。返回 `bytes`。
+
+### `product.load_dashboard_history_report(path) -> dict`
+
+从文件加载一份由 `serialize_dashboard_history_report` 生成的仪表盘历史
+报告 JSON。
+
+`path` 的校验契约、读取行为、异常（`TypeError`/`ValueError`/
+`FileNotFoundError`/`IsADirectoryError`/`OSError`，原样向上传播）、
+BOM/尾换行/UTF-8/JSON 解析（含 `NaN`/`Infinity` 常量与重复对象键）
+拒绝以及文件不变性完全沿用 `load_dashboard_history`：任何非法文档抛
+`ValueError`，输入文件不被修改。
+
+解码值必须是键序严格为 `schema_version, source, history, summary,
+quality` 的 JSON 对象：`schema_version` 为非布尔 `int` 且恒为 `1`；
+`source` 键序为 `path, inputs`，`path` 为非空 `str`，`inputs` 为至少
+两项、逐项非空 `str` 的 JSON 数组且长度等于 `history.count`；
+`history` 必须满足 `load_dashboard_history` 的全部键序、类型、取值与
+关系约束；`summary` 键序为 `snapshots, regressed, stability,
+volatility, longest_regression, worst_index`，并逐项复核——
+`snapshots`、`regressed` 分别等于 `history.count`、
+`history.regressed`，`stability` 等于
+`round(1 - regressed / len(changes), 6)`，`volatility` 等于各
+`abs(ratio_delta)` 以 `math.fsum` 求和后除以 `len(changes)` 再
+`round(..., 6)` 的均值，`longest_regression` 为 `changes` 中最长连续
+`"fail"` 段长度，`worst_index` 等于 `history.worst.index`；顶层
+`quality` 必须等于 `history.quality`。最后文件字节必须逐字等于按原报
+告规范（即 `serialize_dashboard_history` 的 JSON 字节规范）对解码值重
+新编码的结果。任何键序、类型、取值、关系、解析或字节不符抛
+`ValueError`。
+
+返回保持原键序的 dict；仅 `source.inputs` 与 `history.changes` 转为
+tuple，`history.worst` 引用该 tuple 中相等的命中项（同一对象、非拷
+贝）。输入与文件均不被修改。
 
 ### 通用约定
 
