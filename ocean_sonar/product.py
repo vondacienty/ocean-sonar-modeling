@@ -80,6 +80,7 @@ __all__ = [
     "render_overview_comparison_report_trend",
     "trend_dashboard",
     "serialize_trend_dashboard",
+    "load_trend_dashboard",
     "export_trend_dashboard",
 ]
 
@@ -215,6 +216,13 @@ _OVERVIEW_COMPARISON_REPORT_TREND_ITEM_KEYS = (
     "regressed_delta",
     "passed_delta",
     "quality",
+)
+_TREND_DASHBOARD_SUMMARY_KEYS = (
+    "reports",
+    "passed",
+    "regressed",
+    "ratio",
+    "worst",
 )
 
 
@@ -5284,6 +5292,189 @@ def serialize_trend_dashboard(path) -> bytes:
     """
     dashboard = trend_dashboard(path)
     return _dump_overview_comparison_report_trend(dashboard)
+
+
+def _check_trend_dashboard(dashboard):
+    if not isinstance(dashboard, dict):
+        raise ValueError("trend dashboard must be a JSON object")
+    if list(dashboard.keys()) != list(_DASHBOARD_KEYS):
+        raise ValueError(
+            "trend dashboard keys must be in the order "
+            "trend, summary, quality"
+        )
+
+    # The embedded trend must fully satisfy the trend loader contract.
+    _check_overview_comparison_report_trend(dashboard["trend"])
+    trend = dashboard["trend"]
+    changes = trend["changes"]
+
+    prefix = "trend dashboard: summary: "
+    summary = dashboard["summary"]
+    if not isinstance(summary, dict):
+        raise ValueError(prefix + "must be a JSON object")
+    if list(summary.keys()) != list(_TREND_DASHBOARD_SUMMARY_KEYS):
+        raise ValueError(
+            prefix + "keys must be in the order reports, passed, "
+            "regressed, ratio, worst"
+        )
+
+    reports = summary["reports"]
+    if type(reports) is not int:
+        raise ValueError(prefix + "reports must be a non-bool int")
+    passed = summary["passed"]
+    if type(passed) is not int:
+        raise ValueError(prefix + "passed must be a non-bool int")
+    regressed = summary["regressed"]
+    if type(regressed) is not int:
+        raise ValueError(prefix + "regressed must be a non-bool int")
+    ratio = summary["ratio"]
+    if type(ratio) is not float:
+        raise ValueError(prefix + "ratio must be a float")
+    if not math.isfinite(ratio):
+        raise ValueError(prefix + "ratio must be finite")
+    if ratio != round(float(ratio), 6):
+        raise ValueError(prefix + "ratio must have at most 6 decimals")
+    if ratio == 0.0 and math.copysign(1.0, ratio) < 0:
+        raise ValueError(prefix + "ratio must not be negative zero")
+    worst_index = summary["worst"]
+    if type(worst_index) is not int:
+        raise ValueError(prefix + "worst must be a non-bool int")
+
+    if reports != trend["count"]:
+        raise ValueError(prefix + "reports must equal trend.count")
+    if passed != len(changes) - regressed:
+        raise ValueError(
+            prefix + "passed must equal len(changes) - regressed"
+        )
+    if regressed != trend["regressed"]:
+        raise ValueError(prefix + "regressed must equal trend.regressed")
+    expected_ratio = round(float(passed / len(changes)), 6)
+    if expected_ratio == 0:
+        expected_ratio = 0.0
+    if ratio != expected_ratio:
+        raise ValueError(
+            prefix
+            + "ratio must equal round(float(passed / len(changes)), 6)"
+        )
+    if worst_index != trend["worst"]["index"]:
+        raise ValueError(prefix + "worst must equal trend.worst.index")
+
+    quality = dashboard["quality"]
+    if type(quality) is not str:
+        raise ValueError("trend dashboard: quality must be a str")
+    if quality not in _QUALITY_VALUES:
+        raise ValueError(
+            "trend dashboard: quality must be 'pass' or 'fail'"
+        )
+    if quality != trend["quality"]:
+        raise ValueError("trend dashboard: quality must equal trend.quality")
+
+
+def load_trend_dashboard(path) -> dict:
+    """Load a :func:`serialize_trend_dashboard` JSON dashboard from ``path``.
+
+    ``path`` must be a non-empty ``str``: a non-str raises ``TypeError``
+    and an empty ``str`` raises ``ValueError``. The file is opened in
+    binary mode (``"rb"``) and read in full; a missing file raises
+    ``FileNotFoundError``, a directory raises ``IsADirectoryError`` and
+    every other ``OSError`` is propagated unchanged. The file is not
+    modified.
+
+    The bytes must be exactly those produced by
+    :func:`serialize_trend_dashboard` for the same value: compact UTF-8
+    JSON with no BOM and no trailing newline. A BOM, a trailing newline,
+    a UTF-8 decoding failure, a JSON parsing failure, a
+    ``NaN``/``Infinity`` constant, a repeated JSON object key or any
+    other non-canonical byte sequence raises ``ValueError``.
+
+    The decoded value must be a JSON object with keys exactly in the
+    order ``trend, summary, quality``. The ``trend`` value must fully
+    satisfy the :func:`load_overview_comparison_report_trend` contract:
+    keys exactly in the order ``count, changes, regressed, worst,
+    quality`` with ``count`` a non-bool int ``>= 2``, ``changes`` an
+    array of ``count - 1`` items whose keys (like ``worst``'s) are
+    exactly in the order ``index, failed_delta, regressed_delta,
+    passed_delta, quality``, ``regressed`` the number of ``"fail"``
+    items, ``worst`` the item minimizing ``(passed_delta,
+    -failed_delta, -regressed_delta, index)`` and ``quality``
+    ``"pass"`` exactly when ``regressed`` is ``0``.
+
+    ``summary`` must be an object with keys exactly in the order
+    ``reports, passed, regressed, ratio, worst``: ``reports``,
+    ``passed``, ``regressed`` and ``worst`` must be non-bool ints and
+    ``ratio`` a finite non-bool float with at most six decimals that is
+    not negative zero. Their values must be ``trend.count``,
+    ``len(changes) - regressed``, ``trend.regressed``,
+    ``round(float(passed / len(changes)), 6)`` and
+    ``trend.worst.index`` respectively, and the top-level ``quality``
+    must equal ``trend.quality``. Finally the file bytes must equal the
+    canonical re-encoding per :func:`serialize_trend_dashboard` byte
+    for byte. Every key-order, type, range, relation, parse or
+    canonical-byte mismatch raises ``ValueError``.
+
+    Returns the dashboard as a dict with the keys in the order
+    ``trend, summary, quality``; ``trend`` keeps that key order, its
+    ``changes`` is converted to a tuple and its ``worst`` is the
+    matching item of that tuple (the same object, never a copy). The
+    input and the file are never modified.
+    """
+    if not isinstance(path, str):
+        raise TypeError("path must be a str")
+    if path == "":
+        raise ValueError("path must not be empty")
+
+    with open(path, "rb") as handle:
+        data = handle.read()
+
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError("file must not start with a UTF-8 BOM")
+    if data.endswith(b"\n"):
+        raise ValueError("file must not end with a trailing newline")
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"file is not valid UTF-8: {exc}") from exc
+
+    try:
+        parsed = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_reject_duplicate_keys,
+        )
+    except ValueError as exc:
+        raise ValueError(f"file is not valid JSON: {exc}") from exc
+
+    try:
+        _check_trend_dashboard(parsed)
+        canonical = _dump_overview_comparison_report_trend(parsed)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"file does not contain a valid trend dashboard: {exc}"
+        ) from exc
+
+    if data != canonical:
+        raise ValueError(
+            "file bytes do not match the canonical "
+            "serialize_trend_dashboard output"
+        )
+
+    source_trend = parsed["trend"]
+    changes = tuple(source_trend["changes"])
+    worst_item = changes[source_trend["worst"]["index"] - 1]
+    trend = {
+        "count": source_trend["count"],
+        "changes": changes,
+        "regressed": source_trend["regressed"],
+        "worst": worst_item,
+        "quality": source_trend["quality"],
+    }
+
+    return {
+        "trend": trend,
+        "summary": parsed["summary"],
+        "quality": parsed["quality"],
+    }
 
 
 def export_trend_dashboard(path, output) -> bytes:

@@ -1071,7 +1071,8 @@ ocean-sonar-modeling export-trend-dashboard overview_comparison_report_trend.jso
 `render_overview_comparison`、
 `render_overview_comparison_report`、
 `render_overview_comparison_report_trend`、`trend_dashboard`、
-`serialize_trend_dashboard`、`export_trend_dashboard`。其中
+`serialize_trend_dashboard`、`load_trend_dashboard`、
+`export_trend_dashboard`。其中
 `quality_report` 与 `quality_report_trend` 的契约如下。
 
 ### `substrate.export(path, output) -> bytes`
@@ -1977,6 +1978,51 @@ worst`，不重算、不排序。
 出；每个 `float` 经 `round(float(v), 6)` 舍入、负零仅在写出时归
 一化为 `0.0`。任何 JSON 或 UTF-8 编码失败抛 `ValueError`。返回
 `bytes`。
+
+### `product.load_trend_dashboard(path) -> dict`
+
+读取一份 `serialize_trend_dashboard` 生成的仪表盘 JSON。
+
+`path` 必须为非空 `str`：非 `str` 抛 `TypeError`
+（`path must be a str`），空串抛 `ValueError`
+（`path must not be empty`）。文件以 `"rb"` 打开并一次性读入：文件
+不存在抛 `FileNotFoundError`，路径是目录抛 `IsADirectoryError`，其
+余 `OSError` 原样传播。文件不被修改。
+
+字节必须逐字等于对同一取值调用 `serialize_trend_dashboard` 的产
+物：无 BOM、无尾换行的紧凑 UTF-8 JSON。BOM、尾换行、UTF-8 解码失
+败、JSON 解析失败、`NaN`/`Infinity` 常量、重复 JSON 对象键或任
+何非规范字节均抛 `ValueError`。
+
+解码值必须是键序严格为 `trend, summary, quality` 的 JSON 对象：
+
+- `trend` 必须完整满足
+  `load_overview_comparison_report_trend` 的契约：键序严格为
+  `count, changes, regressed, worst, quality`，`count` 为非布尔
+  `int` 且 `>= 2`，`changes` 为恰含 `count - 1` 项的数组，各项
+  与 `worst` 键序严格为 `index, failed_delta,
+  regressed_delta, passed_delta, quality`（前四值为非布尔 `int`，
+  `index` 从 `1` 起连续），`regressed` 等于 `"fail"` 项数，
+  `worst` 为按 `(passed_delta, -failed_delta,
+  -regressed_delta, index)` 字典序取最小的项，`trend.quality`
+  恰在 `regressed == 0` 时为 `"pass"`；
+- `summary` 为键序严格为 `reports, passed, regressed, ratio,
+  worst` 的对象：`reports`、`passed`、`regressed`、`worst` 为非
+  布尔 `int`，`ratio` 为非布尔的有限 `float`、至多 6 位小数且不
+  得为负零；五个值必须依次等于 `trend.count`、
+  `len(changes) - regressed`、`trend.regressed`、
+  `round(float(passed / len(changes)), 6)`（负零归一化为
+  `0.0`）、`trend.worst.index`；
+- 顶层 `quality` 必须等于 `trend.quality`。
+
+任何键序、类型、取值范围、相互关系或解析错误均抛 `ValueError`；
+此外按 `serialize_trend_dashboard` 规范对解码值重编码的字节必须
+与原文件逐字节相等，否则抛 `ValueError`。
+
+返回保持原键序的 dict（`trend, summary, quality`）：`trend`
+中 `changes` 转为 tuple，`worst` 引用该 tuple 中匹配的同一项
+（同一对象，非拷贝）；`summary` 与 `quality` 保持解码原值。输入
+文件不被修改。
 
 ### `product.export_trend_dashboard(path, output) -> bytes`
 
